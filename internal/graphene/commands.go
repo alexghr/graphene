@@ -81,14 +81,8 @@ func (a *App) amend(args []string) error {
 		return err
 	}
 
-	oldHead := ""
-	oldRefs := map[string]string{}
-	for _, name := range StateRefNames(state) {
-		if ref, err := a.git.Output("rev-parse", "--verify", name); err == nil {
-			oldRefs[name] = ref
-		}
-	}
-	oldHead, err = a.git.Head()
+	oldRefs := a.stateRefs(state)
+	oldHead, err := a.git.Head()
 	if err != nil {
 		return err
 	}
@@ -119,6 +113,62 @@ func (a *App) amend(args []string) error {
 	state.Pending = &Pending{
 		Operation: "amend",
 		Branch:    current,
+		Queue:     ops,
+	}
+	if err := a.git.WriteState(state); err != nil {
+		return err
+	}
+	return a.runPendingRebases(state)
+}
+
+func (a *App) rebase(args []string) error {
+	if len(args) != 0 {
+		return fmt.Errorf("graphene rebase does not accept arguments")
+	}
+
+	current, err := a.git.CurrentBranch()
+	if err != nil {
+		return err
+	}
+	state, err := a.git.ReadState()
+	if err != nil {
+		return err
+	}
+	if state.Pending != nil {
+		return fmt.Errorf("pending rebase exists; use graphene continue or graphene abort")
+	}
+	base, ok := RebaseBaseBranch(state, current)
+	if !ok {
+		return fmt.Errorf("branch %q is not in a graphene stack", current)
+	}
+
+	dirty, err := a.git.HasTrackedChanges()
+	if err != nil {
+		return err
+	}
+	if dirty {
+		return fmt.Errorf("tracked changes would prevent rebase; stash or commit them before graphene rebase")
+	}
+
+	oldRefs := a.stateRefs(state)
+	if err := a.git.Run("switch", base); err != nil {
+		return err
+	}
+	if err := a.git.Run("pull", "--ff-only"); err != nil {
+		return err
+	}
+
+	ops, err := RestackOpsAfterRewrite(state, base, oldRefs)
+	if err != nil {
+		return err
+	}
+	if len(ops) == 0 {
+		return nil
+	}
+
+	state.Pending = &Pending{
+		Operation: "rebase",
+		Branch:    base,
 		Queue:     ops,
 	}
 	if err := a.git.WriteState(state); err != nil {
@@ -321,6 +371,16 @@ func (a *App) runPendingRebases(state State) error {
 		}
 	}
 	return nil
+}
+
+func (a *App) stateRefs(state State) map[string]string {
+	refs := map[string]string{}
+	for _, name := range StateRefNames(state) {
+		if ref, err := a.git.Output("rev-parse", "--verify", name); err == nil {
+			refs[name] = ref
+		}
+	}
+	return refs
 }
 
 func parseCommitArgs(args []string) (string, []string, error) {

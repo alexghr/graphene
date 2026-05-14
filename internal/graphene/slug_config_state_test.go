@@ -122,6 +122,32 @@ func TestPushBranches(t *testing.T) {
 	}
 }
 
+func TestRebaseBaseBranch(t *testing.T) {
+	state := State{Stacks: []Stack{
+		{Base: "main", Branches: []string{"a", "b"}},
+		{Base: "b", Branches: []string{"c"}},
+	}}
+
+	tests := []struct {
+		current string
+		want    string
+		ok      bool
+	}{
+		{current: "a", want: "main", ok: true},
+		{current: "b", want: "main", ok: true},
+		{current: "c", want: "b", ok: true},
+		{current: "main", want: "main", ok: true},
+		{current: "loose"},
+	}
+
+	for _, tt := range tests {
+		got, ok := RebaseBaseBranch(state, tt.current)
+		if got != tt.want || ok != tt.ok {
+			t.Fatalf("RebaseBaseBranch(%q) = %q %v, want %q %v", tt.current, got, ok, tt.want, tt.ok)
+		}
+	}
+}
+
 func TestParseArgs(t *testing.T) {
 	branch, commitArgs, err := parseCommitArgs([]string{"-b", "feature/exact", "-m", "hi"})
 	if err != nil {

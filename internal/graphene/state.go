@@ -168,6 +168,18 @@ func StackSuffix(s State, branch string) (Stack, int, bool) {
 	return s.Stacks[loc.StackIndex], loc.BranchIndex, true
 }
 
+func RebaseBaseBranch(s State, current string) (string, bool) {
+	if loc, ok := s.BranchLocation(current); ok {
+		return s.Stacks[loc.StackIndex].Base, true
+	}
+	for _, stack := range s.Stacks {
+		if stack.Base == current {
+			return current, true
+		}
+	}
+	return "", false
+}
+
 func RestackOpsAfterRewrite(s State, branch string, oldRefs map[string]string) ([]RebaseOp, error) {
 	rewritten := map[string]bool{branch: true}
 	scheduled := map[int]bool{}

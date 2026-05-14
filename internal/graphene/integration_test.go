@@ -155,6 +155,53 @@ func TestAmendRestacksBaseBranch(t *testing.T) {
 	}
 }
 
+func TestRebasePullsBaseAndRestacksWholeStack(t *testing.T) {
+	repo := newTestRepo(t)
+
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	runGit(t, "", "init", "--bare", remote)
+	runGit(t, repo.dir, "remote", "add", "origin", remote)
+	runGit(t, repo.dir, "push", "-u", "origin", "main")
+
+	createStackBranch(t, repo, "one.txt", "one\n", "One")
+	createStackBranch(t, repo, "two.txt", "two\n", "Two")
+
+	other := filepath.Join(t.TempDir(), "other")
+	runGit(t, "", "clone", remote, other)
+	runGit(t, other, "config", "user.name", "Graphene Test")
+	runGit(t, other, "config", "user.email", "graphene@example.test")
+	runGit(t, other, "config", "commit.gpgsign", "false")
+	writeFile(t, other, "base.txt", "base update\n")
+	runGit(t, other, "add", ".")
+	runGit(t, other, "commit", "-m", "Base update")
+	runGit(t, other, "push", "origin", "main")
+
+	runGit(t, repo.dir, "checkout", "stack/one")
+	expectGrapheneOK(t, repo, "rebase")
+
+	main := runGit(t, repo.dir, "rev-parse", "main")
+	originMain := runGit(t, repo.dir, "rev-parse", "origin/main")
+	if main != originMain {
+		t.Fatalf("main = %s, want origin/main %s", main, originMain)
+	}
+	parentOne := runGit(t, repo.dir, "rev-parse", "stack/one^")
+	if parentOne != main {
+		t.Fatalf("stack/one parent = %s, want main %s", parentOne, main)
+	}
+	branchOne := runGit(t, repo.dir, "rev-parse", "stack/one")
+	parentTwo := runGit(t, repo.dir, "rev-parse", "stack/two^")
+	if parentTwo != branchOne {
+		t.Fatalf("stack/two parent = %s, want stack/one %s", parentTwo, branchOne)
+	}
+	if got := currentBranch(t, repo.dir); got != "stack/two" {
+		t.Fatalf("branch = %q, want stack/two", got)
+	}
+	state := readState(t, repo.dir)
+	if state.Pending != nil {
+		t.Fatalf("pending state was not cleared: %#v", state.Pending)
+	}
+}
+
 func TestContinueClearsPendingAfterConflict(t *testing.T) {
 	repo := createConflictDuringAmend(t)
 

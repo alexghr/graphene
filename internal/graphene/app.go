@@ -37,6 +37,8 @@ func (a *App) Run(args []string) int {
 		err = a.commit(args[2:])
 	case "amend":
 		err = a.amend(args[2:])
+	case "rebase":
+		err = a.rebase(args[2:])
 	case "continue":
 		err = a.continueRebase(args[2:])
 	case "abort":
@@ -65,6 +67,7 @@ func (a *App) usage() {
 	fmt.Fprintln(a.stderr, `usage:
   graphene commit [-b <branch>] [git commit args...]
   graphene amend [git commit args...]
+  graphene rebase
   graphene continue
   graphene abort
   graphene push [remote] [git push flags...]`)

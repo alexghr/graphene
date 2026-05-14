@@ -204,6 +204,14 @@ func (g Git) HasUnstagedChanges() (bool, error) {
 	return false, err
 }
 
+func (g Git) HasTrackedChanges() (bool, error) {
+	out, err := g.Output("status", "--porcelain", "--untracked-files=no")
+	if err != nil {
+		return false, err
+	}
+	return out != "", nil
+}
+
 func tempBranchName(pid int, seq int64) string {
 	return "graphene/tmp-" + strconv.Itoa(pid) + "-" + strconv.FormatInt(seq, 10)
 }
