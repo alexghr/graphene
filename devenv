@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+DEVENV_LOCK="$(git rev-parse --show-toplevel)/devenv.lock"
+NIXPKGS_REF=$(nix eval --raw --impure --expr "
+let
+  lock = builtins.fromJSON (builtins.readFile $DEVENV_LOCK);
+  nixpkgs = lock.nodes.nixpkgs.locked;
+in
+  \"github:\${nixpkgs.owner}/\${nixpkgs.repo}/\${nixpkgs.rev}\"
+")
+
+exec nix run "$NIXPKGS_REF#devenv" -- "$@"
