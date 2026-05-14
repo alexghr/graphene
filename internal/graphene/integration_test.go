@@ -167,7 +167,7 @@ func TestRebasePullsBaseAndRestacksWholeStack(t *testing.T) {
 	createStackBranch(t, repo, "two.txt", "two\n", "Two")
 
 	other := filepath.Join(t.TempDir(), "other")
-	runGit(t, "", "clone", remote, other)
+	runGit(t, "", "clone", "--branch", "main", remote, other)
 	runGit(t, other, "config", "user.name", "Graphene Test")
 	runGit(t, other, "config", "user.email", "graphene@example.test")
 	runGit(t, other, "config", "commit.gpgsign", "false")
