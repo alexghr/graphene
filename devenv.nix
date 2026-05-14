@@ -17,5 +17,24 @@ in
 
     scripts = {};
 
-    outputs = {};
+    scripts = {
+      graphene-test.exec = "go test ./...";
+      graphene-build.exec = "go build -o bin/graphene ./cmd/graphene";
+    };
+
+    outputs = {
+      graphene = pkgs.buildGoModule {
+        pname = "graphene";
+        version = "0.1.0";
+        src = lib.cleanSource ./.;
+        vendorHash = null;
+        nativeCheckInputs = [ pkgs.git ];
+        subPackages = [ "cmd/graphene" ];
+        checkPhase = ''
+          runHook preCheck
+          go test ./...
+          runHook postCheck
+        '';
+      };
+    };
   }
