@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - uses: cachix/install-nix-action@ab739621df7a23f52766f9ccc97f38da6b7af14f
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Test
+        run: |
+          ./devenv shell --quiet --no-reload -- check
+
+      - name: Build
+        id: build
+        run: |
+          ./devenv build --quiet outputs.graphene > out.json
+          out_dir="$(nix eval --impure --raw --expr '(builtins.fromJSON (builtins.readFile ./out.json))."outputs.graphene"')"
+          echo "out_dir=$out_dir" >> "$GITHUB_OUTPUT"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: artifact
+          path: ${{ steps.build.outputs.out_dir }}/bin/*
