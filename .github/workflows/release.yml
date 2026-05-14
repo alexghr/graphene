@@ -93,7 +93,7 @@ jobs:
           if [[ "$VERSION" == *-* ]]; then
             args+=(--prerelease)
           fi
-          gh release create "$TAG" "${args[@]}"
+          gh release create "$TAG" "${args[@]}" --repo "$GITHUB_REPOSITORY"
 
   artifacts:
     name: Build ${{ matrix.asset_suffix }}
@@ -141,7 +141,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.prepare.outputs.tag }}
         run: |
-          gh release upload "$TAG" dist/* --clobber
+          gh release upload "$TAG" dist/* --clobber --repo "$GITHUB_REPOSITORY"
 
   publish:
     name: Publish release
@@ -155,4 +155,4 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.prepare.outputs.tag }}
         run: |
-          gh release edit "$TAG" --draft=false
+          gh release edit "$TAG" --draft=false --repo "$GITHUB_REPOSITORY"
