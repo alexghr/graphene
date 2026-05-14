@@ -1,15 +1,103 @@
 name: Release
 
 on:
-  release:
-    types:
-      - published
+  workflow_dispatch:
+    inputs:
+      version:
+        required: true
+        type: string
+      ref:
+        required: true
+        default: main
+        type: string
 
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ inputs.ref }}-${{ inputs.version }}
+  cancel-in-progress: false
+
 jobs:
-  release:
+  prepare:
+    name: Prepare release
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+
+      - name: Parse version
+        id: version
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          version="${RELEASE_VERSION#v}"
+          tag="v$version"
+
+          {
+            echo "version=$version"
+            echo "tag=$tag"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: cachix/install-nix-action@ab739621df7a23f52766f9ccc97f38da6b7af14f
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Update release metadata
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          sed -i -E 's/(version = ")[^"]+(";)/\1'"$VERSION"'\2/' devenv.nix
+          ./devenv shell --quiet --no-reload -- go mod tidy
+
+      - name: Commit version bump
+        env:
+          REF: ${{ inputs.ref }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git add devenv.nix go.mod
+          if [ -f go.sum ]; then
+            git add go.sum
+          fi
+
+          if git diff --cached --quiet; then
+            echo "No release metadata changes to commit."
+          else
+            git commit -m "Release $TAG"
+            git push origin "HEAD:$REF"
+          fi
+
+      - name: Tag release
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "$TAG"
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          args=(--draft --title "$TAG" --generate-notes)
+          if [[ "$VERSION" == *-* ]]; then
+            args+=(--prerelease)
+          fi
+          gh release create "$TAG" "${args[@]}"
+
+  artifacts:
+    name: Build ${{ matrix.asset_suffix }}
+    needs: prepare
     strategy:
       fail-fast: false
       matrix:
@@ -23,7 +111,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ needs.prepare.outputs.tag }}
 
       - uses: cachix/install-nix-action@ab739621df7a23f52766f9ccc97f38da6b7af14f
         with:
@@ -37,15 +125,34 @@ jobs:
           out_dir="$(nix eval --impure --raw --expr '(builtins.fromJSON (builtins.readFile ./out.json))."outputs.graphene"')"
           echo "out_dir=$out_dir" >> "$GITHUB_OUTPUT"
 
-      - name: Prepare release asset
+      - name: Prepare release assets
+        env:
+          TAG: ${{ needs.prepare.outputs.tag }}
+          ASSET_SUFFIX: ${{ matrix.asset_suffix }}
         run: |
           mkdir -p dist
-          asset_name="graphene-${{ github.event.release.tag_name }}-${{ matrix.asset_suffix }}"
+          asset_name="graphene-$TAG-$ASSET_SUFFIX"
           cp "${{ steps.build.outputs.out_dir }}/bin/graphene" "dist/$asset_name"
           chmod +x "dist/$asset_name"
+          shasum -a 256 "dist/$asset_name" > "dist/$asset_name.sha256"
 
-      - name: Upload release asset
+      - name: Upload release assets
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
         run: |
-          gh release upload "${{ github.event.release.tag_name }}" dist/* --clobber
+          gh release upload "$TAG" dist/* --clobber
+
+  publish:
+    name: Publish release
+    needs:
+      - prepare
+      - artifacts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          gh release edit "$TAG" --draft=false

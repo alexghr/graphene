@@ -19,7 +19,7 @@ jobs:
 
       - name: Test
         run: |
-          ./devenv shell --quiet --no-reload -- check
+          ./devenv shell --quiet --no-reload -- graphene-test
 
       - name: Build
         id: build
