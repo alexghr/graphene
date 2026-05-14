@@ -1,0 +1,51 @@
+name: Release
+
+on:
+  release:
+    types:
+      - published
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            asset_suffix: linux-amd64
+          - runner: macos-14
+            asset_suffix: darwin-arm64
+
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - uses: cachix/install-nix-action@ab739621df7a23f52766f9ccc97f38da6b7af14f
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Build package
+        id: build
+        run: |
+          ./devenv build --quiet outputs.graphene > out.json
+          out_dir="$(nix eval --impure --raw --expr '(builtins.fromJSON (builtins.readFile ./out.json))."outputs.graphene"')"
+          echo "out_dir=$out_dir" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare release asset
+        run: |
+          mkdir -p dist
+          asset_name="graphene-${{ github.event.release.tag_name }}-${{ matrix.asset_suffix }}"
+          cp "${{ steps.build.outputs.out_dir }}/bin/graphene" "dist/$asset_name"
+          chmod +x "dist/$asset_name"
+
+      - name: Upload release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ github.event.release.tag_name }}" dist/* --clobber
