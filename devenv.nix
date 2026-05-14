@@ -25,7 +25,7 @@ in
     outputs = {
       graphene = pkgs.buildGoModule {
         pname = "graphene";
-        version = "0.2.0";
+        version = "0.2.1";
         src = lib.cleanSource ./.;
         vendorHash = null;
         nativeCheckInputs = [ pkgs.git ];
