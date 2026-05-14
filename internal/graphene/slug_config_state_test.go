@@ -215,3 +215,34 @@ func TestRestackOpsAfterRewrite(t *testing.T) {
 		t.Fatalf("ops = %#v, want %#v", ops, want)
 	}
 }
+
+func TestRenderGraphWithPending(t *testing.T) {
+	state := State{
+		Stacks: []Stack{
+			{Base: "main", Branches: []string{"a", "b"}},
+			{Base: "a", Branches: []string{"c"}},
+			{Base: "b", Branches: []string{"d"}},
+		},
+		Pending: &Pending{
+			Operation: "amend",
+			Branch:    "a",
+			Queue: []RebaseOp{
+				{Onto: "a", Top: "b"},
+				{Onto: "b", Top: "d"},
+			},
+		},
+	}
+
+	want := "" +
+		"main\n" +
+		"  `- a *\n" +
+		"     |- b\n" +
+		"     |  `- d\n" +
+		"     `- c\n" +
+		"pending amend: a\n" +
+		"  next: rebase b onto a\n" +
+		"  remaining: 2\n"
+	if got := RenderGraph(state, "a"); got != want {
+		t.Fatalf("RenderGraph = %q, want %q", got, want)
+	}
+}

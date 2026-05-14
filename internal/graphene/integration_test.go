@@ -313,6 +313,28 @@ func TestPushPushesStackAndSetsUpstreams(t *testing.T) {
 	}
 }
 
+func TestGraphDisplaysForkedStack(t *testing.T) {
+	repo := newTestRepo(t)
+	createStackBranch(t, repo, "one.txt", "one\n", "One")
+	createStackBranch(t, repo, "two.txt", "two\n", "Two")
+
+	runGit(t, repo.dir, "checkout", "stack/one")
+	createStackBranch(t, repo, "fork.txt", "fork\n", "Fork")
+
+	code, stdout, stderr := repo.runGraphene(t, "graph")
+	if code != 0 {
+		t.Fatalf("graphene graph exited %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	want := "" +
+		"main\n" +
+		"  `- stack/one\n" +
+		"     |- stack/two\n" +
+		"     `- stack/fork *\n"
+	if stdout != want {
+		t.Fatalf("stdout = %q, want %q", stdout, want)
+	}
+}
+
 func createStackBranch(t *testing.T, repo testRepo, path, content, message string) {
 	t.Helper()
 	writeFile(t, repo.dir, path, content)

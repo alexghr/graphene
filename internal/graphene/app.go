@@ -9,6 +9,7 @@ import (
 type App struct {
 	git    Git
 	getenv func(string) string
+	stdout io.Writer
 	stderr io.Writer
 }
 
@@ -21,6 +22,7 @@ func NewApp(dir string, stdin io.Reader, stdout, stderr io.Writer, getenv func(s
 			Stderr: stderr,
 		},
 		getenv: getenv,
+		stdout: stdout,
 		stderr: stderr,
 	}
 }
@@ -45,6 +47,8 @@ func (a *App) Run(args []string) int {
 		err = a.abortRebase(args[2:])
 	case "push":
 		err = a.push(args[2:])
+	case "graph":
+		err = a.graph(args[2:])
 	case "help", "-h", "--help":
 		a.usage()
 		return 0
@@ -70,7 +74,8 @@ func (a *App) usage() {
   graphene rebase
   graphene continue
   graphene abort
-  graphene push [remote] [git push flags...]`)
+  graphene push [remote] [git push flags...]
+  graphene graph`)
 }
 
 func errorExitCode(err error) int {
