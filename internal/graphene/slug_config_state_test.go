@@ -200,6 +200,16 @@ func TestParseArgs(t *testing.T) {
 	if !pushDryRun(flags) {
 		t.Fatal("pushDryRun did not detect --dry-run")
 	}
+	remote, err = parsePRArgs([]string{"origin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if remote != "origin" {
+		t.Fatalf("parsePRArgs remote = %q", remote)
+	}
+	if _, err := parsePRArgs([]string{"origin", "upstream"}); err == nil {
+		t.Fatal("parsePRArgs accepted multiple remotes")
+	}
 	if _, _, _, err := parsePushArgs([]string{"--dry-run", "origin"}); err == nil {
 		t.Fatal("parsePushArgs accepted trailing remote")
 	}

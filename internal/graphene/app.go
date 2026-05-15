@@ -47,6 +47,8 @@ func (a *App) Run(args []string) int {
 		err = a.abortRebase(args[2:])
 	case "push":
 		err = a.push(args[2:])
+	case "pr":
+		err = a.pr(args[2:])
 	case "graph":
 		err = a.graph(args[2:])
 	case "version":
@@ -77,6 +79,7 @@ func (a *App) usage() {
   graphene continue
   graphene abort
   graphene push [remote] [git push flags...]
+  graphene pr [remote]
   graphene graph
   graphene version`)
 }

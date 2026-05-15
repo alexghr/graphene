@@ -295,6 +295,33 @@ func (a *App) push(args []string) error {
 	return a.printPullRequestURLs(remote, state, branches)
 }
 
+func (a *App) pr(args []string) error {
+	remote, err := parsePRArgs(args)
+	if err != nil {
+		return err
+	}
+
+	current, err := a.git.CurrentBranch()
+	if err != nil {
+		return err
+	}
+	state, err := a.git.ReadState()
+	if err != nil {
+		return err
+	}
+	branches := PushBranches(state, current)
+	if len(branches) == 0 {
+		return fmt.Errorf("no branch for pull request")
+	}
+	if remote == "" {
+		remote, err = a.pushRemote(current, branches)
+		if err != nil {
+			return err
+		}
+	}
+	return a.printPullRequestURLs(remote, state, branches)
+}
+
 func (a *App) cleanupFailedCommit(original, branch string) {
 	if original != "" {
 		_ = a.git.OutputErr("switch", original)
@@ -438,6 +465,19 @@ func parsePushArgs(args []string) (string, bool, []string, error) {
 		}
 	}
 	return remote, remoteProvided, append([]string(nil), args...), nil
+}
+
+func parsePRArgs(args []string) (string, error) {
+	if len(args) == 0 {
+		return "", nil
+	}
+	if len(args) > 1 {
+		return "", fmt.Errorf("graphene pr accepts at most one remote")
+	}
+	if strings.HasPrefix(args[0], "-") {
+		return "", fmt.Errorf("graphene pr does not accept flags")
+	}
+	return args[0], nil
 }
 
 func pushDryRun(flags []string) bool {
