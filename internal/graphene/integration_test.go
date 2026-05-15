@@ -79,6 +79,22 @@ func TestCommitRecordsAppendAndFork(t *testing.T) {
 	}
 }
 
+func TestVersionFlag(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	app := NewApp("", nil, &stdout, &stderr, os.Getenv)
+
+	code := app.Run([]string{"graphene", "version"})
+	if code != 0 {
+		t.Fatalf("graphene version exited %d\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
+	}
+	if stdout.String() != "graphene dev\n" {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+	if stderr.String() != "" {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
 func TestCommitExactBranch(t *testing.T) {
 	repo := newTestRepo(t)
 

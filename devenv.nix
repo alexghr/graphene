@@ -23,11 +23,14 @@ in
     };
 
     outputs = {
-      graphene = pkgs.buildGoModule {
+      graphene = pkgs.buildGoModule rec {
         pname = "graphene";
         version = "0.3.0";
         src = lib.cleanSource ./.;
         vendorHash = null;
+        ldflags = [
+          "-X github.com/alexghr/graphene/internal/graphene.Version=${version}"
+        ];
         nativeCheckInputs = [ pkgs.git ];
         subPackages = [ "cmd/graphene" ];
         checkPhase = ''

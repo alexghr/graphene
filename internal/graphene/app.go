@@ -49,6 +49,8 @@ func (a *App) Run(args []string) int {
 		err = a.push(args[2:])
 	case "graph":
 		err = a.graph(args[2:])
+	case "version":
+		err = a.version(args[2:])
 	case "help", "-h", "--help":
 		a.usage()
 		return 0
@@ -75,7 +77,8 @@ func (a *App) usage() {
   graphene continue
   graphene abort
   graphene push [remote] [git push flags...]
-  graphene graph`)
+  graphene graph
+  graphene version`)
 }
 
 func errorExitCode(err error) int {
