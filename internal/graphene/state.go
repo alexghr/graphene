@@ -168,6 +168,41 @@ func BranchesThroughCurrent(s State, current string) []string {
 	return branches
 }
 
+func BranchesFromCurrent(s State, current string) []string {
+	if current == "" {
+		return nil
+	}
+
+	var branches []string
+	seen := map[string]bool{}
+	add := func(branch string) {
+		if branch != "" && !seen[branch] {
+			branches = append(branches, branch)
+			seen[branch] = true
+		}
+	}
+
+	add(current)
+	for i := 0; i < len(branches); i++ {
+		branch := branches[i]
+		if loc, ok := s.BranchLocation(branch); ok {
+			stack := s.Stacks[loc.StackIndex]
+			for _, descendant := range stack.Branches[loc.BranchIndex+1:] {
+				add(descendant)
+			}
+		}
+		for _, stack := range s.Stacks {
+			if stack.Base != branch {
+				continue
+			}
+			for _, descendant := range stack.Branches {
+				add(descendant)
+			}
+		}
+	}
+	return branches
+}
+
 func RemoveBranches(s State, branches []string) State {
 	deleted := map[string]bool{}
 	for _, branch := range branches {

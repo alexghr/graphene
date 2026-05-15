@@ -123,6 +123,29 @@ func TestBranchesThroughCurrent(t *testing.T) {
 	}
 }
 
+func TestBranchesFromCurrent(t *testing.T) {
+	state := State{Stacks: []Stack{
+		{Base: "main", Branches: []string{"a", "b", "c"}},
+		{Base: "b", Branches: []string{"d", "e"}},
+		{Base: "e", Branches: []string{"f"}},
+	}}
+
+	tests := []struct {
+		current string
+		want    []string
+	}{
+		{current: "b", want: []string{"b", "c", "d", "e", "f"}},
+		{current: "e", want: []string{"e", "f"}},
+		{current: "loose", want: []string{"loose"}},
+	}
+
+	for _, tt := range tests {
+		if got := BranchesFromCurrent(state, tt.current); !reflect.DeepEqual(got, tt.want) {
+			t.Fatalf("BranchesFromCurrent(%q) = %#v, want %#v", tt.current, got, tt.want)
+		}
+	}
+}
+
 func TestRemoveStackThroughCurrent(t *testing.T) {
 	state := State{Stacks: []Stack{
 		{Base: "main", Branches: []string{"a", "b", "c"}},

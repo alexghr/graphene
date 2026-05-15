@@ -111,9 +111,10 @@ func (a *App) amend(args []string) error {
 	}
 
 	state.Pending = &Pending{
-		Operation: "amend",
-		Branch:    current,
-		Queue:     ops,
+		Operation:    "amend",
+		Branch:       current,
+		ReturnBranch: current,
+		Queue:        ops,
 	}
 	if err := a.git.WriteState(state); err != nil {
 		return err
@@ -400,6 +401,9 @@ func (a *App) pushBranches(args []string, forceWithLease bool) error {
 		return err
 	}
 	branches := BranchesThroughCurrent(state, current)
+	if forceWithLease {
+		branches = BranchesFromCurrent(state, current)
+	}
 	if len(branches) == 0 {
 		return fmt.Errorf("no branch to push")
 	}

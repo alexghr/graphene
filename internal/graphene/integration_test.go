@@ -159,6 +159,9 @@ func TestAmendRestacksSuffix(t *testing.T) {
 	if parent != branchOne {
 		t.Fatalf("stack/two parent = %s, want stack/one %s", parent, branchOne)
 	}
+	if got := currentBranch(t, repo.dir); got != "stack/one" {
+		t.Fatalf("branch = %q, want stack/one", got)
+	}
 	state := readState(t, repo.dir)
 	if state.Pending != nil {
 		t.Fatalf("pending state was not cleared: %#v", state.Pending)
@@ -618,6 +621,43 @@ func TestPushPushesStackAndSetsUpstreams(t *testing.T) {
 	remoteTwo := runGit(t, remote, "rev-parse", "refs/heads/stack/two")
 	if remoteTwo != localTwo {
 		t.Fatalf("remote stack/two = %s, want %s", remoteTwo, localTwo)
+	}
+}
+
+func TestPushfPushesCurrentBranchAndDescendants(t *testing.T) {
+	repo := newTestRepo(t)
+	createStackBranch(t, repo, "one.txt", "one\n", "One")
+	createStackBranch(t, repo, "two.txt", "two\n", "Two")
+	createStackBranch(t, repo, "three.txt", "three\n", "Three")
+
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	runGit(t, "", "init", "--bare", remote)
+	runGit(t, repo.dir, "remote", "add", "origin", remote)
+	runGit(t, repo.dir, "checkout", "stack/three")
+	expectGrapheneOK(t, repo, "push", "origin")
+
+	runGit(t, repo.dir, "checkout", "stack/two")
+	writeFile(t, repo.dir, "two.txt", "two amended\n")
+	runGit(t, repo.dir, "add", ".")
+	expectGrapheneOK(t, repo, "amend", "-m", "Two amended")
+	if got := currentBranch(t, repo.dir); got != "stack/two" {
+		t.Fatalf("branch = %q, want stack/two", got)
+	}
+
+	localThree := runGit(t, repo.dir, "rev-parse", "stack/three")
+	remoteThree := runGit(t, remote, "rev-parse", "refs/heads/stack/three")
+	if remoteThree == localThree {
+		t.Fatal("remote stack/three was already updated before pushf")
+	}
+
+	expectGrapheneOK(t, repo, "pushf", "origin")
+
+	for _, branch := range []string{"stack/two", "stack/three"} {
+		local := runGit(t, repo.dir, "rev-parse", branch)
+		remoteHead := runGit(t, remote, "rev-parse", "refs/heads/"+branch)
+		if remoteHead != local {
+			t.Fatalf("remote %s = %s, want %s", branch, remoteHead, local)
+		}
 	}
 }
 
