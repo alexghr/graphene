@@ -155,6 +155,24 @@ func (g Git) UpstreamRemote(branch string) (string, error) {
 	return "", err
 }
 
+func (g Git) Upstream(branch string) (string, string, error) {
+	remote, err := g.Output("config", "--get", "branch."+branch+".remote")
+	if err != nil {
+		if isGitExit(err, 1) {
+			return "", "", nil
+		}
+		return "", "", err
+	}
+	merge, err := g.Output("config", "--get", "branch."+branch+".merge")
+	if err != nil {
+		if isGitExit(err, 1) {
+			return "", "", nil
+		}
+		return "", "", err
+	}
+	return remote, merge, nil
+}
+
 func (g Git) RemoteURL(remote string) (string, error) {
 	return g.Output("remote", "get-url", "--push", remote)
 }
@@ -193,6 +211,20 @@ func (g Git) SetUpstream(branch, remote string) error {
 		return err
 	}
 	return g.OutputErr("config", "branch."+branch+".merge", "refs/heads/"+branch)
+}
+
+func (g Git) BranchCheckedOut(branch string) (bool, error) {
+	out, err := g.Output("worktree", "list", "--porcelain")
+	if err != nil {
+		return false, err
+	}
+	target := "refs/heads/" + branch
+	for _, line := range strings.Split(out, "\n") {
+		if strings.TrimPrefix(line, "branch ") == target && strings.HasPrefix(line, "branch ") {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (g Git) OutputErr(args ...string) error {

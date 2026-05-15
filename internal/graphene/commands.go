@@ -152,16 +152,27 @@ func (a *App) rebase(args []string) error {
 	}
 
 	oldRefs := a.stateRefs(state)
-	if err := a.git.Run("switch", base); err != nil {
-		return err
-	}
-	if err := a.git.Run("pull", "--ff-only"); err != nil {
-		return err
+	baseRef := base
+	if current == base {
+		if err := a.git.Run("switch", base); err != nil {
+			return err
+		}
+		if err := a.git.Run("pull", "--ff-only"); err != nil {
+			return err
+		}
+	} else {
+		baseRef, err = a.fetchBase(base)
+		if err != nil {
+			return err
+		}
 	}
 
 	ops, err := RestackOpsUpToBranch(state, base, current, oldRefs)
 	if err != nil {
 		return err
+	}
+	if len(ops) > 0 {
+		ops[0].Onto = baseRef
 	}
 	if len(ops) == 0 {
 		if current != base {
@@ -312,14 +323,12 @@ func (a *App) update(args []string) error {
 	}
 
 	oldRefs := a.stateRefs(state)
-	if err := a.git.Run("switch", stack.Base); err != nil {
-		return err
-	}
-	if err := a.git.Run("pull", "--ff-only"); err != nil {
+	baseRef, err := a.fetchBase(stack.Base)
+	if err != nil {
 		return err
 	}
 
-	branches, err := a.appliedPrefixBranches(stack.Base, stack.Branches[:loc.BranchIndex+1], oldRefs)
+	branches, err := a.appliedPrefixBranches(baseRef, stack.Branches[:loc.BranchIndex+1], oldRefs)
 	if err != nil {
 		return err
 	}
@@ -331,6 +340,9 @@ func (a *App) update(args []string) error {
 	}
 	firstRemaining := len(branches)
 	if firstRemaining == len(stack.Branches) {
+		if err := a.switchToUpdatedBase(stack.Base, baseRef); err != nil {
+			return err
+		}
 		if err := a.deleteBranches(branches); err != nil {
 			return err
 		}
@@ -355,7 +367,7 @@ func (a *App) update(args []string) error {
 	}
 
 	ops := []RebaseOp{{
-		Onto:     stack.Base,
+		Onto:     baseRef,
 		Upstream: upstream,
 		Top:      top,
 	}}
@@ -572,6 +584,63 @@ func (a *App) finishPendingRebases(state State) error {
 	}
 	state.Pending = nil
 	return a.git.WriteState(state)
+}
+
+func (a *App) fetchBase(base string) (string, error) {
+	remote, merge, err := a.git.Upstream(base)
+	if err != nil {
+		return "", err
+	}
+	if remote == "" || merge == "" {
+		return "", fmt.Errorf("branch %q has no upstream; set one before updating the stack", base)
+	}
+
+	oldBase, err := a.git.Output("rev-parse", "--verify", "refs/heads/"+base+"^{commit}")
+	if err != nil {
+		return "", err
+	}
+	if err := a.git.Run("fetch", remote); err != nil {
+		return "", err
+	}
+
+	upstream := base + "@{upstream}"
+	updatedBase, err := a.git.Output("rev-parse", "--verify", upstream+"^{commit}")
+	if err != nil {
+		return "", err
+	}
+	ancestor, err := a.isAncestor(oldBase, updatedBase)
+	if err != nil {
+		return "", err
+	}
+	if !ancestor {
+		return "", fmt.Errorf("cannot fast-forward %q to %q; resolve the base branch before updating the stack", base, upstream)
+	}
+	if oldBase == updatedBase {
+		return base, nil
+	}
+
+	checkedOut, err := a.git.BranchCheckedOut(base)
+	if err != nil {
+		return "", err
+	}
+	if checkedOut {
+		return updatedBase, nil
+	}
+	if err := a.git.OutputErr("update-ref", "refs/heads/"+base, updatedBase, oldBase); err != nil {
+		return "", err
+	}
+	return base, nil
+}
+
+func (a *App) switchToUpdatedBase(base, baseRef string) error {
+	checkedOut, err := a.git.BranchCheckedOut(base)
+	if err != nil {
+		return err
+	}
+	if checkedOut {
+		return a.git.Run("switch", "--detach", baseRef)
+	}
+	return a.git.Run("switch", base)
 }
 
 func (a *App) ensureNoDependentStacks(state State, stackIndex int, branches []string) error {

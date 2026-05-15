@@ -359,6 +359,92 @@ func TestUpdateKeepsUnappliedBranches(t *testing.T) {
 	}
 }
 
+func TestUpdateUsesFetchedBaseWhenBaseCheckedOutInAnotherWorktree(t *testing.T) {
+	repo := newTestRepo(t)
+
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	runGit(t, "", "init", "--bare", remote)
+	runGit(t, repo.dir, "remote", "add", "origin", remote)
+	runGit(t, repo.dir, "push", "-u", "origin", "main")
+
+	createStackBranch(t, repo, "one.txt", "one\n", "One")
+	createStackBranch(t, repo, "two.txt", "two\n", "Two")
+
+	other := filepath.Join(t.TempDir(), "other")
+	runGit(t, "", "clone", "--branch", "main", remote, other)
+	runGit(t, other, "config", "user.name", "Graphene Test")
+	runGit(t, other, "config", "user.email", "graphene@example.test")
+	runGit(t, other, "config", "commit.gpgsign", "false")
+	writeFile(t, other, "base.txt", "base update\n")
+	runGit(t, other, "add", ".")
+	runGit(t, other, "commit", "-m", "Base update")
+	runGit(t, other, "push", "origin", "main")
+
+	baseWorktree := filepath.Join(t.TempDir(), "base-worktree")
+	runGit(t, repo.dir, "worktree", "add", baseWorktree, "main")
+	expectGrapheneOK(t, repo, "update")
+
+	main := runGit(t, repo.dir, "rev-parse", "main")
+	originMain := runGit(t, repo.dir, "rev-parse", "origin/main")
+	if main == originMain {
+		t.Fatalf("main was updated while checked out in another worktree")
+	}
+	if status := runGit(t, baseWorktree, "status", "--porcelain"); status != "" {
+		t.Fatalf("base worktree status = %q, want clean", status)
+	}
+	parentOne := runGit(t, repo.dir, "rev-parse", "stack/one^")
+	if parentOne != originMain {
+		t.Fatalf("stack/one parent = %s, want origin/main %s", parentOne, originMain)
+	}
+	if got := currentBranch(t, repo.dir); got != "stack/two" {
+		t.Fatalf("branch = %q, want stack/two", got)
+	}
+}
+
+func TestUpdateDeletesAppliedStackWhenBaseCheckedOutInAnotherWorktree(t *testing.T) {
+	repo := newTestRepo(t)
+
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	runGit(t, "", "init", "--bare", remote)
+	runGit(t, repo.dir, "remote", "add", "origin", remote)
+	runGit(t, repo.dir, "push", "-u", "origin", "main")
+
+	createStackBranch(t, repo, "one.txt", "one\n", "One")
+
+	other := filepath.Join(t.TempDir(), "other")
+	runGit(t, "", "clone", "--branch", "main", remote, other)
+	runGit(t, other, "config", "user.name", "Graphene Test")
+	runGit(t, other, "config", "user.email", "graphene@example.test")
+	runGit(t, other, "config", "commit.gpgsign", "false")
+	writeFile(t, other, "one.txt", "one\n")
+	runGit(t, other, "add", ".")
+	runGit(t, other, "commit", "-m", "One (#1)")
+	runGit(t, other, "push", "origin", "main")
+
+	baseWorktree := filepath.Join(t.TempDir(), "base-worktree")
+	runGit(t, repo.dir, "worktree", "add", baseWorktree, "main")
+	expectGrapheneOK(t, repo, "update")
+
+	if got := runGit(t, repo.dir, "branch", "--show-current"); got != "" {
+		t.Fatalf("branch = %q, want detached HEAD", got)
+	}
+	head := runGit(t, repo.dir, "rev-parse", "HEAD")
+	originMain := runGit(t, repo.dir, "rev-parse", "origin/main")
+	if head != originMain {
+		t.Fatalf("HEAD = %s, want origin/main %s", head, originMain)
+	}
+	if refExists(t, repo.dir, "refs/heads/stack/one") {
+		t.Fatal("stack/one still exists")
+	}
+	if status := runGit(t, baseWorktree, "status", "--porcelain"); status != "" {
+		t.Fatalf("base worktree status = %q, want clean", status)
+	}
+	state := readState(t, repo.dir)
+	if len(state.Stacks) != 0 || state.Pending != nil {
+		t.Fatalf("state = %#v, want empty", state)
+	}
+}
+
 func TestUpdateLastAppliedBranchDeletesStack(t *testing.T) {
 	repo := newTestRepo(t)
 
