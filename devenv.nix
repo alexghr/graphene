@@ -7,8 +7,6 @@ in
     packages = with pkgs;
       [
         git
-        watch
-        tmux
         pkgs-unstable.codex
       ];
 
