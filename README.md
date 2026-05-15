@@ -1,16 +1,27 @@
 # graphene
 
-Install
+This is a vibe-coded CLI tool to create stacked PRs.
+
+## Requirements
+
+This tool requires Git 2.38 or newer
+
+## Install
 
 ```
-VERSION=v0.6.1 && curl -Lo $HOME/.local/bin/graphene https://github.com/alexghr/graphene/releases/download/$VERSION/graphene-$VERSION-linux-amd64
+mkdir -p "$HOME/.local/bin"
+curl -fL -o "$HOME/.local/bin/graphene" "https://github.com/alexghr/graphene/releases/latest/download/graphene-$(uname -s)-$(uname -m)"
+chmod +x "$HOME/.local/bin/graphene"
 ```
 
-For shorter commands, add `alias gn=graphene` to your shell config.
+Add to shell init
 
-Commands
+```
+export PATH="$HOME/.local/bin:$PATH"
+alias gn=graphene
+```
 
-Graphene requires Git 2.38 or newer
+## Commands
 
 - `graphene commit [-b <branch>] [git commit args...]`: creates a new branch from the current branch, runs `git commit` with the remaining args, and records the branch in the stack. Without `-b`, the branch name comes from the commit subject.
 - `graphene amend [git commit args...]`: runs `git commit --amend`, then restacks dependent branches with `git rebase --update-refs`.

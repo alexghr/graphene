@@ -1,6 +1,7 @@
 { pkgs, lib, config, inputs, ... }:
 let
   pkgs-unstable = import inputs.nixpkgs-unstable { system = pkgs.stdenv.system; };
+  version = lib.removeSuffix "\n" (builtins.readFile ./VERSION);
 in
   {
     packages = with pkgs;
@@ -25,7 +26,7 @@ in
     outputs = {
       graphene = pkgs.buildGoModule rec {
         pname = "graphene";
-        version = "0.6.1";
+        inherit version;
         src = lib.cleanSource ./.;
         vendorHash = null;
         ldflags = [

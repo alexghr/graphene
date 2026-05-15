@@ -52,10 +52,8 @@ jobs:
       - name: Update release metadata
         env:
           VERSION: ${{ steps.version.outputs.version }}
-          TAG: ${{ steps.version.outputs.tag }}
         run: |
-          sed -i -E 's/(version = ")[^"]+(";)/\1'"$VERSION"'\2/' devenv.nix
-          sed -i -E 's#(VERSION=)[^[:space:]]+#\1'"$TAG"'#' README.md
+          printf '%s\n' "$VERSION" > VERSION
           ./devenv shell --quiet --no-reload -- go mod tidy
 
       - name: Commit version bump
@@ -64,9 +62,9 @@ jobs:
           TAG: ${{ steps.version.outputs.tag }}
         run: |
           git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          git add README.md devenv.nix go.mod
+          git add VERSION go.mod
           if [ -f go.sum ]; then
             git add go.sum
           fi
@@ -98,16 +96,14 @@ jobs:
           gh release create "$TAG" "${args[@]}" --repo "$GITHUB_REPOSITORY"
 
   artifacts:
-    name: Build ${{ matrix.asset_suffix }}
+    name: Build ${{ matrix.runner }}
     needs: prepare
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - runner: ubuntu-latest
-            asset_suffix: linux-amd64
-          - runner: macos-14
-            asset_suffix: darwin-arm64
+        runner:
+          - ubuntu-latest
+          - macos-14
 
     runs-on: ${{ matrix.runner }}
     steps:
@@ -128,12 +124,9 @@ jobs:
           echo "out_dir=$out_dir" >> "$GITHUB_OUTPUT"
 
       - name: Prepare release assets
-        env:
-          TAG: ${{ needs.prepare.outputs.tag }}
-          ASSET_SUFFIX: ${{ matrix.asset_suffix }}
         run: |
           mkdir -p dist
-          asset_name="graphene-$TAG-$ASSET_SUFFIX"
+          asset_name="graphene-$(uname -s)-$(uname -m)"
           cp "${{ steps.build.outputs.out_dir }}/bin/graphene" "dist/$asset_name"
           chmod +x "dist/$asset_name"
           shasum -a 256 "dist/$asset_name" > "dist/$asset_name.sha256"
