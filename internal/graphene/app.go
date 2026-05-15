@@ -28,42 +28,53 @@ func NewApp(dir string, stdin io.Reader, stdout, stderr io.Writer, getenv func(s
 }
 
 func (a *App) Run(args []string) int {
-	if len(args) < 2 {
-		a.usage()
-		return 1
+	command := ""
+	if len(args) >= 2 {
+		command = args[1]
 	}
 
-	var err error
-	switch args[1] {
-	case "commit":
-		err = a.commit(args[2:])
-	case "amend":
-		err = a.amend(args[2:])
-	case "rebase":
-		err = a.rebase(args[2:])
-	case "continue":
-		err = a.continueRebase(args[2:])
-	case "abort":
-		err = a.abortRebase(args[2:])
-	case "rm":
-		err = a.rm(args[2:])
-	case "update":
-		err = a.update(args[2:])
-	case "push":
-		err = a.push(args[2:])
-	case "pushf":
-		err = a.pushf(args[2:])
-	case "pr":
-		err = a.pr(args[2:])
-	case "graph":
-		err = a.graph(args[2:])
-	case "version":
-		err = a.version(args[2:])
-	case "help", "-h", "--help":
-		a.usage()
-		return 0
-	default:
-		err = fmt.Errorf("unknown command %q", args[1])
+	gitVersion, err := a.git.Version()
+	if err == nil && command != "version" && gitVersion.less(minimumGitVersion) {
+		err = fmt.Errorf("graphene requires git >= %s; found git %s", minimumGitVersion, gitVersion)
+	}
+
+	if err == nil {
+		if len(args) < 2 {
+			a.usage()
+			return 1
+		}
+
+		switch command {
+		case "commit":
+			err = a.commit(args[2:])
+		case "amend":
+			err = a.amend(args[2:])
+		case "rebase":
+			err = a.rebase(args[2:])
+		case "continue":
+			err = a.continueRebase(args[2:])
+		case "abort":
+			err = a.abortRebase(args[2:])
+		case "rm":
+			err = a.rm(args[2:])
+		case "update":
+			err = a.update(args[2:])
+		case "push":
+			err = a.push(args[2:])
+		case "pushf":
+			err = a.pushf(args[2:])
+		case "pr":
+			err = a.pr(args[2:])
+		case "graph":
+			err = a.graph(args[2:])
+		case "version":
+			err = a.version(args[2:], gitVersion)
+		case "help", "-h", "--help":
+			a.usage()
+			return 0
+		default:
+			err = fmt.Errorf("unknown command %q", command)
+		}
 	}
 
 	if err == nil {

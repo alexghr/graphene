@@ -2,6 +2,7 @@ package graphene
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -87,7 +88,12 @@ func TestVersionFlag(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("graphene version exited %d\nstdout:\n%s\nstderr:\n%s", code, stdout.String(), stderr.String())
 	}
-	if stdout.String() != "graphene dev\n" {
+	gitVersion, err := (Git{}).Version()
+	if err != nil {
+		t.Fatalf("git version: %v", err)
+	}
+	want := fmt.Sprintf("graphene dev\ngit %s\n", gitVersion)
+	if stdout.String() != want {
 		t.Fatalf("stdout = %q", stdout.String())
 	}
 	if stderr.String() != "" {

@@ -272,6 +272,32 @@ func TestParseArgs(t *testing.T) {
 	}
 }
 
+func TestParseGitVersion(t *testing.T) {
+	tests := []struct {
+		in   string
+		want gitVersion
+	}{
+		{in: "git version 2.38.0", want: gitVersion{Major: 2, Minor: 38, Patch: 0}},
+		{in: "git version 2.53.0", want: gitVersion{Major: 2, Minor: 53, Patch: 0}},
+		{in: "git version 2.39.3 (Apple Git-146)", want: gitVersion{Major: 2, Minor: 39, Patch: 3}},
+		{in: "git version 2.44.0.windows.1", want: gitVersion{Major: 2, Minor: 44, Patch: 0}},
+	}
+
+	for _, tt := range tests {
+		got, err := parseGitVersion(tt.in)
+		if err != nil {
+			t.Fatalf("parseGitVersion(%q): %v", tt.in, err)
+		}
+		if got != tt.want {
+			t.Fatalf("parseGitVersion(%q) = %#v, want %#v", tt.in, got, tt.want)
+		}
+	}
+
+	if _, err := parseGitVersion("git version unknown"); err == nil {
+		t.Fatal("parseGitVersion accepted unknown version")
+	}
+}
+
 func TestRestackOpsAfterRewrite(t *testing.T) {
 	state := State{Stacks: []Stack{
 		{Base: "main", Branches: []string{"a", "b"}},

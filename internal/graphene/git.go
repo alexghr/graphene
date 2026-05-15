@@ -25,6 +25,14 @@ type GitError struct {
 	Streamed bool
 }
 
+type gitVersion struct {
+	Major int
+	Minor int
+	Patch int
+}
+
+var minimumGitVersion = gitVersion{Major: 2, Minor: 38}
+
 func (e *GitError) Error() string {
 	if strings.TrimSpace(e.Stderr) != "" {
 		return strings.TrimSpace(e.Stderr)
@@ -190,6 +198,71 @@ func (g Git) SetUpstream(branch, remote string) error {
 func (g Git) OutputErr(args ...string) error {
 	_, err := g.Output(args...)
 	return err
+}
+
+func (g Git) Version() (gitVersion, error) {
+	out, err := g.Output("--version")
+	if err != nil {
+		return gitVersion{}, err
+	}
+	version, err := parseGitVersion(out)
+	if err != nil {
+		return gitVersion{}, err
+	}
+	return version, nil
+}
+
+func parseGitVersion(out string) (gitVersion, error) {
+	for _, field := range strings.Fields(out) {
+		if field == "" || field[0] < '0' || field[0] > '9' {
+			continue
+		}
+		parts := strings.Split(field, ".")
+		if len(parts) < 2 {
+			break
+		}
+		major, ok := leadingInt(parts[0])
+		if !ok {
+			break
+		}
+		minor, ok := leadingInt(parts[1])
+		if !ok {
+			break
+		}
+		var patch int
+		if len(parts) > 2 {
+			patch, _ = leadingInt(parts[2])
+		}
+		return gitVersion{Major: major, Minor: minor, Patch: patch}, nil
+	}
+	return gitVersion{}, fmt.Errorf("parse git version from %q", out)
+}
+
+func leadingInt(s string) (int, bool) {
+	var n int
+	var ok bool
+	for _, ch := range s {
+		if ch < '0' || ch > '9' {
+			break
+		}
+		n = n*10 + int(ch-'0')
+		ok = true
+	}
+	return n, ok
+}
+
+func (v gitVersion) less(other gitVersion) bool {
+	if v.Major != other.Major {
+		return v.Major < other.Major
+	}
+	if v.Minor != other.Minor {
+		return v.Minor < other.Minor
+	}
+	return v.Patch < other.Patch
+}
+
+func (v gitVersion) String() string {
+	return fmt.Sprintf("%d.%d.%d", v.Major, v.Minor, v.Patch)
 }
 
 func (g Git) RebaseInProgress() (bool, error) {
