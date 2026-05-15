@@ -25,7 +25,7 @@ in
     outputs = {
       graphene = pkgs.buildGoModule rec {
         pname = "graphene";
-        version = "0.3.0";
+        version = "0.4.0";
         src = lib.cleanSource ./.;
         vendorHash = null;
         ldflags = [
