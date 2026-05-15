@@ -118,6 +118,32 @@ func TestCommitExactBranch(t *testing.T) {
 	}
 }
 
+func TestCommitDoesNotLeaveTemporaryBranch(t *testing.T) {
+	repo := newTestRepo(t)
+
+	writeFile(t, repo.dir, "one.txt", "one\n")
+	runGit(t, repo.dir, "add", ".")
+	expectGrapheneOK(t, repo, "commit", "-m", "One")
+
+	if got := currentBranch(t, repo.dir); got != "stack/one" {
+		t.Fatalf("branch = %q", got)
+	}
+	assertNoGrapheneTmpBranches(t, repo.dir)
+}
+
+func TestCommitDeletesTemporaryBranchAfterFailedCommit(t *testing.T) {
+	repo := newTestRepo(t)
+
+	code, _, _ := repo.runGraphene(t, "commit", "-m", "No changes")
+	if code == 0 {
+		t.Fatal("commit unexpectedly succeeded")
+	}
+	if got := currentBranch(t, repo.dir); got != "main" {
+		t.Fatalf("branch = %q", got)
+	}
+	assertNoGrapheneTmpBranches(t, repo.dir)
+}
+
 func TestAmendRestacksSuffix(t *testing.T) {
 	repo := newTestRepo(t)
 	createStackBranch(t, repo, "one.txt", "one\n", "One")
@@ -753,6 +779,19 @@ func currentBranch(t *testing.T, dir string) string {
 		t.Fatal(err)
 	}
 	return branch
+}
+
+func assertNoGrapheneTmpBranches(t *testing.T, dir string) {
+	t.Helper()
+	branches, err := (Git{Dir: dir}).LocalBranches()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, branch := range branches {
+		if strings.HasPrefix(branch, "graphene/tmp-") {
+			t.Fatalf("temporary branch was not cleaned up: %s", branch)
+		}
+	}
 }
 
 func runGit(t *testing.T, dir string, args ...string) string {
