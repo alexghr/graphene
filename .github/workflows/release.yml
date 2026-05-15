@@ -52,8 +52,10 @@ jobs:
       - name: Update release metadata
         env:
           VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
         run: |
           sed -i -E 's/(version = ")[^"]+(";)/\1'"$VERSION"'\2/' devenv.nix
+          sed -i -E 's#(VERSION=)[^[:space:]]+#\1'"$TAG"'#' README.md
           ./devenv shell --quiet --no-reload -- go mod tidy
 
       - name: Commit version bump
@@ -64,7 +66,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git add devenv.nix go.mod
+          git add README.md devenv.nix go.mod
           if [ -f go.sum ]; then
             git add go.sum
           fi
