@@ -7,12 +7,9 @@ import (
 	"time"
 )
 
-func (a *App) commit(args []string) error {
-	requestedBranch, commitArgs, err := parseCommitArgs(args)
+func (a *App) newBranch(args []string) error {
+	opts, err := parseNewArgs(args)
 	if err != nil {
-		return err
-	}
-	if err := rejectCommitModeArgs(commitArgs); err != nil {
 		return err
 	}
 
@@ -21,7 +18,23 @@ func (a *App) commit(args []string) error {
 		return err
 	}
 
-	branch := requestedBranch
+	state, err := a.git.ReadState()
+	if err != nil {
+		return err
+	}
+	if state.Pending != nil {
+		return fmt.Errorf("pending rebase exists; use graphene continue or graphene abort")
+	}
+
+	recordBase := current
+	if opts.base != "" {
+		if err := a.validateNewBase(opts.base); err != nil {
+			return err
+		}
+		recordBase = opts.base
+	}
+
+	branch := opts.branch
 	temp := false
 	var cfg Config
 	if branch == "" {
@@ -40,7 +53,7 @@ func (a *App) commit(args []string) error {
 		return err
 	}
 
-	commitGitArgs := append([]string{"commit"}, commitArgs...)
+	commitGitArgs := append([]string{"commit"}, opts.commitArgs...)
 	if err := a.git.Run(commitGitArgs...); err != nil {
 		a.cleanupFailedCommit(current, branch)
 		return err
@@ -60,17 +73,18 @@ func (a *App) commit(args []string) error {
 		}
 	}
 
-	state, err := a.git.ReadState()
-	if err != nil {
-		return err
-	}
-	if err := state.AddCommit(current, branch); err != nil {
+	if err := state.AddCommit(recordBase, branch); err != nil {
 		return err
 	}
 	return a.git.WriteState(state)
 }
 
 func (a *App) amend(args []string) error {
+	commitArgs, err := parseAmendArgs(args)
+	if err != nil {
+		return err
+	}
+
 	current, err := a.git.CurrentBranch()
 	if err != nil {
 		return err
@@ -79,6 +93,9 @@ func (a *App) amend(args []string) error {
 	state, err := a.git.ReadState()
 	if err != nil {
 		return err
+	}
+	if state.Pending != nil {
+		return fmt.Errorf("pending rebase exists; use graphene continue or graphene abort")
 	}
 
 	oldRefs := a.stateRefs(state)
@@ -102,7 +119,7 @@ func (a *App) amend(args []string) error {
 		}
 	}
 
-	commitGitArgs := append([]string{"commit", "--amend"}, args...)
+	commitGitArgs := append([]string{"commit", "--amend"}, commitArgs...)
 	if err := a.git.Run(commitGitArgs...); err != nil {
 		return err
 	}
@@ -122,10 +139,11 @@ func (a *App) amend(args []string) error {
 	return a.runPendingRebases(state)
 }
 
-func (a *App) rebase(args []string) error {
-	if len(args) != 0 {
-		return fmt.Errorf("graphene rebase does not accept arguments")
+func (a *App) restack(args []string) error {
+	if len(args) != 1 || args[0] == "" {
+		return fmt.Errorf("usage: graphene restack <base>")
 	}
+	base := args[0]
 
 	current, err := a.git.CurrentBranch()
 	if err != nil {
@@ -138,9 +156,14 @@ func (a *App) rebase(args []string) error {
 	if state.Pending != nil {
 		return fmt.Errorf("pending rebase exists; use graphene continue or graphene abort")
 	}
-	base, ok := RebaseBaseBranch(state, current)
+
+	oldBase, ok := BaseBranch(state, current)
 	if !ok {
 		return fmt.Errorf("branch %q is not in a graphene stack", current)
+	}
+	nextState, _, ok := ReparentBranch(state, current, base)
+	if !ok {
+		return fmt.Errorf("cannot restack %q onto %q", current, base)
 	}
 
 	dirty, err := a.git.HasTrackedChanges()
@@ -148,44 +171,48 @@ func (a *App) rebase(args []string) error {
 		return err
 	}
 	if dirty {
-		return fmt.Errorf("tracked changes would prevent rebase; stash or commit them before graphene rebase")
+		return fmt.Errorf("tracked changes would prevent restack; stash or commit them before graphene restack")
 	}
 
 	oldRefs := a.stateRefs(state)
-	baseRef := base
-	if current == base {
-		if err := a.git.Run("switch", base); err != nil {
-			return err
-		}
-		if err := a.git.Run("pull", "--ff-only"); err != nil {
-			return err
-		}
-	} else {
-		baseRef, err = a.fetchBase(base)
+	oldHead, err := a.git.Head()
+	if err != nil {
+		return err
+	}
+	oldRefs[current] = oldHead
+	oldBaseRef := oldRefs[oldBase]
+	if oldBaseRef == "" {
+		oldBaseRef, err = a.git.Output("rev-parse", "--verify", oldBase+"^{commit}")
 		if err != nil {
 			return err
 		}
 	}
-
-	ops, err := RestackOpsUpToBranch(state, base, current, oldRefs)
+	baseRef, err := a.git.Output("rev-parse", "--verify", base+"^{commit}")
 	if err != nil {
 		return err
 	}
-	if len(ops) > 0 {
-		ops[0].Onto = baseRef
-	}
-	if len(ops) == 0 {
-		if current != base {
-			return a.git.Run("switch", current)
-		}
-		return nil
+
+	if oldBaseRef == baseRef {
+		return a.git.WriteState(nextState)
 	}
 
+	ops := []RebaseOp{{
+		Onto:     base,
+		Upstream: oldBaseRef,
+		Top:      current,
+	}}
+	restackOps, err := RestackOpsAfterRewrite(nextState, current, oldRefs)
+	if err != nil {
+		return err
+	}
+	ops = append(ops, restackOps...)
+
 	state.Pending = &Pending{
-		Operation:    "rebase",
-		Branch:       base,
+		Operation:    "restack",
+		Branch:       current,
 		ReturnBranch: current,
 		Queue:        ops,
+		NextStacks:   nextState.Stacks,
 	}
 	if err := a.git.WriteState(state); err != nil {
 		return err
@@ -203,6 +230,13 @@ func (a *App) continueRebase(args []string) error {
 		return err
 	}
 	if state.Pending == nil || len(state.Pending.Queue) == 0 {
+		inProgress, err := a.git.RebaseInProgress()
+		if err != nil {
+			return err
+		}
+		if !inProgress {
+			return fmt.Errorf("no rebase in progress")
+		}
 		if err := a.git.Run("rebase", "--continue"); err != nil {
 			return err
 		}
@@ -252,45 +286,15 @@ func (a *App) abortRebase(args []string) error {
 			return err
 		}
 	} else if state.Pending == nil {
-		if err := a.git.Run("rebase", "--abort"); err != nil {
-			return err
-		}
+		return fmt.Errorf("no rebase in progress")
 	}
 	state.Pending = nil
 	return a.git.WriteState(state)
 }
 
-func (a *App) rm(args []string) error {
-	force, err := parseRmArgs(args)
-	if err != nil {
-		return err
-	}
-
-	current, err := a.git.CurrentBranch()
-	if err != nil {
-		return err
-	}
-	state, err := a.git.ReadState()
-	if err != nil {
-		return err
-	}
-	if state.Pending != nil && !force {
-		return fmt.Errorf("pending rebase exists; use graphene continue or graphene abort")
-	}
-
-	state, ok := RemoveStackThroughCurrent(state, current)
-	if !ok {
-		return fmt.Errorf("branch %q is not in a graphene stack", current)
-	}
-	if force {
-		state.Pending = nil
-	}
-	return a.git.WriteState(state)
-}
-
-func (a *App) update(args []string) error {
+func (a *App) sync(args []string) error {
 	if len(args) != 0 {
-		return fmt.Errorf("graphene update does not accept arguments")
+		return fmt.Errorf("graphene sync does not accept arguments")
 	}
 
 	current, err := a.git.CurrentBranch()
@@ -319,7 +323,7 @@ func (a *App) update(args []string) error {
 		return err
 	}
 	if dirty {
-		return fmt.Errorf("tracked changes would prevent update; stash or commit them before graphene update")
+		return fmt.Errorf("tracked changes would prevent sync; stash or commit them before graphene sync")
 	}
 
 	oldRefs := a.stateRefs(state)
@@ -333,56 +337,98 @@ func (a *App) update(args []string) error {
 		return err
 	}
 
-	if len(branches) > 0 {
-		if err := a.ensureNoDependentStacks(state, loc.StackIndex, branches); err != nil {
-			return err
-		}
-	}
 	firstRemaining := len(branches)
-	if firstRemaining == len(stack.Branches) {
-		if err := a.switchToUpdatedBase(stack.Base, baseRef); err != nil {
-			return err
-		}
-		if err := a.deleteBranches(branches); err != nil {
-			return err
-		}
-		state = RemoveBranches(state, branches)
-		return a.git.WriteState(state)
+	nextState := RemoveBranchesWithBase(state, branches, stack.Base)
+	deleted := map[string]bool{}
+	for _, branch := range branches {
+		deleted[branch] = true
 	}
 
-	predecessor := stack.Base
-	if firstRemaining > 0 {
-		predecessor = stack.Branches[firstRemaining-1]
-	}
-	upstream := oldRefs[predecessor]
-	if upstream == "" {
-		return fmt.Errorf("missing old ref for %q", predecessor)
-	}
-
-	top := current
 	returnBranch := current
 	if firstRemaining > loc.BranchIndex {
-		top = stack.Branches[len(stack.Branches)-1]
-		returnBranch = stack.Branches[firstRemaining]
+		returnBranch = ""
+		if firstRemaining < len(stack.Branches) {
+			returnBranch = stack.Branches[firstRemaining]
+		}
 	}
 
-	ops := []RebaseOp{{
-		Onto:     baseRef,
-		Upstream: upstream,
-		Top:      top,
-	}}
-	restackOps, err := RestackOpsAfterRewrite(state, top, oldRefs)
+	var ops []RebaseOp
+	var rewritten []string
+	skipTops := map[string]bool{}
+	if firstRemaining < len(stack.Branches) {
+		predecessor := stack.Base
+		if firstRemaining > 0 {
+			predecessor = stack.Branches[firstRemaining-1]
+		}
+		upstream := oldRefs[predecessor]
+		if upstream == "" {
+			return fmt.Errorf("missing old ref for %q", predecessor)
+		}
+
+		topIndex := loc.BranchIndex
+		if firstRemaining > loc.BranchIndex {
+			topIndex = len(stack.Branches) - 1
+		}
+		top := stack.Branches[topIndex]
+		ops = append(ops, RebaseOp{
+			Onto:     baseRef,
+			Upstream: upstream,
+			Top:      top,
+		})
+		rewritten = append(rewritten, stack.Branches[firstRemaining:topIndex+1]...)
+		if topIndex == len(stack.Branches)-1 {
+			skipTops[top] = true
+		}
+	}
+
+	for i, dependent := range state.Stacks {
+		if i == loc.StackIndex || !deleted[dependent.Base] || len(dependent.Branches) == 0 {
+			continue
+		}
+		upstream := oldRefs[dependent.Base]
+		if upstream == "" {
+			return fmt.Errorf("missing old ref for %q", dependent.Base)
+		}
+		top := dependent.Branches[len(dependent.Branches)-1]
+		ops = append(ops, RebaseOp{
+			Onto:     baseRef,
+			Upstream: upstream,
+			Top:      top,
+		})
+		rewritten = append(rewritten, dependent.Branches...)
+		skipTops[top] = true
+		if returnBranch == "" {
+			returnBranch = dependent.Branches[0]
+		}
+	}
+
+	restackOps, err := RestackOpsAfterRewrites(nextState, rewritten, oldRefs, skipTops)
 	if err != nil {
 		return err
 	}
 	ops = append(ops, restackOps...)
 
+	if len(ops) == 0 {
+		if returnBranch != "" {
+			if err := a.git.Run("switch", returnBranch); err != nil {
+				return err
+			}
+		} else if err := a.switchToBaseOrDetach(stack.Base, baseRef); err != nil {
+			return err
+		}
+		if err := a.deleteBranches(branches); err != nil {
+			return err
+		}
+		return a.git.WriteState(nextState)
+	}
+
 	state.Pending = &Pending{
-		Operation:    "update",
+		Operation:    "sync",
 		Branch:       returnBranch,
 		ReturnBranch: returnBranch,
 		Queue:        ops,
 		Branches:     branches,
+		NextStacks:   nextState.Stacks,
 	}
 	if err := a.git.WriteState(state); err != nil {
 		return err
@@ -390,16 +436,16 @@ func (a *App) update(args []string) error {
 	return a.runPendingRebases(state)
 }
 
-func (a *App) push(args []string) error {
-	return a.pushBranches(args, false)
+func (a *App) send(args []string) error {
+	return a.sendBranches(args, false)
 }
 
-func (a *App) pushf(args []string) error {
-	return a.pushBranches(args, true)
+func (a *App) sendf(args []string) error {
+	return a.sendBranches(args, true)
 }
 
-func (a *App) pushBranches(args []string, forceWithLease bool) error {
-	remote, _, flags, err := parsePushArgs(args)
+func (a *App) sendBranches(args []string, forceWithLease bool) error {
+	opts, err := parseSendArgs(args)
 	if err != nil {
 		return err
 	}
@@ -412,13 +458,17 @@ func (a *App) pushBranches(args []string, forceWithLease bool) error {
 	if err != nil {
 		return err
 	}
+	if state.Pending != nil {
+		return fmt.Errorf("pending rebase exists; use graphene continue or graphene abort")
+	}
 	branches := BranchesThroughCurrent(state, current)
-	if forceWithLease {
-		branches = BranchesFromCurrent(state, current)
+	if opts.wholeStack {
+		branches = BranchesInConnectedStack(state, current)
 	}
 	if len(branches) == 0 {
-		return fmt.Errorf("no branch to push")
+		return fmt.Errorf("no branch to send")
 	}
+	remote := opts.remote
 	if remote == "" {
 		remote, err = a.pushRemote(current, branches)
 		if err != nil {
@@ -430,13 +480,15 @@ func (a *App) pushBranches(args []string, forceWithLease bool) error {
 	if forceWithLease {
 		pushArgs = append(pushArgs, "--force-with-lease")
 	}
-	pushArgs = append(pushArgs, flags...)
+	if opts.dryRun {
+		pushArgs = append(pushArgs, "--dry-run")
+	}
 	pushArgs = append(pushArgs, remote)
 	pushArgs = append(pushArgs, branches...)
 	if err := a.git.Run(pushArgs...); err != nil {
 		return err
 	}
-	if pushDryRun(flags) {
+	if opts.dryRun {
 		return nil
 	}
 
@@ -449,33 +501,6 @@ func (a *App) pushBranches(args []string, forceWithLease bool) error {
 			if err := a.git.SetUpstream(branch, remote); err != nil {
 				return err
 			}
-		}
-	}
-	return a.printPullRequestURLs(remote, state, branches)
-}
-
-func (a *App) pr(args []string) error {
-	remote, err := parsePRArgs(args)
-	if err != nil {
-		return err
-	}
-
-	current, err := a.git.CurrentBranch()
-	if err != nil {
-		return err
-	}
-	state, err := a.git.ReadState()
-	if err != nil {
-		return err
-	}
-	branches := BranchesThroughCurrent(state, current)
-	if len(branches) == 0 {
-		return fmt.Errorf("no branch for pull request")
-	}
-	if remote == "" {
-		remote, err = a.pushRemote(current, branches)
-		if err != nil {
-			return err
 		}
 	}
 	return a.printPullRequestURLs(remote, state, branches)
@@ -512,6 +537,9 @@ func (a *App) ensureBranchPrefixAvailable(prefix string) error {
 	prefix = strings.Trim(prefix, "/")
 	if prefix == "" {
 		return nil
+	}
+	if _, err := a.git.Output("check-ref-format", "--branch", prefix+"/graphene-check"); err != nil {
+		return fmt.Errorf("invalid branch prefix %q", prefix)
 	}
 	branches, err := a.git.LocalBranches()
 	if err != nil {
@@ -565,9 +593,11 @@ func (a *App) runPendingRebases(state State) error {
 func (a *App) finishPendingRebases(state State) error {
 	returnBranch := ""
 	var appliedBranches []string
+	var nextStacks []Stack
 	if state.Pending != nil {
 		returnBranch = state.Pending.ReturnBranch
-		if state.Pending.Operation == "update" {
+		nextStacks = state.Pending.NextStacks
+		if state.Pending.Operation == "sync" {
 			appliedBranches = append([]string(nil), state.Pending.Branches...)
 		}
 	}
@@ -580,7 +610,12 @@ func (a *App) finishPendingRebases(state State) error {
 		if err := a.deleteBranches(appliedBranches); err != nil {
 			return err
 		}
-		state = RemoveBranches(state, appliedBranches)
+		if nextStacks == nil {
+			state = RemoveBranches(state, appliedBranches)
+		}
+	}
+	if nextStacks != nil {
+		state.Stacks = nextStacks
 	}
 	state.Pending = nil
 	return a.git.WriteState(state)
@@ -632,31 +667,11 @@ func (a *App) fetchBase(base string) (string, error) {
 	return base, nil
 }
 
-func (a *App) switchToUpdatedBase(base, baseRef string) error {
-	checkedOut, err := a.git.BranchCheckedOut(base)
-	if err != nil {
-		return err
+func (a *App) switchToBaseOrDetach(base, baseRef string) error {
+	if err := a.git.OutputErr("switch", base); err == nil {
+		return nil
 	}
-	if checkedOut {
-		return a.git.Run("switch", "--detach", baseRef)
-	}
-	return a.git.Run("switch", base)
-}
-
-func (a *App) ensureNoDependentStacks(state State, stackIndex int, branches []string) error {
-	deleted := map[string]bool{}
-	for _, branch := range branches {
-		deleted[branch] = true
-	}
-	for i, stack := range state.Stacks {
-		if i == stackIndex {
-			continue
-		}
-		if deleted[stack.Base] {
-			return fmt.Errorf("cannot update branch %q because it has a dependent stack", stack.Base)
-		}
-	}
-	return nil
+	return a.git.Run("switch", "--detach", baseRef)
 }
 
 func (a *App) deleteBranches(branches []string) error {
@@ -745,100 +760,171 @@ func (a *App) stateRefs(state State) map[string]string {
 	return refs
 }
 
-func parseCommitArgs(args []string) (string, []string, error) {
-	var branch string
-	var commitArgs []string
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		if arg == "--" {
-			commitArgs = append(commitArgs, args[i:]...)
-			break
-		}
-		if arg != "-b" {
-			commitArgs = append(commitArgs, arg)
-			continue
-		}
-		if branch != "" {
-			return "", nil, fmt.Errorf("commit branch specified more than once")
-		}
-		if i+1 >= len(args) || args[i+1] == "" {
-			return "", nil, fmt.Errorf("missing branch after -b")
-		}
-		branch = args[i+1]
-		i++
+func (a *App) validateNewBase(base string) error {
+	exists, err := a.git.BranchExists(base)
+	if err != nil {
+		return err
 	}
-	return branch, commitArgs, nil
-}
+	if !exists {
+		return fmt.Errorf("base branch %q does not exist", base)
+	}
 
-func rejectCommitModeArgs(args []string) error {
-	for _, arg := range args {
-		if arg == "--" {
-			return nil
-		}
-		if arg == "--amend" {
-			return fmt.Errorf("graphene commit cannot use --amend; use graphene amend")
-		}
+	head, err := a.git.Head()
+	if err != nil {
+		return err
+	}
+	baseRef, err := a.git.Output("rev-parse", "--verify", "refs/heads/"+base+"^{commit}")
+	if err != nil {
+		return err
+	}
+	if baseRef != head {
+		return fmt.Errorf("base branch %q does not point to current HEAD", base)
 	}
 	return nil
 }
 
-func parsePushArgs(args []string) (string, bool, []string, error) {
-	var remote string
-	var remoteProvided bool
-	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
-		remote = args[0]
-		remoteProvided = true
-		args = args[1:]
-	}
-
-	for _, arg := range args {
-		if !strings.HasPrefix(arg, "-") {
-			return "", false, nil, fmt.Errorf("graphene push accepts the remote only as the first argument")
-		}
-		if destructivePushFlag(arg) {
-			return "", false, nil, fmt.Errorf("graphene push does not support %s", arg)
-		}
-	}
-	return remote, remoteProvided, append([]string(nil), args...), nil
+type commitOptions struct {
+	branch     string
+	base       string
+	commitArgs []string
 }
 
-func parseRmArgs(args []string) (bool, error) {
-	var force bool
-	for _, arg := range args {
-		switch arg {
-		case "-f", "--force":
-			force = true
+func parseNewArgs(args []string) (commitOptions, error) {
+	return parseCommitOptions(args, true)
+}
+
+func parseAmendArgs(args []string) ([]string, error) {
+	opts, err := parseCommitOptions(args, false)
+	return opts.commitArgs, err
+}
+
+func parseCommitOptions(args []string, allowBranch bool) (commitOptions, error) {
+	var opts commitOptions
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+
+		switch {
+		case arg == "-b" || arg == "--branch":
+			if !allowBranch {
+				return opts, fmt.Errorf("graphene amend does not support %s", arg)
+			}
+			if opts.branch != "" {
+				return opts, fmt.Errorf("new branch specified more than once")
+			}
+			if i+1 >= len(args) || args[i+1] == "" || strings.HasPrefix(args[i+1], "-") {
+				return opts, fmt.Errorf("missing branch after %s", arg)
+			}
+			opts.branch = args[i+1]
+			i++
+		case strings.HasPrefix(arg, "--branch="):
+			if !allowBranch {
+				return opts, fmt.Errorf("graphene amend does not support --branch")
+			}
+			if opts.branch != "" {
+				return opts, fmt.Errorf("new branch specified more than once")
+			}
+			opts.branch = strings.TrimPrefix(arg, "--branch=")
+			if opts.branch == "" {
+				return opts, fmt.Errorf("missing branch after --branch")
+			}
+		case arg == "--base":
+			if !allowBranch {
+				return opts, fmt.Errorf("graphene amend does not support --base")
+			}
+			if opts.base != "" {
+				return opts, fmt.Errorf("base branch specified more than once")
+			}
+			if i+1 >= len(args) || args[i+1] == "" || strings.HasPrefix(args[i+1], "-") {
+				return opts, fmt.Errorf("missing base after --base")
+			}
+			opts.base = args[i+1]
+			i++
+		case strings.HasPrefix(arg, "--base="):
+			if !allowBranch {
+				return opts, fmt.Errorf("graphene amend does not support --base")
+			}
+			if opts.base != "" {
+				return opts, fmt.Errorf("base branch specified more than once")
+			}
+			opts.base = strings.TrimPrefix(arg, "--base=")
+			if opts.base == "" {
+				return opts, fmt.Errorf("missing base after --base")
+			}
+		case arg == "-m" || arg == "--message":
+			if i+1 >= len(args) {
+				return opts, fmt.Errorf("missing message after %s", arg)
+			}
+			opts.commitArgs = append(opts.commitArgs, "-m", args[i+1])
+			i++
+		case strings.HasPrefix(arg, "--message="):
+			opts.commitArgs = append(opts.commitArgs, arg)
+		case arg == "--no-verify":
+			opts.commitArgs = append(opts.commitArgs, arg)
+		case arg == "--gpg-sign" || strings.HasPrefix(arg, "--gpg-sign=") || arg == "--no-gpg-sign":
+			opts.commitArgs = append(opts.commitArgs, arg)
+		case arg == "--amend":
+			if allowBranch {
+				return opts, fmt.Errorf("graphene new cannot use --amend; use graphene amend")
+			}
+			return opts, unsupportedCommitArg(arg, allowBranch)
 		default:
-			return false, fmt.Errorf("graphene rm does not support %s", arg)
+			return opts, unsupportedCommitArg(arg, allowBranch)
 		}
 	}
-	return force, nil
+	return opts, nil
 }
 
-func parsePRArgs(args []string) (string, error) {
-	if len(args) == 0 {
-		return "", nil
+func unsupportedCommitArg(arg string, allowBranch bool) error {
+	supported := "-m/--message, --no-verify, --gpg-sign, and --no-gpg-sign"
+	if allowBranch {
+		supported = "-b/--branch, --base, " + supported
 	}
-	if len(args) > 1 {
-		return "", fmt.Errorf("graphene pr accepts at most one remote")
-	}
-	if strings.HasPrefix(args[0], "-") {
-		return "", fmt.Errorf("graphene pr does not accept flags")
-	}
-	return args[0], nil
+	return fmt.Errorf("unsupported argument %q; supported commit options are %s", arg, supported)
 }
 
-func pushDryRun(flags []string) bool {
-	for _, flag := range flags {
-		if flag == "-n" || flag == "--dry-run" || strings.HasPrefix(flag, "--dry-run=") {
-			return true
+type sendOptions struct {
+	remote     string
+	wholeStack bool
+	dryRun     bool
+}
+
+func parseSendArgs(args []string) (sendOptions, error) {
+	var opts sendOptions
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+
+		switch {
+		case arg == "--stack":
+			opts.wholeStack = true
+		case arg == "--dry-run":
+			opts.dryRun = true
+		case arg == "--remote":
+			if i+1 >= len(args) || args[i+1] == "" || strings.HasPrefix(args[i+1], "-") {
+				return opts, fmt.Errorf("missing remote after --remote")
+			}
+			if opts.remote != "" {
+				return opts, fmt.Errorf("graphene send accepts at most one remote")
+			}
+			opts.remote = args[i+1]
+			i++
+		case strings.HasPrefix(arg, "--remote="):
+			if opts.remote != "" {
+				return opts, fmt.Errorf("graphene send accepts at most one remote")
+			}
+			opts.remote = strings.TrimPrefix(arg, "--remote=")
+			if opts.remote == "" {
+				return opts, fmt.Errorf("missing remote after --remote")
+			}
+		case strings.HasPrefix(arg, "-"):
+			return opts, fmt.Errorf("unsupported argument %q; supported send options are --remote, --stack, and --dry-run", arg)
+		default:
+			if opts.remote != "" {
+				return opts, fmt.Errorf("graphene send accepts at most one remote")
+			}
+			opts.remote = arg
 		}
 	}
-	return false
-}
-
-func destructivePushFlag(flag string) bool {
-	return flag == "-d" || flag == "--delete" || flag == "--all" || flag == "--mirror"
+	return opts, nil
 }
 
 func (a *App) pushRemote(current string, branches []string) (string, error) {
@@ -880,13 +966,15 @@ func (a *App) printPullRequestURLs(remote string, state State, branches []string
 	if template == "" {
 		remoteURL, err = a.git.RemoteURL(remote)
 		if err != nil {
-			return nil
+			_, printErr := fmt.Fprintf(a.stdout, "No pull request URLs: remote %q has no push URL.\n", remote)
+			return printErr
 		}
 	}
 
 	urls := PullRequestURLs(template, remoteURL, state, branches)
 	if len(urls) == 0 {
-		return nil
+		_, err := fmt.Fprintf(a.stdout, "No pull request URLs for remote %q; set graphene.prUrlTemplate for non-GitHub remotes.\n", remote)
+		return err
 	}
 
 	if _, err := fmt.Fprintln(a.stdout, "Pull request URLs:"); err != nil {

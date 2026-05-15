@@ -123,56 +123,48 @@ func TestBranchesThroughCurrent(t *testing.T) {
 	}
 }
 
-func TestBranchesFromCurrent(t *testing.T) {
+func TestBranchesInConnectedStack(t *testing.T) {
 	state := State{Stacks: []Stack{
 		{Base: "main", Branches: []string{"a", "b", "c"}},
-		{Base: "b", Branches: []string{"d", "e"}},
-		{Base: "e", Branches: []string{"f"}},
+		{Base: "main", Branches: []string{"d", "e"}},
+		{Base: "main", Branches: []string{"f"}},
+		{Base: "other", Branches: []string{"x"}},
 	}}
 
-	tests := []struct {
-		current string
-		want    []string
-	}{
-		{current: "b", want: []string{"b", "c", "d", "e", "f"}},
-		{current: "e", want: []string{"e", "f"}},
-		{current: "loose", want: []string{"loose"}},
-	}
-
-	for _, tt := range tests {
-		if got := BranchesFromCurrent(state, tt.current); !reflect.DeepEqual(got, tt.want) {
-			t.Fatalf("BranchesFromCurrent(%q) = %#v, want %#v", tt.current, got, tt.want)
+	want := []string{"a", "b", "c", "d", "e", "f"}
+	for _, current := range []string{"a", "c", "e", "f", "main"} {
+		if got := BranchesInConnectedStack(state, current); !reflect.DeepEqual(got, want) {
+			t.Fatalf("BranchesInConnectedStack(%q) = %#v, want %#v", current, got, want)
 		}
+	}
+	if got := BranchesInConnectedStack(state, "loose"); !reflect.DeepEqual(got, []string{"loose"}) {
+		t.Fatalf("BranchesInConnectedStack(loose) = %#v", got)
 	}
 }
 
-func TestRemoveStackThroughCurrent(t *testing.T) {
+func TestReparentBranch(t *testing.T) {
 	state := State{Stacks: []Stack{
 		{Base: "main", Branches: []string{"a", "b", "c"}},
 		{Base: "a", Branches: []string{"d"}},
 	}}
 
-	got, ok := RemoveStackThroughCurrent(state, "b")
+	got, moved, ok := ReparentBranch(state, "b", "d")
 	if !ok {
-		t.Fatal("RemoveStackThroughCurrent did not find b")
+		t.Fatal("ReparentBranch did not move b")
 	}
 	want := State{Stacks: []Stack{
-		{Base: "b", Branches: []string{"c"}},
+		{Base: "main", Branches: []string{"a"}},
 		{Base: "a", Branches: []string{"d"}},
+		{Base: "d", Branches: []string{"b", "c"}},
 	}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("state = %#v, want %#v", got, want)
 	}
-
-	got, ok = RemoveStackThroughCurrent(got, "c")
-	if !ok {
-		t.Fatal("RemoveStackThroughCurrent did not find c")
+	if !reflect.DeepEqual(moved, []string{"b", "c"}) {
+		t.Fatalf("moved = %#v", moved)
 	}
-	want = State{Stacks: []Stack{
-		{Base: "a", Branches: []string{"d"}},
-	}}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("tip state = %#v, want %#v", got, want)
+	if _, _, ok := ReparentBranch(state, "b", "c"); ok {
+		t.Fatal("ReparentBranch allowed a branch to move onto its descendant")
 	}
 }
 
@@ -202,96 +194,56 @@ func TestBaseBranch(t *testing.T) {
 	}
 }
 
-func TestRebaseBaseBranch(t *testing.T) {
-	state := State{Stacks: []Stack{
-		{Base: "main", Branches: []string{"a", "b"}},
-		{Base: "b", Branches: []string{"c"}},
-	}}
-
-	tests := []struct {
-		current string
-		want    string
-		ok      bool
-	}{
-		{current: "a", want: "main", ok: true},
-		{current: "b", want: "main", ok: true},
-		{current: "c", want: "b", ok: true},
-		{current: "main", want: "main", ok: true},
-		{current: "loose"},
-	}
-
-	for _, tt := range tests {
-		got, ok := RebaseBaseBranch(state, tt.current)
-		if got != tt.want || ok != tt.ok {
-			t.Fatalf("RebaseBaseBranch(%q) = %q %v, want %q %v", tt.current, got, ok, tt.want, tt.ok)
-		}
-	}
-}
-
 func TestParseArgs(t *testing.T) {
-	branch, commitArgs, err := parseCommitArgs([]string{"-b", "feature/exact", "-m", "hi"})
+	newOpts, err := parseNewArgs([]string{"--branch=feature/exact", "--base=stack/parent", "--message=hi", "--no-verify", "--gpg-sign=key", "--no-gpg-sign"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if branch != "feature/exact" || !reflect.DeepEqual(commitArgs, []string{"-m", "hi"}) {
-		t.Fatalf("parseCommitArgs = %q %#v", branch, commitArgs)
+	wantCommitArgs := []string{"--message=hi", "--no-verify", "--gpg-sign=key", "--no-gpg-sign"}
+	if newOpts.branch != "feature/exact" || newOpts.base != "stack/parent" || !reflect.DeepEqual(newOpts.commitArgs, wantCommitArgs) {
+		t.Fatalf("parseNewArgs = %#v", newOpts)
 	}
 
-	remote, provided, flags, err := parsePushArgs([]string{"origin", "--force-with-lease"})
+	amendArgs, err := parseAmendArgs([]string{"-m", "hi", "--gpg-sign"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if remote != "origin" || !provided || !reflect.DeepEqual(flags, []string{"--force-with-lease"}) {
-		t.Fatalf("parsePushArgs remote = %q %v %#v", remote, provided, flags)
+	if !reflect.DeepEqual(amendArgs, []string{"-m", "hi", "--gpg-sign"}) {
+		t.Fatalf("parseAmendArgs = %#v", amendArgs)
 	}
-	remote, provided, flags, err = parsePushArgs([]string{"--dry-run"})
+
+	sendOpts, err := parseSendArgs([]string{"--stack", "--remote", "origin", "--dry-run"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if remote != "" || provided || !reflect.DeepEqual(flags, []string{"--dry-run"}) {
-		t.Fatalf("parsePushArgs flags = %q %v %#v", remote, provided, flags)
+	if sendOpts.remote != "origin" || !sendOpts.wholeStack || !sendOpts.dryRun {
+		t.Fatalf("parseSendArgs = %#v", sendOpts)
 	}
-	if !pushDryRun(flags) {
-		t.Fatal("pushDryRun did not detect --dry-run")
-	}
-	force, err := parseRmArgs([]string{"--force"})
+
+	sendOpts, err = parseSendArgs([]string{"origin"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !force {
-		t.Fatal("parseRmArgs did not detect --force")
+	if sendOpts.remote != "origin" || sendOpts.wholeStack || sendOpts.dryRun {
+		t.Fatalf("parseSendArgs positional remote = %#v", sendOpts)
 	}
-	force, err = parseRmArgs(nil)
-	if err != nil {
-		t.Fatal(err)
+	if _, err := parseSendArgs([]string{"origin", "upstream"}); err == nil {
+		t.Fatal("parseSendArgs accepted multiple remotes")
 	}
-	if force {
-		t.Fatal("parseRmArgs force = true for no args")
+	if _, err := parseSendArgs([]string{"--force-with-lease"}); err == nil {
+		t.Fatal("parseSendArgs accepted force flag")
 	}
-	if _, err := parseRmArgs([]string{"--bad"}); err == nil {
-		t.Fatal("parseRmArgs accepted --bad")
+	if _, err := parseNewArgs([]string{"--amend", "-m", "bad"}); err == nil {
+		t.Fatal("parseNewArgs accepted --amend")
 	}
-	remote, err = parsePRArgs([]string{"origin"})
-	if err != nil {
-		t.Fatal(err)
+	if _, err := parseNewArgs([]string{"--signoff", "-m", "bad"}); err == nil {
+		t.Fatal("parseNewArgs accepted unsupported commit flag")
 	}
-	if remote != "origin" {
-		t.Fatalf("parsePRArgs remote = %q", remote)
+	if _, err := parseAmendArgs([]string{"--branch", "feature/bad"}); err == nil {
+		t.Fatal("parseAmendArgs accepted branch flag")
 	}
-	if _, err := parsePRArgs([]string{"origin", "upstream"}); err == nil {
-		t.Fatal("parsePRArgs accepted multiple remotes")
-	}
-	if _, _, _, err := parsePushArgs([]string{"--dry-run", "origin"}); err == nil {
-		t.Fatal("parsePushArgs accepted trailing remote")
-	}
-	if _, _, _, err := parsePushArgs([]string{"--delete"}); err == nil {
-		t.Fatal("parsePushArgs accepted --delete")
-	}
-	if _, _, err := parseCommitArgs([]string{"--amend", "-m", "bad"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := rejectCommitModeArgs([]string{"--amend", "-m", "bad"}); err == nil {
-		t.Fatal("rejectCommitModeArgs accepted --amend")
+	if _, err := parseAmendArgs([]string{"--base", "stack/parent"}); err == nil {
+		t.Fatal("parseAmendArgs accepted base flag")
 	}
 }
 
@@ -346,35 +298,6 @@ func TestRestackOpsAfterRewrite(t *testing.T) {
 	}
 	if !reflect.DeepEqual(ops, want) {
 		t.Fatalf("ops = %#v, want %#v", ops, want)
-	}
-}
-
-func TestRestackOpsUpToBranch(t *testing.T) {
-	state := State{Stacks: []Stack{
-		{Base: "main", Branches: []string{"a", "b", "c"}},
-		{Base: "b", Branches: []string{"d"}},
-	}}
-	oldRefs := map[string]string{
-		"main": "old-main",
-		"b":    "old-b",
-	}
-
-	ops, err := RestackOpsUpToBranch(state, "main", "b", oldRefs)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := []RebaseOp{{Onto: "main", Upstream: "old-main", Top: "b"}}
-	if !reflect.DeepEqual(ops, want) {
-		t.Fatalf("ops = %#v, want %#v", ops, want)
-	}
-
-	ops, err = RestackOpsUpToBranch(state, "b", "d", oldRefs)
-	if err != nil {
-		t.Fatal(err)
-	}
-	want = []RebaseOp{{Onto: "b", Upstream: "old-b", Top: "d"}}
-	if !reflect.DeepEqual(ops, want) {
-		t.Fatalf("nested ops = %#v, want %#v", ops, want)
 	}
 }
 

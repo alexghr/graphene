@@ -24,6 +24,7 @@ type Pending struct {
 	Queue        []RebaseOp `json:"queue,omitempty"`
 	Top          string     `json:"top,omitempty"`
 	Branches     []string   `json:"branches,omitempty"`
+	NextStacks   []Stack    `json:"nextStacks,omitempty"`
 }
 
 type RebaseOp struct {
@@ -168,37 +169,52 @@ func BranchesThroughCurrent(s State, current string) []string {
 	return branches
 }
 
-func BranchesFromCurrent(s State, current string) []string {
+func BranchesInConnectedStack(s State, current string) []string {
 	if current == "" {
 		return nil
 	}
 
-	var branches []string
-	seen := map[string]bool{}
-	add := func(branch string) {
-		if branch != "" && !seen[branch] {
-			branches = append(branches, branch)
-			seen[branch] = true
+	adjacent := map[string][]string{}
+	addEdge := func(a, b string) {
+		if a == "" || b == "" {
+			return
+		}
+		adjacent[a] = append(adjacent[a], b)
+		adjacent[b] = append(adjacent[b], a)
+	}
+	for _, stack := range s.Stacks {
+		parent := stack.Base
+		for _, branch := range stack.Branches {
+			addEdge(parent, branch)
+			parent = branch
+		}
+	}
+	if len(adjacent[current]) == 0 && !s.ContainsBranch(current) {
+		return []string{current}
+	}
+
+	seen := map[string]bool{current: true}
+	queue := []string{current}
+	for len(queue) > 0 {
+		name := queue[0]
+		queue = queue[1:]
+		for _, next := range adjacent[name] {
+			if seen[next] {
+				continue
+			}
+			seen[next] = true
+			queue = append(queue, next)
 		}
 	}
 
-	add(current)
-	for i := 0; i < len(branches); i++ {
-		branch := branches[i]
-		if loc, ok := s.BranchLocation(branch); ok {
-			stack := s.Stacks[loc.StackIndex]
-			for _, descendant := range stack.Branches[loc.BranchIndex+1:] {
-				add(descendant)
-			}
+	var branches []string
+	for _, name := range StateRefNames(s) {
+		if seen[name] && s.ContainsBranch(name) {
+			branches = append(branches, name)
 		}
-		for _, stack := range s.Stacks {
-			if stack.Base != branch {
-				continue
-			}
-			for _, descendant := range stack.Branches {
-				add(descendant)
-			}
-		}
+	}
+	if len(branches) == 0 && current != "" {
+		return []string{current}
 	}
 	return branches
 }
@@ -234,21 +250,60 @@ func RemoveBranches(s State, branches []string) State {
 	return s
 }
 
-func RemoveStackThroughCurrent(s State, current string) (State, bool) {
+func RemoveBranchesWithBase(s State, branches []string, replacementBase string) State {
+	deleted := map[string]bool{}
+	for _, branch := range branches {
+		if branch != "" {
+			deleted[branch] = true
+		}
+	}
+	if len(deleted) == 0 {
+		return s
+	}
+
+	var stacks []Stack
+	for _, stack := range s.Stacks {
+		base := stack.Base
+		if deleted[base] {
+			base = replacementBase
+		}
+
+		kept := make([]string, 0, len(stack.Branches))
+		for _, branch := range stack.Branches {
+			if !deleted[branch] {
+				kept = append(kept, branch)
+			}
+		}
+		if len(kept) > 0 {
+			stacks = append(stacks, Stack{Base: base, Branches: kept})
+		}
+	}
+	s.Stacks = stacks
+	return s
+}
+
+func ReparentBranch(s State, current, base string) (State, []string, bool) {
 	loc, ok := s.BranchLocation(current)
 	if !ok {
-		return s, false
+		return s, nil, false
 	}
 
 	stack := s.Stacks[loc.StackIndex]
-	if loc.BranchIndex == len(stack.Branches)-1 {
-		s.Stacks = append(s.Stacks[:loc.StackIndex], s.Stacks[loc.StackIndex+1:]...)
-		return s, true
+	moved := append([]string(nil), stack.Branches[loc.BranchIndex:]...)
+	for _, branch := range moved {
+		if branch == base {
+			return s, nil, false
+		}
 	}
 
-	branches := append([]string(nil), stack.Branches[loc.BranchIndex+1:]...)
-	s.Stacks[loc.StackIndex] = Stack{Base: current, Branches: branches}
-	return s, true
+	if loc.BranchIndex == 0 {
+		s.Stacks = append(s.Stacks[:loc.StackIndex], s.Stacks[loc.StackIndex+1:]...)
+	} else {
+		kept := append([]string(nil), stack.Branches[:loc.BranchIndex]...)
+		s.Stacks[loc.StackIndex] = Stack{Base: stack.Base, Branches: kept}
+	}
+	s.Stacks = append(s.Stacks, Stack{Base: base, Branches: moved})
+	return s, moved, true
 }
 
 func BaseBranch(s State, branch string) (string, bool) {
@@ -271,47 +326,21 @@ func StackSuffix(s State, branch string) (Stack, int, bool) {
 	return s.Stacks[loc.StackIndex], loc.BranchIndex, true
 }
 
-func RebaseBaseBranch(s State, current string) (string, bool) {
-	if loc, ok := s.BranchLocation(current); ok {
-		return s.Stacks[loc.StackIndex].Base, true
-	}
-	for _, stack := range s.Stacks {
-		if stack.Base == current {
-			return current, true
-		}
-	}
-	return "", false
+func RestackOpsAfterRewrite(s State, branch string, oldRefs map[string]string) ([]RebaseOp, error) {
+	return RestackOpsAfterRewrites(s, []string{branch}, oldRefs, nil)
 }
 
-func RestackOpsUpToBranch(s State, base, current string, oldRefs map[string]string) ([]RebaseOp, error) {
-	if current == base {
+func RestackOpsAfterRewrites(s State, branches []string, oldRefs map[string]string, skipTops map[string]bool) ([]RebaseOp, error) {
+	rewritten := map[string]bool{}
+	for _, branch := range branches {
+		if branch != "" {
+			rewritten[branch] = true
+		}
+	}
+	if len(rewritten) == 0 {
 		return nil, nil
 	}
 
-	loc, ok := s.BranchLocation(current)
-	if !ok {
-		return nil, fmt.Errorf("branch %q is not in a graphene stack", current)
-	}
-
-	stack := s.Stacks[loc.StackIndex]
-	if stack.Base != base {
-		return nil, fmt.Errorf("branch %q is not stacked on %q", current, base)
-	}
-
-	upstream := oldRefs[base]
-	if upstream == "" {
-		return nil, fmt.Errorf("missing old ref for %q", base)
-	}
-
-	return []RebaseOp{{
-		Onto:     base,
-		Upstream: upstream,
-		Top:      current,
-	}}, nil
-}
-
-func RestackOpsAfterRewrite(s State, branch string, oldRefs map[string]string) ([]RebaseOp, error) {
-	rewritten := map[string]bool{branch: true}
 	scheduled := map[int]bool{}
 	var ops []RebaseOp
 
@@ -319,6 +348,10 @@ func RestackOpsAfterRewrite(s State, branch string, oldRefs map[string]string) (
 		changed := false
 		for stackIndex, stack := range s.Stacks {
 			if scheduled[stackIndex] || len(stack.Branches) == 0 {
+				continue
+			}
+			top := stack.Branches[len(stack.Branches)-1]
+			if skipTops[top] {
 				continue
 			}
 
@@ -335,7 +368,7 @@ func RestackOpsAfterRewrite(s State, branch string, oldRefs map[string]string) (
 			ops = append(ops, RebaseOp{
 				Onto:     predecessor,
 				Upstream: upstream,
-				Top:      stack.Branches[len(stack.Branches)-1],
+				Top:      top,
 			})
 			scheduled[stackIndex] = true
 			for _, name := range stack.Branches[start:] {

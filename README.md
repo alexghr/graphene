@@ -21,17 +21,41 @@ export PATH="$HOME/.local/bin:$PATH"
 alias gn=graphene
 ```
 
-## Commands
+## Workflow
 
-- `graphene commit [-b <branch>] [git commit args...]`: creates a new branch from the current branch, runs `git commit` with the remaining args, and records the branch in the stack. Without `-b`, the branch name comes from the commit subject.
-- `graphene amend [git commit args...]`: runs `git commit --amend`, then restacks dependent branches with `git rebase --update-refs`.
-- `graphene rebase`: fetches the stack base, then rebases the stack up to the current branch and returns to that branch.
-- `graphene continue`: continues the current Git rebase and then continues any queued Graphene restacks.
-- `graphene abort`: aborts the current Git rebase and clears Graphene's pending rebase state.
-- `graphene rm [-f|--force]`: removes Graphene tracking for the current stack up to the current branch. It does not delete Git branches.
-- `graphene update`: fetches the stack base, drops already-merged branches by diff, deletes those local branches, and rebases the remaining stack.
-- `graphene push [remote] [git push flags...]`: runs `git push` for the current branch and the branches it depends on, then prints PR links.
-- `graphene pushf [remote] [git push flags...]`: runs `git push --force-with-lease` for the current branch and tracked branches above it, then prints PR links.
-- `graphene pr [remote]`: prints pull request creation links for the current branch and the branches it depends on. It does not push.
-- `graphene graph`: prints the tracked stack graph.
-- `graphene version`: prints the Graphene version and the Git version.
+Create a stack by staging changes and committing each change with Graphene:
+
+```
+git add .
+gn new -m "Add account export"
+
+git add .
+gn new -m "Wire export into settings"
+```
+
+Inspect the stack:
+
+```
+gn graph
+```
+
+Push the current branch and the branches it depends on:
+
+```
+gn send
+```
+
+After amending a stacked branch, push the rewritten branch set with force-with-lease:
+
+```
+gn amend -m "Wire export into settings"
+gn sendf
+```
+
+Run `gn help` or `gn help <command>` for full command details.
+
+## Worktrees
+
+Stack state is stored in the repository's local Git config under `graphene.state`, so linked worktrees for the same repository share the same stack graph.
+
+When `gn sync` needs a newer base branch that is checked out in another worktree, Graphene fetches the upstream and rebases onto the fetched commit instead of switching to or updating the checked-out branch.
