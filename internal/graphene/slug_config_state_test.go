@@ -122,6 +122,32 @@ func TestPushBranches(t *testing.T) {
 	}
 }
 
+func TestBaseBranch(t *testing.T) {
+	state := State{Stacks: []Stack{
+		{Base: "main", Branches: []string{"a", "b", "c"}},
+		{Base: "b", Branches: []string{"d", "e"}},
+	}}
+
+	tests := []struct {
+		branch string
+		want   string
+		ok     bool
+	}{
+		{branch: "a", want: "main", ok: true},
+		{branch: "b", want: "a", ok: true},
+		{branch: "d", want: "b", ok: true},
+		{branch: "e", want: "d", ok: true},
+		{branch: "loose"},
+	}
+
+	for _, tt := range tests {
+		got, ok := BaseBranch(state, tt.branch)
+		if got != tt.want || ok != tt.ok {
+			t.Fatalf("BaseBranch(%q) = %q %v, want %q %v", tt.branch, got, ok, tt.want, tt.ok)
+		}
+	}
+}
+
 func TestRebaseBaseBranch(t *testing.T) {
 	state := State{Stacks: []Stack{
 		{Base: "main", Branches: []string{"a", "b"}},
@@ -244,5 +270,69 @@ func TestRenderGraphWithPending(t *testing.T) {
 		"  remaining: 2\n"
 	if got := RenderGraph(state, "a"); got != want {
 		t.Fatalf("RenderGraph = %q, want %q", got, want)
+	}
+}
+
+func TestPullRequestURLs(t *testing.T) {
+	state := State{Stacks: []Stack{
+		{Base: "main", Branches: []string{"ag/base-change", "ag/head-change"}},
+	}}
+
+	tests := []string{
+		"git@github.com:AztecProtocol/aztec-packages.git",
+		"ssh://git@github.com/AztecProtocol/aztec-packages.git",
+		"https://github.com/AztecProtocol/aztec-packages.git",
+	}
+
+	want := []PullRequestURL{
+		{
+			Branch: "ag/base-change",
+			Base:   "main",
+			URL:    "https://github.com/AztecProtocol/aztec-packages/compare/main...ag/base-change?expand=1",
+		},
+		{
+			Branch: "ag/head-change",
+			Base:   "ag/base-change",
+			URL:    "https://github.com/AztecProtocol/aztec-packages/compare/ag/base-change...ag/head-change?expand=1",
+		},
+	}
+
+	for _, remoteURL := range tests {
+		got := PullRequestURLs("", remoteURL, state, []string{"ag/base-change", "ag/head-change"})
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("PullRequestURLs(%q) = %#v, want %#v", remoteURL, got, want)
+		}
+	}
+
+	if got := PullRequestURLs("", "/tmp/repo.git", state, []string{"ag/base-change"}); got != nil {
+		t.Fatalf("PullRequestURLs(non-github) = %#v, want nil", got)
+	}
+}
+
+func TestPullRequestURLsFromTemplate(t *testing.T) {
+	state := State{Stacks: []Stack{
+		{Base: "main", Branches: []string{"ag/base-change", "ag/head-change"}},
+	}}
+
+	got := PullRequestURLs(
+		"https://example.com/pr/${baseBranch}/${targetBranch}",
+		"",
+		state,
+		[]string{"ag/base-change", "ag/head-change"},
+	)
+	want := []PullRequestURL{
+		{
+			Branch: "ag/base-change",
+			Base:   "main",
+			URL:    "https://example.com/pr/main/ag/base-change",
+		},
+		{
+			Branch: "ag/head-change",
+			Base:   "ag/base-change",
+			URL:    "https://example.com/pr/ag/base-change/ag/head-change",
+		},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("PullRequestURLs(template) = %#v, want %#v", got, want)
 	}
 }

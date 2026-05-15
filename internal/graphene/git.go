@@ -147,6 +147,21 @@ func (g Git) UpstreamRemote(branch string) (string, error) {
 	return "", err
 }
 
+func (g Git) RemoteURL(remote string) (string, error) {
+	return g.Output("remote", "get-url", "--push", remote)
+}
+
+func (g Git) PRURLTemplate() (string, error) {
+	template, err := g.Output("config", "--local", "--get", "graphene.prUrlTemplate")
+	if err == nil {
+		return template, nil
+	}
+	if isGitExit(err, 1) {
+		return "", nil
+	}
+	return "", err
+}
+
 func (g Git) HasUpstream(branch string) (bool, error) {
 	remote, err := g.Output("config", "--get", "branch."+branch+".remote")
 	if err != nil {

@@ -160,6 +160,18 @@ func PushBranches(s State, current string) []string {
 	return branches
 }
 
+func BaseBranch(s State, branch string) (string, bool) {
+	loc, ok := s.BranchLocation(branch)
+	if !ok {
+		return "", false
+	}
+	if loc.BranchIndex == 0 {
+		base := s.Stacks[loc.StackIndex].Base
+		return base, base != ""
+	}
+	return s.Stacks[loc.StackIndex].Branches[loc.BranchIndex-1], true
+}
+
 func StackSuffix(s State, branch string) (Stack, int, bool) {
 	loc, ok := s.BranchLocation(branch)
 	if !ok {

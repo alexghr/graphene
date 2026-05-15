@@ -292,7 +292,7 @@ func (a *App) push(args []string) error {
 			}
 		}
 	}
-	return nil
+	return a.printPullRequestURLs(remote, state, branches)
 }
 
 func (a *App) cleanupFailedCommit(original, branch string) {
@@ -480,4 +480,34 @@ func (a *App) pushRemote(current string, branches []string) (string, error) {
 		remote = "origin"
 	}
 	return remote, nil
+}
+
+func (a *App) printPullRequestURLs(remote string, state State, branches []string) error {
+	template, err := a.git.PRURLTemplate()
+	if err != nil {
+		return err
+	}
+
+	var remoteURL string
+	if template == "" {
+		remoteURL, err = a.git.RemoteURL(remote)
+		if err != nil {
+			return nil
+		}
+	}
+
+	urls := PullRequestURLs(template, remoteURL, state, branches)
+	if len(urls) == 0 {
+		return nil
+	}
+
+	if _, err := fmt.Fprintln(a.stdout, "Pull request URLs:"); err != nil {
+		return err
+	}
+	for _, pull := range urls {
+		if _, err := fmt.Fprintf(a.stdout, "  %s into %s: %s\n", pull.Branch, pull.Base, pull.URL); err != nil {
+			return err
+		}
+	}
+	return nil
 }

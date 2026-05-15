@@ -329,6 +329,56 @@ func TestPushPushesStackAndSetsUpstreams(t *testing.T) {
 	}
 }
 
+func TestPrintPullRequestURLs(t *testing.T) {
+	repo := newTestRepo(t)
+	runGit(t, repo.dir, "remote", "add", "origin", "/tmp/fetch.git")
+	runGit(t, repo.dir, "remote", "set-url", "--push", "origin", "git@github.com:AztecProtocol/aztec-packages.git")
+
+	var stdout, stderr bytes.Buffer
+	app := NewApp(repo.dir, nil, &stdout, &stderr, func(string) string { return "" })
+	state := State{Stacks: []Stack{
+		{Base: "main", Branches: []string{"ag/base-change", "ag/head-change"}},
+	}}
+
+	if err := app.printPullRequestURLs("origin", state, []string{"ag/base-change", "ag/head-change"}); err != nil {
+		t.Fatal(err)
+	}
+	want := "" +
+		"Pull request URLs:\n" +
+		"  ag/base-change into main: https://github.com/AztecProtocol/aztec-packages/compare/main...ag/base-change?expand=1\n" +
+		"  ag/head-change into ag/base-change: https://github.com/AztecProtocol/aztec-packages/compare/ag/base-change...ag/head-change?expand=1\n"
+	if stdout.String() != want {
+		t.Fatalf("stdout = %q, want %q", stdout.String(), want)
+	}
+	if stderr.String() != "" {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
+func TestPrintPullRequestURLsFromRepoTemplate(t *testing.T) {
+	repo := newTestRepo(t)
+	runGit(t, repo.dir, "config", "--local", "graphene.prUrlTemplate", "https://example.com/pr/${baseBranch}/${targetBranch}")
+
+	var stdout, stderr bytes.Buffer
+	app := NewApp(repo.dir, nil, &stdout, &stderr, func(string) string { return "" })
+	state := State{Stacks: []Stack{
+		{Base: "main", Branches: []string{"ag/base-change"}},
+	}}
+
+	if err := app.printPullRequestURLs("missing", state, []string{"ag/base-change"}); err != nil {
+		t.Fatal(err)
+	}
+	want := "" +
+		"Pull request URLs:\n" +
+		"  ag/base-change into main: https://example.com/pr/main/ag/base-change\n"
+	if stdout.String() != want {
+		t.Fatalf("stdout = %q, want %q", stdout.String(), want)
+	}
+	if stderr.String() != "" {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
 func TestGraphDisplaysForkedStack(t *testing.T) {
 	repo := newTestRepo(t)
 	createStackBranch(t, repo, "one.txt", "one\n", "One")
