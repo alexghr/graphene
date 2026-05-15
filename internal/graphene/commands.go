@@ -158,18 +158,22 @@ func (a *App) rebase(args []string) error {
 		return err
 	}
 
-	ops, err := RestackOpsAfterRewrite(state, base, oldRefs)
+	ops, err := RestackOpsUpToBranch(state, base, current, oldRefs)
 	if err != nil {
 		return err
 	}
 	if len(ops) == 0 {
+		if current != base {
+			return a.git.Run("switch", current)
+		}
 		return nil
 	}
 
 	state.Pending = &Pending{
-		Operation: "rebase",
-		Branch:    base,
-		Queue:     ops,
+		Operation:    "rebase",
+		Branch:       base,
+		ReturnBranch: current,
+		Queue:        ops,
 	}
 	if err := a.git.WriteState(state); err != nil {
 		return err
@@ -210,8 +214,7 @@ func (a *App) continueRebase(args []string) error {
 		}
 		state.Pending.Queue = state.Pending.Queue[1:]
 		if len(state.Pending.Queue) == 0 {
-			state.Pending = nil
-			return a.git.WriteState(state)
+			return a.finishPendingRebases(state)
 		}
 		if err := a.git.WriteState(state); err != nil {
 			return err
@@ -246,6 +249,14 @@ func (a *App) abortRebase(args []string) error {
 }
 
 func (a *App) push(args []string) error {
+	return a.pushBranches(args, false)
+}
+
+func (a *App) pushf(args []string) error {
+	return a.pushBranches(args, true)
+}
+
+func (a *App) pushBranches(args []string, forceWithLease bool) error {
 	remote, _, flags, err := parsePushArgs(args)
 	if err != nil {
 		return err
@@ -259,7 +270,7 @@ func (a *App) push(args []string) error {
 	if err != nil {
 		return err
 	}
-	branches := PushBranches(state, current)
+	branches := BranchesThroughCurrent(state, current)
 	if len(branches) == 0 {
 		return fmt.Errorf("no branch to push")
 	}
@@ -271,6 +282,9 @@ func (a *App) push(args []string) error {
 	}
 
 	pushArgs := []string{"push"}
+	if forceWithLease {
+		pushArgs = append(pushArgs, "--force-with-lease")
+	}
 	pushArgs = append(pushArgs, flags...)
 	pushArgs = append(pushArgs, remote)
 	pushArgs = append(pushArgs, branches...)
@@ -309,7 +323,7 @@ func (a *App) pr(args []string) error {
 	if err != nil {
 		return err
 	}
-	branches := PushBranches(state, current)
+	branches := BranchesThroughCurrent(state, current)
 	if len(branches) == 0 {
 		return fmt.Errorf("no branch for pull request")
 	}
@@ -379,6 +393,9 @@ func (a *App) clearPendingIfRebaseDone() error {
 	if err != nil {
 		return err
 	}
+	if state.Pending != nil {
+		return a.finishPendingRebases(state)
+	}
 	state.Pending = nil
 	return a.git.WriteState(state)
 }
@@ -391,13 +408,27 @@ func (a *App) runPendingRebases(state State) error {
 		}
 		state.Pending.Queue = state.Pending.Queue[1:]
 		if len(state.Pending.Queue) == 0 {
-			state.Pending = nil
+			return a.finishPendingRebases(state)
 		}
 		if err := a.git.WriteState(state); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+func (a *App) finishPendingRebases(state State) error {
+	returnBranch := ""
+	if state.Pending != nil {
+		returnBranch = state.Pending.ReturnBranch
+	}
+	if returnBranch != "" {
+		if err := a.git.Run("switch", returnBranch); err != nil {
+			return err
+		}
+	}
+	state.Pending = nil
+	return a.git.WriteState(state)
 }
 
 func (a *App) stateRefs(state State) map[string]string {

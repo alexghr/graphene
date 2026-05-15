@@ -171,7 +171,7 @@ func TestAmendRestacksBaseBranch(t *testing.T) {
 	}
 }
 
-func TestRebasePullsBaseAndRestacksWholeStack(t *testing.T) {
+func TestRebasePullsBaseAndRestacksThroughCurrentBranch(t *testing.T) {
 	repo := newTestRepo(t)
 
 	remote := filepath.Join(t.TempDir(), "remote.git")
@@ -181,6 +181,8 @@ func TestRebasePullsBaseAndRestacksWholeStack(t *testing.T) {
 
 	createStackBranch(t, repo, "one.txt", "one\n", "One")
 	createStackBranch(t, repo, "two.txt", "two\n", "Two")
+	createStackBranch(t, repo, "three.txt", "three\n", "Three")
+	oldBranchTwo := runGit(t, repo.dir, "rev-parse", "stack/two")
 
 	other := filepath.Join(t.TempDir(), "other")
 	runGit(t, "", "clone", "--branch", "main", remote, other)
@@ -192,7 +194,7 @@ func TestRebasePullsBaseAndRestacksWholeStack(t *testing.T) {
 	runGit(t, other, "commit", "-m", "Base update")
 	runGit(t, other, "push", "origin", "main")
 
-	runGit(t, repo.dir, "checkout", "stack/one")
+	runGit(t, repo.dir, "checkout", "stack/two")
 	expectGrapheneOK(t, repo, "rebase")
 
 	main := runGit(t, repo.dir, "rev-parse", "main")
@@ -208,6 +210,14 @@ func TestRebasePullsBaseAndRestacksWholeStack(t *testing.T) {
 	parentTwo := runGit(t, repo.dir, "rev-parse", "stack/two^")
 	if parentTwo != branchOne {
 		t.Fatalf("stack/two parent = %s, want stack/one %s", parentTwo, branchOne)
+	}
+	branchTwo := runGit(t, repo.dir, "rev-parse", "stack/two")
+	parentThree := runGit(t, repo.dir, "rev-parse", "stack/three^")
+	if parentThree != oldBranchTwo {
+		t.Fatalf("stack/three parent = %s, want old stack/two %s", parentThree, oldBranchTwo)
+	}
+	if parentThree == branchTwo {
+		t.Fatalf("stack/three was rebased onto new stack/two")
 	}
 	if got := currentBranch(t, repo.dir); got != "stack/two" {
 		t.Fatalf("branch = %q, want stack/two", got)
@@ -303,6 +313,8 @@ func TestPushPushesStackAndSetsUpstreams(t *testing.T) {
 	repo := newTestRepo(t)
 	createStackBranch(t, repo, "one.txt", "one\n", "One")
 	createStackBranch(t, repo, "two.txt", "two\n", "Two")
+	createStackBranch(t, repo, "three.txt", "three\n", "Three")
+	runGit(t, repo.dir, "checkout", "stack/two")
 
 	remote := filepath.Join(t.TempDir(), "remote.git")
 	runGit(t, "", "init", "--bare", remote)
@@ -316,6 +328,9 @@ func TestPushPushesStackAndSetsUpstreams(t *testing.T) {
 	expectGrapheneOK(t, repo, "push", "origin")
 	runGit(t, remote, "show-ref", "--verify", "refs/heads/stack/one")
 	runGit(t, remote, "show-ref", "--verify", "refs/heads/stack/two")
+	if refExists(t, remote, "refs/heads/stack/three") {
+		t.Fatal("stack/three was pushed from stack/two")
+	}
 
 	for _, branch := range []string{"stack/one", "stack/two"} {
 		remoteName := runGit(t, repo.dir, "config", "--get", "branch."+branch+".remote")
@@ -326,6 +341,52 @@ func TestPushPushesStackAndSetsUpstreams(t *testing.T) {
 		if merge != "refs/heads/"+branch {
 			t.Fatalf("%s merge = %q", branch, merge)
 		}
+	}
+	if has, err := (Git{Dir: repo.dir}).HasUpstream("stack/three"); err != nil || has {
+		t.Fatalf("stack/three upstream = %v, %v", has, err)
+	}
+
+	writeFile(t, repo.dir, "two.txt", "two amended\n")
+	runGit(t, repo.dir, "add", ".")
+	runGit(t, repo.dir, "commit", "--amend", "-m", "Two amended")
+	code, _, stderr := repo.runGraphene(t, "push", "origin")
+	if code == 0 {
+		t.Fatal("plain push unexpectedly rewrote stack/two")
+	}
+	if !strings.Contains(stderr, "non-fast-forward") && !strings.Contains(stderr, "fetch first") {
+		t.Fatalf("plain push stderr = %q", stderr)
+	}
+	expectGrapheneOK(t, repo, "pushf", "origin")
+
+	localTwo := runGit(t, repo.dir, "rev-parse", "stack/two")
+	remoteTwo := runGit(t, remote, "rev-parse", "refs/heads/stack/two")
+	if remoteTwo != localTwo {
+		t.Fatalf("remote stack/two = %s, want %s", remoteTwo, localTwo)
+	}
+}
+
+func TestPRPrintsCurrentBranchAndDependencies(t *testing.T) {
+	repo := newTestRepo(t)
+	runGit(t, repo.dir, "remote", "add", "origin", "/tmp/fetch.git")
+	runGit(t, repo.dir, "remote", "set-url", "--push", "origin", "git@github.com:AztecProtocol/aztec-packages.git")
+	createStackBranch(t, repo, "one.txt", "one\n", "One")
+	createStackBranch(t, repo, "two.txt", "two\n", "Two")
+	createStackBranch(t, repo, "three.txt", "three\n", "Three")
+	runGit(t, repo.dir, "checkout", "stack/two")
+
+	code, stdout, stderr := repo.runGraphene(t, "pr")
+	if code != 0 {
+		t.Fatalf("graphene pr exited %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	want := "" +
+		"Pull request URLs:\n" +
+		"  stack/one into main: https://github.com/AztecProtocol/aztec-packages/compare/main...stack/one?expand=1\n" +
+		"  stack/two into stack/one: https://github.com/AztecProtocol/aztec-packages/compare/stack/one...stack/two?expand=1\n"
+	if stdout != want {
+		t.Fatalf("stdout = %q, want %q", stdout, want)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q", stderr)
 	}
 }
 
@@ -476,6 +537,22 @@ func runGit(t *testing.T, dir string, args ...string) string {
 		t.Fatalf("git %v failed: %v\nstdout:\n%s\nstderr:\n%s", args, err, stdout.String(), stderr.String())
 	}
 	return strings.TrimRight(stdout.String(), "\n")
+}
+
+func refExists(t *testing.T, dir, ref string) bool {
+	t.Helper()
+
+	cmd := exec.Command("git", "show-ref", "--verify", "--quiet", ref)
+	cmd.Dir = dir
+	err := cmd.Run()
+	if err == nil {
+		return true
+	}
+	if _, ok := err.(*exec.ExitError); ok {
+		return false
+	}
+	t.Fatalf("git show-ref failed: %v", err)
+	return false
 }
 
 func writeFile(t *testing.T, dir, name, content string) {

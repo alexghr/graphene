@@ -18,11 +18,12 @@ type Stack struct {
 }
 
 type Pending struct {
-	Operation string     `json:"operation"`
-	Branch    string     `json:"branch,omitempty"`
-	Queue     []RebaseOp `json:"queue,omitempty"`
-	Top       string     `json:"top,omitempty"`
-	Branches  []string   `json:"branches,omitempty"`
+	Operation    string     `json:"operation"`
+	Branch       string     `json:"branch,omitempty"`
+	ReturnBranch string     `json:"returnBranch,omitempty"`
+	Queue        []RebaseOp `json:"queue,omitempty"`
+	Top          string     `json:"top,omitempty"`
+	Branches     []string   `json:"branches,omitempty"`
 }
 
 type RebaseOp struct {
@@ -115,7 +116,7 @@ func (s *State) AddCommit(current, next string) error {
 	return nil
 }
 
-func PushBranches(s State, current string) []string {
+func BranchesThroughCurrent(s State, current string) []string {
 	loc, ok := s.BranchLocation(current)
 	if !ok {
 		if current == "" {
@@ -154,7 +155,7 @@ func PushBranches(s State, current string) []string {
 
 	stack := s.Stacks[loc.StackIndex]
 	addDependencyPath(stack.Base, map[string]bool{})
-	for _, branch := range stack.Branches {
+	for _, branch := range stack.Branches[:loc.BranchIndex+1] {
 		add(branch)
 	}
 	return branches
@@ -190,6 +191,33 @@ func RebaseBaseBranch(s State, current string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+func RestackOpsUpToBranch(s State, base, current string, oldRefs map[string]string) ([]RebaseOp, error) {
+	if current == base {
+		return nil, nil
+	}
+
+	loc, ok := s.BranchLocation(current)
+	if !ok {
+		return nil, fmt.Errorf("branch %q is not in a graphene stack", current)
+	}
+
+	stack := s.Stacks[loc.StackIndex]
+	if stack.Base != base {
+		return nil, fmt.Errorf("branch %q is not stacked on %q", current, base)
+	}
+
+	upstream := oldRefs[base]
+	if upstream == "" {
+		return nil, fmt.Errorf("missing old ref for %q", base)
+	}
+
+	return []RebaseOp{{
+		Onto:     base,
+		Upstream: upstream,
+		Top:      current,
+	}}, nil
 }
 
 func RestackOpsAfterRewrite(s State, branch string, oldRefs map[string]string) ([]RebaseOp, error) {

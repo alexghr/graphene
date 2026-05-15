@@ -99,7 +99,7 @@ func TestStateAddCommit(t *testing.T) {
 	}
 }
 
-func TestPushBranches(t *testing.T) {
+func TestBranchesThroughCurrent(t *testing.T) {
 	state := State{Stacks: []Stack{
 		{Base: "main", Branches: []string{"a", "b", "c"}},
 		{Base: "b", Branches: []string{"d", "e"}},
@@ -111,13 +111,14 @@ func TestPushBranches(t *testing.T) {
 		want    []string
 	}{
 		{current: "f", want: []string{"a", "b", "d", "e", "f"}},
-		{current: "b", want: []string{"a", "b", "c"}},
+		{current: "e", want: []string{"a", "b", "d", "e"}},
+		{current: "b", want: []string{"a", "b"}},
 		{current: "loose", want: []string{"loose"}},
 	}
 
 	for _, tt := range tests {
-		if got := PushBranches(state, tt.current); !reflect.DeepEqual(got, tt.want) {
-			t.Fatalf("PushBranches(%q) = %#v, want %#v", tt.current, got, tt.want)
+		if got := BranchesThroughCurrent(state, tt.current); !reflect.DeepEqual(got, tt.want) {
+			t.Fatalf("BranchesThroughCurrent(%q) = %#v, want %#v", tt.current, got, tt.want)
 		}
 	}
 }
@@ -249,6 +250,35 @@ func TestRestackOpsAfterRewrite(t *testing.T) {
 	}
 	if !reflect.DeepEqual(ops, want) {
 		t.Fatalf("ops = %#v, want %#v", ops, want)
+	}
+}
+
+func TestRestackOpsUpToBranch(t *testing.T) {
+	state := State{Stacks: []Stack{
+		{Base: "main", Branches: []string{"a", "b", "c"}},
+		{Base: "b", Branches: []string{"d"}},
+	}}
+	oldRefs := map[string]string{
+		"main": "old-main",
+		"b":    "old-b",
+	}
+
+	ops, err := RestackOpsUpToBranch(state, "main", "b", oldRefs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []RebaseOp{{Onto: "main", Upstream: "old-main", Top: "b"}}
+	if !reflect.DeepEqual(ops, want) {
+		t.Fatalf("ops = %#v, want %#v", ops, want)
+	}
+
+	ops, err = RestackOpsUpToBranch(state, "b", "d", oldRefs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = []RebaseOp{{Onto: "b", Upstream: "old-b", Top: "d"}}
+	if !reflect.DeepEqual(ops, want) {
+		t.Fatalf("nested ops = %#v, want %#v", ops, want)
 	}
 }
 
