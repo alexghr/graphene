@@ -123,6 +123,36 @@ func TestBranchesThroughCurrent(t *testing.T) {
 	}
 }
 
+func TestRemoveStackThroughCurrent(t *testing.T) {
+	state := State{Stacks: []Stack{
+		{Base: "main", Branches: []string{"a", "b", "c"}},
+		{Base: "a", Branches: []string{"d"}},
+	}}
+
+	got, ok := RemoveStackThroughCurrent(state, "b")
+	if !ok {
+		t.Fatal("RemoveStackThroughCurrent did not find b")
+	}
+	want := State{Stacks: []Stack{
+		{Base: "b", Branches: []string{"c"}},
+		{Base: "a", Branches: []string{"d"}},
+	}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("state = %#v, want %#v", got, want)
+	}
+
+	got, ok = RemoveStackThroughCurrent(got, "c")
+	if !ok {
+		t.Fatal("RemoveStackThroughCurrent did not find c")
+	}
+	want = State{Stacks: []Stack{
+		{Base: "a", Branches: []string{"d"}},
+	}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("tip state = %#v, want %#v", got, want)
+	}
+}
+
 func TestBaseBranch(t *testing.T) {
 	state := State{Stacks: []Stack{
 		{Base: "main", Branches: []string{"a", "b", "c"}},
@@ -200,6 +230,23 @@ func TestParseArgs(t *testing.T) {
 	}
 	if !pushDryRun(flags) {
 		t.Fatal("pushDryRun did not detect --dry-run")
+	}
+	force, err := parseRmArgs([]string{"--force"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !force {
+		t.Fatal("parseRmArgs did not detect --force")
+	}
+	force, err = parseRmArgs(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if force {
+		t.Fatal("parseRmArgs force = true for no args")
+	}
+	if _, err := parseRmArgs([]string{"--bad"}); err == nil {
+		t.Fatal("parseRmArgs accepted --bad")
 	}
 	remote, err = parsePRArgs([]string{"origin"})
 	if err != nil {

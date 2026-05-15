@@ -45,6 +45,10 @@ func (a *App) Run(args []string) int {
 		err = a.continueRebase(args[2:])
 	case "abort":
 		err = a.abortRebase(args[2:])
+	case "rm":
+		err = a.rm(args[2:])
+	case "update":
+		err = a.update(args[2:])
 	case "push":
 		err = a.push(args[2:])
 	case "pushf":
@@ -80,6 +84,8 @@ func (a *App) usage() {
   graphene rebase
   graphene continue
   graphene abort
+  graphene rm [-f|--force]
+  graphene update
   graphene push [remote] [git push flags...]
   graphene pushf [remote] [git push flags...]
   graphene pr [remote]

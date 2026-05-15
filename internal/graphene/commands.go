@@ -248,6 +248,135 @@ func (a *App) abortRebase(args []string) error {
 	return a.git.WriteState(state)
 }
 
+func (a *App) rm(args []string) error {
+	force, err := parseRmArgs(args)
+	if err != nil {
+		return err
+	}
+
+	current, err := a.git.CurrentBranch()
+	if err != nil {
+		return err
+	}
+	state, err := a.git.ReadState()
+	if err != nil {
+		return err
+	}
+	if state.Pending != nil && !force {
+		return fmt.Errorf("pending rebase exists; use graphene continue or graphene abort")
+	}
+
+	state, ok := RemoveStackThroughCurrent(state, current)
+	if !ok {
+		return fmt.Errorf("branch %q is not in a graphene stack", current)
+	}
+	if force {
+		state.Pending = nil
+	}
+	return a.git.WriteState(state)
+}
+
+func (a *App) update(args []string) error {
+	if len(args) != 0 {
+		return fmt.Errorf("graphene update does not accept arguments")
+	}
+
+	current, err := a.git.CurrentBranch()
+	if err != nil {
+		return err
+	}
+	state, err := a.git.ReadState()
+	if err != nil {
+		return err
+	}
+	if state.Pending != nil {
+		return fmt.Errorf("pending rebase exists; use graphene continue or graphene abort")
+	}
+
+	loc, ok := state.BranchLocation(current)
+	if !ok {
+		return fmt.Errorf("branch %q is not in a graphene stack", current)
+	}
+	stack, ok := state.StackAt(loc.StackIndex)
+	if !ok {
+		return fmt.Errorf("branch %q is not in a graphene stack", current)
+	}
+
+	dirty, err := a.git.HasTrackedChanges()
+	if err != nil {
+		return err
+	}
+	if dirty {
+		return fmt.Errorf("tracked changes would prevent update; stash or commit them before graphene update")
+	}
+
+	oldRefs := a.stateRefs(state)
+	if err := a.git.Run("switch", stack.Base); err != nil {
+		return err
+	}
+	if err := a.git.Run("pull", "--ff-only"); err != nil {
+		return err
+	}
+
+	branches, err := a.appliedPrefixBranches(stack.Base, stack.Branches[:loc.BranchIndex+1], oldRefs)
+	if err != nil {
+		return err
+	}
+
+	if len(branches) > 0 {
+		if err := a.ensureNoDependentStacks(state, loc.StackIndex, branches); err != nil {
+			return err
+		}
+	}
+	firstRemaining := len(branches)
+	if firstRemaining == len(stack.Branches) {
+		if err := a.deleteBranches(branches); err != nil {
+			return err
+		}
+		state = RemoveBranches(state, branches)
+		return a.git.WriteState(state)
+	}
+
+	predecessor := stack.Base
+	if firstRemaining > 0 {
+		predecessor = stack.Branches[firstRemaining-1]
+	}
+	upstream := oldRefs[predecessor]
+	if upstream == "" {
+		return fmt.Errorf("missing old ref for %q", predecessor)
+	}
+
+	top := current
+	returnBranch := current
+	if firstRemaining > loc.BranchIndex {
+		top = stack.Branches[len(stack.Branches)-1]
+		returnBranch = stack.Branches[firstRemaining]
+	}
+
+	ops := []RebaseOp{{
+		Onto:     stack.Base,
+		Upstream: upstream,
+		Top:      top,
+	}}
+	restackOps, err := RestackOpsAfterRewrite(state, top, oldRefs)
+	if err != nil {
+		return err
+	}
+	ops = append(ops, restackOps...)
+
+	state.Pending = &Pending{
+		Operation:    "update",
+		Branch:       returnBranch,
+		ReturnBranch: returnBranch,
+		Queue:        ops,
+		Branches:     branches,
+	}
+	if err := a.git.WriteState(state); err != nil {
+		return err
+	}
+	return a.runPendingRebases(state)
+}
+
 func (a *App) push(args []string) error {
 	return a.pushBranches(args, false)
 }
@@ -419,16 +548,118 @@ func (a *App) runPendingRebases(state State) error {
 
 func (a *App) finishPendingRebases(state State) error {
 	returnBranch := ""
+	var appliedBranches []string
 	if state.Pending != nil {
 		returnBranch = state.Pending.ReturnBranch
+		if state.Pending.Operation == "update" {
+			appliedBranches = append([]string(nil), state.Pending.Branches...)
+		}
 	}
 	if returnBranch != "" {
 		if err := a.git.Run("switch", returnBranch); err != nil {
 			return err
 		}
 	}
+	if len(appliedBranches) > 0 {
+		if err := a.deleteBranches(appliedBranches); err != nil {
+			return err
+		}
+		state = RemoveBranches(state, appliedBranches)
+	}
 	state.Pending = nil
 	return a.git.WriteState(state)
+}
+
+func (a *App) ensureNoDependentStacks(state State, stackIndex int, branches []string) error {
+	deleted := map[string]bool{}
+	for _, branch := range branches {
+		deleted[branch] = true
+	}
+	for i, stack := range state.Stacks {
+		if i == stackIndex {
+			continue
+		}
+		if deleted[stack.Base] {
+			return fmt.Errorf("cannot update branch %q because it has a dependent stack", stack.Base)
+		}
+	}
+	return nil
+}
+
+func (a *App) deleteBranches(branches []string) error {
+	for _, branch := range branches {
+		exists, err := a.git.BranchExists(branch)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			continue
+		}
+		if err := a.git.Run("branch", "-D", branch); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (a *App) appliedPrefixBranches(base string, branches []string, oldRefs map[string]string) ([]string, error) {
+	if len(branches) == 0 {
+		return nil, nil
+	}
+
+	applied, err := a.appliedCommitRefs(base, branches[len(branches)-1])
+	if err != nil {
+		return nil, err
+	}
+
+	var prefix []string
+	for _, branch := range branches {
+		ref := oldRefs[branch]
+		if ref == "" {
+			break
+		}
+		if applied[ref] {
+			prefix = append(prefix, branch)
+			continue
+		}
+		ancestor, err := a.isAncestor(ref, base)
+		if err != nil {
+			return nil, err
+		}
+		if !ancestor {
+			break
+		}
+		prefix = append(prefix, branch)
+	}
+	return prefix, nil
+}
+
+func (a *App) appliedCommitRefs(base, top string) (map[string]bool, error) {
+	out, err := a.git.Output("cherry", base, top)
+	if err != nil {
+		return nil, err
+	}
+
+	applied := map[string]bool{}
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 || fields[0] != "-" {
+			continue
+		}
+		applied[fields[1]] = true
+	}
+	return applied, nil
+}
+
+func (a *App) isAncestor(ancestor, descendant string) (bool, error) {
+	_, err := a.git.Output("merge-base", "--is-ancestor", ancestor, descendant)
+	if err == nil {
+		return true, nil
+	}
+	if isGitExit(err, 1) {
+		return false, nil
+	}
+	return false, err
 }
 
 func (a *App) stateRefs(state State) map[string]string {
@@ -496,6 +727,19 @@ func parsePushArgs(args []string) (string, bool, []string, error) {
 		}
 	}
 	return remote, remoteProvided, append([]string(nil), args...), nil
+}
+
+func parseRmArgs(args []string) (bool, error) {
+	var force bool
+	for _, arg := range args {
+		switch arg {
+		case "-f", "--force":
+			force = true
+		default:
+			return false, fmt.Errorf("graphene rm does not support %s", arg)
+		}
+	}
+	return force, nil
 }
 
 func parsePRArgs(args []string) (string, error) {

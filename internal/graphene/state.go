@@ -87,6 +87,13 @@ func (s State) BranchLocation(branch string) (BranchLocation, bool) {
 	return BranchLocation{}, false
 }
 
+func (s State) StackAt(index int) (Stack, bool) {
+	if index < 0 || index >= len(s.Stacks) {
+		return Stack{}, false
+	}
+	return s.Stacks[index], true
+}
+
 func (s State) ContainsBranch(branch string) bool {
 	_, ok := s.BranchLocation(branch)
 	return ok
@@ -159,6 +166,54 @@ func BranchesThroughCurrent(s State, current string) []string {
 		add(branch)
 	}
 	return branches
+}
+
+func RemoveBranches(s State, branches []string) State {
+	deleted := map[string]bool{}
+	for _, branch := range branches {
+		if branch != "" {
+			deleted[branch] = true
+		}
+	}
+	if len(deleted) == 0 {
+		return s
+	}
+
+	var stacks []Stack
+	for _, stack := range s.Stacks {
+		if deleted[stack.Base] {
+			continue
+		}
+
+		kept := make([]string, 0, len(stack.Branches))
+		for _, branch := range stack.Branches {
+			if !deleted[branch] {
+				kept = append(kept, branch)
+			}
+		}
+		if len(kept) > 0 {
+			stacks = append(stacks, Stack{Base: stack.Base, Branches: kept})
+		}
+	}
+	s.Stacks = stacks
+	return s
+}
+
+func RemoveStackThroughCurrent(s State, current string) (State, bool) {
+	loc, ok := s.BranchLocation(current)
+	if !ok {
+		return s, false
+	}
+
+	stack := s.Stacks[loc.StackIndex]
+	if loc.BranchIndex == len(stack.Branches)-1 {
+		s.Stacks = append(s.Stacks[:loc.StackIndex], s.Stacks[loc.StackIndex+1:]...)
+		return s, true
+	}
+
+	branches := append([]string(nil), stack.Branches[loc.BranchIndex+1:]...)
+	s.Stacks[loc.StackIndex] = Stack{Base: current, Branches: branches}
+	return s, true
 }
 
 func BaseBranch(s State, branch string) (string, bool) {
