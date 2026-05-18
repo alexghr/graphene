@@ -60,6 +60,25 @@ gn forget
 
 Run `gn help` or `gn help <command>` for full command details.
 
+## Agents
+
+Graphene provides reusable agent instructions as a skill at [skills/graphene-stacked-prs](skills/graphene-stacked-prs).
+
+Ask Codex to install the skill from:
+
+```
+https://github.com/alexghr/graphene/tree/main/skills/graphene-stacked-prs
+```
+
+Install it for Claude Code:
+
+```
+mkdir -p "$HOME/.claude/skills/graphene-stacked-prs"
+curl -fL https://raw.githubusercontent.com/alexghr/graphene/main/skills/graphene-stacked-prs/SKILL.md -o "$HOME/.claude/skills/graphene-stacked-prs/SKILL.md"
+```
+
+Restart Codex or Claude Code after installing a new skill.
+
 ## Worktrees
 
 Stack state is stored in the repository's local Git config under `graphene.state`, so linked worktrees for the same repository share the same stack graph.
