@@ -292,6 +292,34 @@ func (a *App) abortRebase(args []string) error {
 	return a.git.WriteState(state)
 }
 
+func (a *App) forget(args []string) error {
+	force, err := parseForgetArgs(args)
+	if err != nil {
+		return err
+	}
+
+	current, err := a.git.CurrentBranch()
+	if err != nil {
+		return err
+	}
+	state, err := a.git.ReadState()
+	if err != nil {
+		return err
+	}
+	if state.Pending != nil && !force {
+		return fmt.Errorf("pending rebase exists; use graphene continue or graphene abort")
+	}
+
+	state, ok := RemoveStackThroughCurrent(state, current)
+	if !ok {
+		return fmt.Errorf("branch %q is not in a graphene stack", current)
+	}
+	if force {
+		state.Pending = nil
+	}
+	return a.git.WriteState(state)
+}
+
 func (a *App) sync(args []string) error {
 	if len(args) != 0 {
 		return fmt.Errorf("graphene sync does not accept arguments")
@@ -880,6 +908,19 @@ func unsupportedCommitArg(arg string, allowBranch bool) error {
 		supported = "-b/--branch, --base, " + supported
 	}
 	return fmt.Errorf("unsupported argument %q; supported commit options are %s", arg, supported)
+}
+
+func parseForgetArgs(args []string) (bool, error) {
+	var force bool
+	for _, arg := range args {
+		switch arg {
+		case "-f", "--force":
+			force = true
+		default:
+			return false, fmt.Errorf("graphene forget does not support %s", arg)
+		}
+	}
+	return force, nil
 }
 
 type sendOptions struct {

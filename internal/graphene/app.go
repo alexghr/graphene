@@ -69,6 +69,12 @@ func (a *App) Run(args []string) int {
 				return 0
 			}
 			err = a.abortRebase(args[2:])
+		case "forget":
+			if helpArgs(args[2:]) {
+				a.commandUsage("forget", a.stdout)
+				return 0
+			}
+			err = a.forget(args[2:])
 		case "sync":
 			if helpArgs(args[2:]) {
 				a.commandUsage("sync", a.stdout)
@@ -140,6 +146,7 @@ func (a *App) usage(w io.Writer) {
   graphene amend [options]
   graphene continue
   graphene abort
+  graphene forget [--force]
   graphene sync
   graphene send [--remote <remote>] [--stack] [--dry-run]
   graphene sendf [--remote <remote>] [--stack] [--dry-run]
@@ -174,6 +181,12 @@ options:
       --no-gpg-sign          do not GPG-sign the commit`,
 		"continue": "usage: graphene continue\n\nContinue the current Git rebase and any queued Graphene restacks.",
 		"abort":    "usage: graphene abort\n\nAbort the current Git rebase and clear queued Graphene restacks.",
+		"forget": `usage: graphene forget [--force]
+
+Remove Graphene tracking through the current branch without deleting Git branches.
+
+options:
+      --force  clear pending Graphene rebase state while forgetting`,
 		"sync": `usage: graphene sync
 
 Fetch the stack base, drop already-applied branches on the current path, and restack affected children.

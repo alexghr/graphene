@@ -142,6 +142,36 @@ func TestBranchesInConnectedStack(t *testing.T) {
 	}
 }
 
+func TestRemoveStackThroughCurrent(t *testing.T) {
+	state := State{Stacks: []Stack{
+		{Base: "main", Branches: []string{"a", "b", "c"}},
+		{Base: "a", Branches: []string{"d"}},
+	}}
+
+	got, ok := RemoveStackThroughCurrent(state, "b")
+	if !ok {
+		t.Fatal("RemoveStackThroughCurrent did not find b")
+	}
+	want := State{Stacks: []Stack{
+		{Base: "b", Branches: []string{"c"}},
+		{Base: "a", Branches: []string{"d"}},
+	}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("state = %#v, want %#v", got, want)
+	}
+
+	got, ok = RemoveStackThroughCurrent(got, "c")
+	if !ok {
+		t.Fatal("RemoveStackThroughCurrent did not find c")
+	}
+	want = State{Stacks: []Stack{
+		{Base: "a", Branches: []string{"d"}},
+	}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("tip state = %#v, want %#v", got, want)
+	}
+}
+
 func TestReparentBranch(t *testing.T) {
 	state := State{Stacks: []Stack{
 		{Base: "main", Branches: []string{"a", "b", "c"}},
@@ -226,6 +256,23 @@ func TestParseArgs(t *testing.T) {
 	}
 	if sendOpts.remote != "origin" || sendOpts.wholeStack || sendOpts.dryRun {
 		t.Fatalf("parseSendArgs positional remote = %#v", sendOpts)
+	}
+	force, err := parseForgetArgs([]string{"--force"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !force {
+		t.Fatal("parseForgetArgs did not detect --force")
+	}
+	force, err = parseForgetArgs(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if force {
+		t.Fatal("parseForgetArgs force = true for no args")
+	}
+	if _, err := parseForgetArgs([]string{"--bad"}); err == nil {
+		t.Fatal("parseForgetArgs accepted --bad")
 	}
 	if _, err := parseSendArgs([]string{"origin", "upstream"}); err == nil {
 		t.Fatal("parseSendArgs accepted multiple remotes")

@@ -282,6 +282,23 @@ func RemoveBranchesWithBase(s State, branches []string, replacementBase string) 
 	return s
 }
 
+func RemoveStackThroughCurrent(s State, current string) (State, bool) {
+	loc, ok := s.BranchLocation(current)
+	if !ok {
+		return s, false
+	}
+
+	stack := s.Stacks[loc.StackIndex]
+	if loc.BranchIndex == len(stack.Branches)-1 {
+		s.Stacks = append(s.Stacks[:loc.StackIndex], s.Stacks[loc.StackIndex+1:]...)
+		return s, true
+	}
+
+	branches := append([]string(nil), stack.Branches[loc.BranchIndex+1:]...)
+	s.Stacks[loc.StackIndex] = Stack{Base: current, Branches: branches}
+	return s, true
+}
+
 func ReparentBranch(s State, current, base string) (State, []string, bool) {
 	loc, ok := s.BranchLocation(current)
 	if !ok {

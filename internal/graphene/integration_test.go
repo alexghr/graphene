@@ -727,6 +727,88 @@ func TestCommitSkipsBranchNamesRecordedInStaleState(t *testing.T) {
 	}
 }
 
+func TestForgetRemovesStackThroughCurrentBranchWithoutDeletingBranches(t *testing.T) {
+	repo := newTestRepo(t)
+	createStackBranch(t, repo, "one.txt", "one\n", "One")
+	createStackBranch(t, repo, "two.txt", "two\n", "Two")
+	createStackBranch(t, repo, "three.txt", "three\n", "Three")
+
+	runGit(t, repo.dir, "checkout", "stack/two")
+	expectGrapheneOK(t, repo, "forget")
+
+	if got := currentBranch(t, repo.dir); got != "stack/two" {
+		t.Fatalf("branch = %q, want stack/two", got)
+	}
+	for _, branch := range []string{"stack/one", "stack/two", "stack/three"} {
+		if !refExists(t, repo.dir, "refs/heads/"+branch) {
+			t.Fatalf("%s was deleted", branch)
+		}
+	}
+	state := readState(t, repo.dir)
+	want := []Stack{{Base: "stack/two", Branches: []string{"stack/three"}}}
+	if !reflect.DeepEqual(state.Stacks, want) {
+		t.Fatalf("stacks = %#v, want %#v", state.Stacks, want)
+	}
+}
+
+func TestForgetTipRemovesStackWithoutDeletingBranches(t *testing.T) {
+	repo := newTestRepo(t)
+	createStackBranch(t, repo, "one.txt", "one\n", "One")
+	createStackBranch(t, repo, "two.txt", "two\n", "Two")
+
+	expectGrapheneOK(t, repo, "forget")
+
+	if got := currentBranch(t, repo.dir); got != "stack/two" {
+		t.Fatalf("branch = %q, want stack/two", got)
+	}
+	for _, branch := range []string{"stack/one", "stack/two"} {
+		if !refExists(t, repo.dir, "refs/heads/"+branch) {
+			t.Fatalf("%s was deleted", branch)
+		}
+	}
+	state := readState(t, repo.dir)
+	if len(state.Stacks) != 0 || state.Pending != nil {
+		t.Fatalf("state = %#v, want empty", state)
+	}
+}
+
+func TestForgetForceClearsPendingState(t *testing.T) {
+	repo := newTestRepo(t)
+	createStackBranch(t, repo, "one.txt", "one\n", "One")
+	createStackBranch(t, repo, "two.txt", "two\n", "Two")
+
+	state := readState(t, repo.dir)
+	state.Pending = &Pending{
+		Operation: "sync",
+		Branch:    "stack/one",
+		Queue: []RebaseOp{
+			{Onto: "stack/one", Upstream: "old-one", Top: "stack/two"},
+		},
+	}
+	if err := (Git{Dir: repo.dir}).WriteState(state); err != nil {
+		t.Fatal(err)
+	}
+
+	code, _, stderr := repo.runGraphene(t, "forget")
+	if code == 0 {
+		t.Fatal("graphene forget unexpectedly ignored pending state")
+	}
+	if !strings.Contains(stderr, "pending rebase exists") {
+		t.Fatalf("stderr = %q", stderr)
+	}
+
+	expectGrapheneOK(t, repo, "forget", "--force")
+	state = readState(t, repo.dir)
+	if len(state.Stacks) != 0 || state.Pending != nil {
+		t.Fatalf("state = %#v, want empty", state)
+	}
+	for _, branch := range []string{"stack/one", "stack/two"} {
+		if !refExists(t, repo.dir, "refs/heads/"+branch) {
+			t.Fatalf("%s was deleted", branch)
+		}
+	}
+}
+
 func TestPushPushesStackAndSetsUpstreams(t *testing.T) {
 	repo := newTestRepo(t)
 	createStackBranch(t, repo, "one.txt", "one\n", "One")

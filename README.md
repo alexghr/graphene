@@ -52,6 +52,12 @@ gn amend -m "Wire export into settings"
 gn sendf
 ```
 
+Stop tracking the current branch path without deleting any Git branches:
+
+```
+gn forget
+```
+
 Run `gn help` or `gn help <command>` for full command details.
 
 ## Worktrees
