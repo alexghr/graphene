@@ -250,6 +250,14 @@ func TestParseArgs(t *testing.T) {
 		t.Fatalf("parseSendArgs = %#v", sendOpts)
 	}
 
+	sendOpts, err = parseSendArgs([]string{"-s", "-n", "origin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sendOpts.remote != "origin" || !sendOpts.wholeStack || !sendOpts.dryRun {
+		t.Fatalf("parseSendArgs short flags = %#v", sendOpts)
+	}
+
 	sendOpts, err = parseSendArgs([]string{"origin"})
 	if err != nil {
 		t.Fatal(err)

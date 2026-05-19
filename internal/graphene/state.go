@@ -18,19 +18,26 @@ type Stack struct {
 }
 
 type Pending struct {
-	Operation    string     `json:"operation"`
-	Branch       string     `json:"branch,omitempty"`
-	ReturnBranch string     `json:"returnBranch,omitempty"`
-	Queue        []RebaseOp `json:"queue,omitempty"`
-	Top          string     `json:"top,omitempty"`
-	Branches     []string   `json:"branches,omitempty"`
-	NextStacks   []Stack    `json:"nextStacks,omitempty"`
+	Operation    string       `json:"operation"`
+	Branch       string       `json:"branch,omitempty"`
+	ReturnBranch string       `json:"returnBranch,omitempty"`
+	Queue        []RebaseOp   `json:"queue,omitempty"`
+	Top          string       `json:"top,omitempty"`
+	Branches     []string     `json:"branches,omitempty"`
+	NextStacks   []Stack      `json:"nextStacks,omitempty"`
+	BaseChanges  []BaseChange `json:"baseChanges,omitempty"`
 }
 
 type RebaseOp struct {
 	Onto     string `json:"onto"`
 	Upstream string `json:"upstream"`
 	Top      string `json:"top"`
+}
+
+type BaseChange struct {
+	Branch  string `json:"branch"`
+	OldBase string `json:"oldBase"`
+	NewBase string `json:"newBase"`
 }
 
 type BranchLocation struct {
@@ -333,6 +340,24 @@ func BaseBranch(s State, branch string) (string, bool) {
 		return base, base != ""
 	}
 	return s.Stacks[loc.StackIndex].Branches[loc.BranchIndex-1], true
+}
+
+func branchBaseChanges(before, after State) []BaseChange {
+	var changes []BaseChange
+	for _, stack := range after.Stacks {
+		for _, branch := range stack.Branches {
+			oldBase, oldOK := BaseBranch(before, branch)
+			newBase, newOK := BaseBranch(after, branch)
+			if oldOK && newOK && oldBase != newBase {
+				changes = append(changes, BaseChange{
+					Branch:  branch,
+					OldBase: oldBase,
+					NewBase: newBase,
+				})
+			}
+		}
+	}
+	return changes
 }
 
 func StackSuffix(s State, branch string) (Stack, int, bool) {

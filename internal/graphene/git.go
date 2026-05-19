@@ -299,18 +299,26 @@ func (v gitVersion) String() string {
 
 func (g Git) RebaseInProgress() (bool, error) {
 	for _, name := range []string{"rebase-merge", "rebase-apply"} {
-		path, err := g.Output("rev-parse", "--git-path", name)
+		path, err := g.GitPath(name)
 		if err != nil {
 			return false, err
-		}
-		if !filepath.IsAbs(path) && g.Dir != "" {
-			path = filepath.Join(g.Dir, path)
 		}
 		if existsDir(path) {
 			return true, nil
 		}
 	}
 	return false, nil
+}
+
+func (g Git) GitPath(name string) (string, error) {
+	path, err := g.Output("rev-parse", "--git-path", name)
+	if err != nil {
+		return "", err
+	}
+	if !filepath.IsAbs(path) && g.Dir != "" {
+		path = filepath.Join(g.Dir, path)
+	}
+	return path, nil
 }
 
 func (g Git) HasUnstagedChanges() (bool, error) {

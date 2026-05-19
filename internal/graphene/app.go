@@ -198,16 +198,16 @@ Push the current branch and its dependency path, then print pull request URLs.
 
 options:
       --remote <remote>  push to this remote
-      --stack            push the whole connected stack
-      --dry-run          show what would be pushed without updating refs or upstreams`,
+  -s, --stack            push the whole connected stack
+  -n, --dry-run          show what would be pushed without updating refs or upstreams`,
 		"sendf": `usage: graphene sendf [options] [remote]
 
 Force-with-lease push the same branch set selected by graphene send.
 
 options:
       --remote <remote>  push to this remote
-      --stack            push the whole connected stack
-      --dry-run          show what would be pushed without updating refs or upstreams`,
+  -s, --stack            push the whole connected stack
+  -n, --dry-run          show what would be pushed without updating refs or upstreams`,
 		"restack": "usage: graphene restack <base>\n\nMove the current branch onto another branch or commit-ish, then restack dependent branches.",
 		"graph":   "usage: graphene graph\n\nPrint the tracked stack graph.",
 		"version": "usage: graphene version\n\nPrint the Graphene version and Git version.",

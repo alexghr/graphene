@@ -3,6 +3,7 @@ package graphene
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -237,7 +238,7 @@ func (a *App) continueRebase(args []string) error {
 		if !inProgress {
 			return fmt.Errorf("no rebase in progress")
 		}
-		if err := a.git.Run("rebase", "--continue"); err != nil {
+		if err := a.continueCurrentRebase(); err != nil {
 			return err
 		}
 		return a.clearPendingIfRebaseDone()
@@ -248,7 +249,7 @@ func (a *App) continueRebase(args []string) error {
 		return err
 	}
 	if inProgress {
-		if err := a.git.Run("rebase", "--continue"); err != nil {
+		if err := a.continueCurrentRebase(); err != nil {
 			return err
 		}
 		inProgress, err = a.git.RebaseInProgress()
@@ -267,6 +268,153 @@ func (a *App) continueRebase(args []string) error {
 		}
 	}
 	return a.runPendingRebases(state)
+}
+
+func (a *App) continueCurrentRebase() error {
+	snapshot, err := a.snapshotRebaseMerge()
+	if err != nil {
+		return err
+	}
+	err = a.git.Run("rebase", "--continue")
+	if err == nil {
+		return nil
+	}
+	if snapshot == nil {
+		return err
+	}
+	if restoreErr := a.restoreRebaseMergeAfterFailedContinue(snapshot); restoreErr != nil {
+		return fmt.Errorf("git rebase --continue failed, and Graphene could not restore rebase state: %w", restoreErr)
+	}
+	return err
+}
+
+type rebaseFileSnapshot struct {
+	mode os.FileMode
+	data []byte
+}
+
+type rebaseMergeSnapshot struct {
+	dir       string
+	indexPath string
+	index     rebaseFileSnapshot
+	head      string
+	files     map[string]rebaseFileSnapshot
+}
+
+func (a *App) snapshotRebaseMerge() (*rebaseMergeSnapshot, error) {
+	rebaseDir, err := a.git.GitPath("rebase-merge")
+	if err != nil {
+		return nil, err
+	}
+	if !existsDir(rebaseDir) {
+		return nil, nil
+	}
+	indexPath, err := a.git.GitPath("index")
+	if err != nil {
+		return nil, err
+	}
+	index, err := snapshotFile(indexPath)
+	if err != nil {
+		return nil, err
+	}
+	head, err := a.git.Head()
+	if err != nil {
+		return nil, err
+	}
+	snapshot := &rebaseMergeSnapshot{
+		dir:       rebaseDir,
+		indexPath: indexPath,
+		index:     index,
+		head:      head,
+		files:     map[string]rebaseFileSnapshot{},
+	}
+	err = filepath.WalkDir(rebaseDir, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("cannot snapshot non-regular rebase file %s", path)
+		}
+		rel, err := filepath.Rel(rebaseDir, path)
+		if err != nil {
+			return err
+		}
+		file, err := snapshotFile(path)
+		if err != nil {
+			return err
+		}
+		snapshot.files[rel] = file
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return snapshot, nil
+}
+
+func snapshotFile(path string) (rebaseFileSnapshot, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return rebaseFileSnapshot{}, err
+	}
+	if !info.Mode().IsRegular() {
+		return rebaseFileSnapshot{}, fmt.Errorf("cannot snapshot non-regular file %s", path)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return rebaseFileSnapshot{}, err
+	}
+	return rebaseFileSnapshot{mode: info.Mode().Perm(), data: data}, nil
+}
+
+func (a *App) restoreRebaseMergeAfterFailedContinue(snapshot *rebaseMergeSnapshot) error {
+	head, err := a.git.Head()
+	if err != nil {
+		return err
+	}
+	if head != snapshot.head {
+		return nil
+	}
+	if !existsDir(snapshot.dir) {
+		return nil
+	}
+	return restoreRebaseMerge(snapshot)
+}
+
+func restoreRebaseMerge(snapshot *rebaseMergeSnapshot) error {
+	entries, err := os.ReadDir(snapshot.dir)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		path := filepath.Join(snapshot.dir, entry.Name())
+		if entry.IsDir() {
+			return fmt.Errorf("cannot restore rebase state with nested directory %s", path)
+		}
+		if err := os.Remove(path); err != nil {
+			return err
+		}
+	}
+	for name, file := range snapshot.files {
+		path := filepath.Join(snapshot.dir, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(path, file.data, file.mode); err != nil {
+			return err
+		}
+	}
+	if err := os.WriteFile(snapshot.indexPath, snapshot.index.data, snapshot.index.mode); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (a *App) abortRebase(args []string) error {
@@ -353,6 +501,9 @@ func (a *App) sync(args []string) error {
 	if dirty {
 		return fmt.Errorf("tracked changes would prevent sync; stash or commit them before graphene sync")
 	}
+	if err := a.validateStackShape(stack); err != nil {
+		return err
+	}
 
 	oldRefs := a.stateRefs(state)
 	baseRef, err := a.fetchBase(stack.Base)
@@ -367,6 +518,7 @@ func (a *App) sync(args []string) error {
 
 	firstRemaining := len(branches)
 	nextState := RemoveBranchesWithBase(state, branches, stack.Base)
+	baseChanges := branchBaseChanges(state, nextState)
 	deleted := map[string]bool{}
 	for _, branch := range branches {
 		deleted[branch] = true
@@ -413,6 +565,9 @@ func (a *App) sync(args []string) error {
 		if i == loc.StackIndex || !deleted[dependent.Base] || len(dependent.Branches) == 0 {
 			continue
 		}
+		if err := a.validateStackShape(dependent); err != nil {
+			return err
+		}
 		upstream := oldRefs[dependent.Base]
 		if upstream == "" {
 			return fmt.Errorf("missing old ref for %q", dependent.Base)
@@ -447,7 +602,11 @@ func (a *App) sync(args []string) error {
 		if err := a.deleteBranches(branches); err != nil {
 			return err
 		}
-		return a.git.WriteState(nextState)
+		if err := a.git.WriteState(nextState); err != nil {
+			return err
+		}
+		a.printSyncBaseChanges(baseChanges)
+		return nil
 	}
 
 	state.Pending = &Pending{
@@ -457,6 +616,7 @@ func (a *App) sync(args []string) error {
 		Queue:        ops,
 		Branches:     branches,
 		NextStacks:   nextState.Stacks,
+		BaseChanges:  baseChanges,
 	}
 	if err := a.git.WriteState(state); err != nil {
 		return err
@@ -621,12 +781,14 @@ func (a *App) runPendingRebases(state State) error {
 func (a *App) finishPendingRebases(state State) error {
 	returnBranch := ""
 	var appliedBranches []string
+	var baseChanges []BaseChange
 	var nextStacks []Stack
 	if state.Pending != nil {
 		returnBranch = state.Pending.ReturnBranch
 		nextStacks = state.Pending.NextStacks
 		if state.Pending.Operation == "sync" {
 			appliedBranches = append([]string(nil), state.Pending.Branches...)
+			baseChanges = append([]BaseChange(nil), state.Pending.BaseChanges...)
 		}
 	}
 	if returnBranch != "" {
@@ -646,7 +808,21 @@ func (a *App) finishPendingRebases(state State) error {
 		state.Stacks = nextStacks
 	}
 	state.Pending = nil
-	return a.git.WriteState(state)
+	if err := a.git.WriteState(state); err != nil {
+		return err
+	}
+	a.printSyncBaseChanges(baseChanges)
+	return nil
+}
+
+func (a *App) printSyncBaseChanges(changes []BaseChange) {
+	if len(changes) == 0 {
+		return
+	}
+	fmt.Fprintln(a.stdout, "Retarget existing PRs after sync:")
+	for _, change := range changes {
+		fmt.Fprintf(a.stdout, "  %s: %s -> %s\n", change.Branch, change.OldBase, change.NewBase)
+	}
 }
 
 func (a *App) fetchBase(base string) (string, error) {
@@ -716,6 +892,33 @@ func (a *App) deleteBranches(branches []string) error {
 		}
 	}
 	return nil
+}
+
+func (a *App) validateStackShape(stack Stack) error {
+	parent := stack.Base
+	for _, branch := range stack.Branches {
+		count, err := a.commitCount(parent, branch)
+		if err != nil {
+			return err
+		}
+		if count > 1 {
+			return fmt.Errorf("branch %q contains %d commits on top of %q; Graphene expects one commit per stack branch. squash or drop the extra commits before graphene sync", branch, count, parent)
+		}
+		parent = branch
+	}
+	return nil
+}
+
+func (a *App) commitCount(base, branch string) (int, error) {
+	out, err := a.git.Output("rev-list", "--count", base+".."+branch)
+	if err != nil {
+		return 0, err
+	}
+	var count int
+	if _, err := fmt.Sscanf(strings.TrimSpace(out), "%d", &count); err != nil {
+		return 0, fmt.Errorf("parse commit count for %s..%s: %w", base, branch, err)
+	}
+	return count, nil
 }
 
 func (a *App) appliedPrefixBranches(base string, branches []string, oldRefs map[string]string) ([]string, error) {
@@ -935,9 +1138,9 @@ func parseSendArgs(args []string) (sendOptions, error) {
 		arg := args[i]
 
 		switch {
-		case arg == "--stack":
+		case arg == "-s" || arg == "--stack":
 			opts.wholeStack = true
-		case arg == "--dry-run":
+		case arg == "-n" || arg == "--dry-run":
 			opts.dryRun = true
 		case arg == "--remote":
 			if i+1 >= len(args) || args[i+1] == "" || strings.HasPrefix(args[i+1], "-") {
@@ -957,7 +1160,7 @@ func parseSendArgs(args []string) (sendOptions, error) {
 				return opts, fmt.Errorf("missing remote after --remote")
 			}
 		case strings.HasPrefix(arg, "-"):
-			return opts, fmt.Errorf("unsupported argument %q; supported send options are --remote, --stack, and --dry-run", arg)
+			return opts, fmt.Errorf("unsupported argument %q; supported send options are --remote, -s/--stack, and -n/--dry-run", arg)
 		default:
 			if opts.remote != "" {
 				return opts, fmt.Errorf("graphene send accepts at most one remote")

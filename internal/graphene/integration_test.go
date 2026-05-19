@@ -354,7 +354,14 @@ func TestSyncRebasesCurrentBranchAndDeletesAppliedIntermediateBranches(t *testin
 	runGit(t, other, "push", "origin", "main")
 
 	runGit(t, repo.dir, "checkout", "stack/two")
-	expectGrapheneOK(t, repo, "sync")
+	code, stdout, stderr := repo.runGraphene(t, "sync")
+	if code != 0 {
+		t.Fatalf("graphene sync exited %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	wantStdout := "Retarget existing PRs after sync:\n  stack/two: stack/one -> main\n"
+	if !strings.Contains(stdout, wantStdout) {
+		t.Fatalf("stdout = %q, want it to contain %q", stdout, wantStdout)
+	}
 
 	main := runGit(t, repo.dir, "rev-parse", "main")
 	originMain := runGit(t, repo.dir, "rev-parse", "origin/main")
@@ -383,6 +390,47 @@ func TestSyncRebasesCurrentBranchAndDeletesAppliedIntermediateBranches(t *testin
 	}
 	if state.Pending != nil {
 		t.Fatalf("pending state was not cleared: %#v", state.Pending)
+	}
+}
+
+func TestSyncRejectsTrackedBranchWithExtraCommit(t *testing.T) {
+	repo := newTestRepo(t)
+
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	runGit(t, "", "init", "--bare", remote)
+	runGit(t, repo.dir, "remote", "add", "origin", remote)
+	runGit(t, repo.dir, "push", "-u", "origin", "main")
+
+	createStackBranch(t, repo, "one.txt", "one\n", "One")
+	createStackBranch(t, repo, "two.txt", "two\n", "Two")
+
+	runGit(t, repo.dir, "checkout", "stack/one")
+	writeFile(t, repo.dir, "comments.txt", "removed comments\n")
+	runGit(t, repo.dir, "add", ".")
+	runGit(t, repo.dir, "commit", "-m", "Comment cleanup")
+	beforeTwo := runGit(t, repo.dir, "rev-parse", "stack/two")
+
+	other := filepath.Join(t.TempDir(), "other")
+	runGit(t, "", "clone", "--branch", "main", remote, other)
+	runGit(t, other, "config", "user.name", "Graphene Test")
+	runGit(t, other, "config", "user.email", "graphene@example.test")
+	runGit(t, other, "config", "commit.gpgsign", "false")
+	writeFile(t, other, "one.txt", "one\n")
+	runGit(t, other, "add", ".")
+	runGit(t, other, "commit", "-m", "One (#1)")
+	runGit(t, other, "push", "origin", "main")
+
+	runGit(t, repo.dir, "checkout", "stack/two")
+	code, _, stderr := repo.runGraphene(t, "sync")
+	if code == 0 {
+		t.Fatal("graphene sync unexpectedly succeeded")
+	}
+	if !strings.Contains(stderr, `branch "stack/one" contains 2 commits on top of "main"`) {
+		t.Fatalf("stderr = %q", stderr)
+	}
+	afterTwo := runGit(t, repo.dir, "rev-parse", "stack/two")
+	if afterTwo != beforeTwo {
+		t.Fatalf("stack/two changed from %s to %s", beforeTwo, afterTwo)
 	}
 }
 
@@ -610,6 +658,59 @@ func TestContinueClearsPendingAfterConflict(t *testing.T) {
 
 	writeFile(t, repo.dir, "file.txt", "two\n")
 	runGit(t, repo.dir, "add", ".")
+	expectGrapheneOK(t, repo, "continue")
+
+	state := readState(t, repo.dir)
+	if state.Pending != nil {
+		t.Fatalf("pending state was not cleared: %#v", state.Pending)
+	}
+	parent := runGit(t, repo.dir, "rev-parse", "stack/two^")
+	branchOne := runGit(t, repo.dir, "rev-parse", "stack/one")
+	if parent != branchOne {
+		t.Fatalf("stack/two parent = %s, want stack/one %s", parent, branchOne)
+	}
+}
+
+func TestContinueRestoresRebaseStateAfterCommitCreationFailure(t *testing.T) {
+	repo := newTestRepo(t)
+
+	writeFile(t, repo.dir, "file.txt", "one\n")
+	runGit(t, repo.dir, "add", ".")
+	expectGrapheneOK(t, repo, "new", "-m", "One")
+
+	writeFile(t, repo.dir, "file.txt", "two\n")
+	runGit(t, repo.dir, "add", ".")
+	expectGrapheneOK(t, repo, "new", "-m", "Two")
+
+	runGit(t, repo.dir, "checkout", "stack/one")
+	writeFile(t, repo.dir, "file.txt", "amended\n")
+	runGit(t, repo.dir, "add", ".")
+	code, _, stderr := repo.runGraphene(t, "amend", "-m", "One amended")
+	if code == 0 {
+		t.Fatal("amend unexpectedly succeeded")
+	}
+	if stderr == "" {
+		t.Fatalf("expected conflict output on stderr")
+	}
+
+	hook := filepath.Join(repo.dir, ".git", "hooks", "prepare-commit-msg")
+	writeExecutable(t, hook, "#!/bin/sh\necho prepare-commit-msg blocked commit >&2\nexit 1\n")
+	writeFile(t, repo.dir, "file.txt", "two\n")
+	runGit(t, repo.dir, "add", ".")
+	code, _, stderr = repo.runGraphene(t, "continue")
+	if code == 0 {
+		t.Fatal("graphene continue unexpectedly succeeded")
+	}
+	if !strings.Contains(stderr, "prepare-commit-msg blocked commit") {
+		t.Fatalf("stderr = %q", stderr)
+	}
+	stoppedSHA := filepath.Join(repo.dir, ".git", "rebase-merge", "stopped-sha")
+	info, err := os.Stat(stoppedSHA)
+	if err != nil || !info.Mode().IsRegular() {
+		t.Fatal("stopped-sha was not restored")
+	}
+
+	writeExecutable(t, hook, "#!/bin/sh\nexit 0\n")
 	expectGrapheneOK(t, repo, "continue")
 
 	state := readState(t, repo.dir)
@@ -1098,15 +1199,28 @@ func assertNoGrapheneTmpBranches(t *testing.T, dir string) {
 func runGit(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 
+	code, stdout, stderr := runGitResult(t, dir, args...)
+	if code != 0 {
+		t.Fatalf("git %v exited %d\nstdout:\n%s\nstderr:\n%s", args, code, stdout, stderr)
+	}
+	return strings.TrimRight(stdout, "\n")
+}
+
+func runGitResult(t *testing.T, dir string, args ...string) (int, string, string) {
+	t.Helper()
+
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			return exitErr.ExitCode(), stdout.String(), stderr.String()
+		}
 		t.Fatalf("git %v failed: %v\nstdout:\n%s\nstderr:\n%s", args, err, stdout.String(), stderr.String())
 	}
-	return strings.TrimRight(stdout.String(), "\n")
+	return 0, stdout.String(), stderr.String()
 }
 
 func refExists(t *testing.T, dir, ref string) bool {
@@ -1133,6 +1247,17 @@ func writeFile(t *testing.T, dir, name, content string) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func writeExecutable(t *testing.T, path, content string) {
+	t.Helper()
+
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
 		t.Fatal(err)
 	}
 }
