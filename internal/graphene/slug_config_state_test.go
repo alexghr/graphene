@@ -123,7 +123,7 @@ func TestBranchesThroughCurrent(t *testing.T) {
 	}
 }
 
-func TestBranchesInConnectedStack(t *testing.T) {
+func TestBranchesThroughCurrentAndDescendants(t *testing.T) {
 	state := State{Stacks: []Stack{
 		{Base: "main", Branches: []string{"a", "b", "c"}},
 		{Base: "main", Branches: []string{"d", "e"}},
@@ -131,14 +131,25 @@ func TestBranchesInConnectedStack(t *testing.T) {
 		{Base: "other", Branches: []string{"x"}},
 	}}
 
-	want := []string{"a", "b", "c", "d", "e", "f"}
-	for _, current := range []string{"a", "c", "e", "f", "main"} {
-		if got := BranchesInConnectedStack(state, current); !reflect.DeepEqual(got, want) {
-			t.Fatalf("BranchesInConnectedStack(%q) = %#v, want %#v", current, got, want)
+	tests := []struct {
+		current string
+		want    []string
+	}{
+		{current: "main", want: []string{"a", "b", "c", "d", "e", "f"}},
+		{current: "a", want: []string{"a", "b", "c"}},
+		{current: "b", want: []string{"a", "b", "c"}},
+		{current: "c", want: []string{"a", "b", "c"}},
+		{current: "d", want: []string{"d", "e"}},
+		{current: "e", want: []string{"d", "e"}},
+		{current: "f", want: []string{"f"}},
+	}
+	for _, tt := range tests {
+		if got := BranchesThroughCurrentAndDescendants(state, tt.current); !reflect.DeepEqual(got, tt.want) {
+			t.Fatalf("BranchesThroughCurrentAndDescendants(%q) = %#v, want %#v", tt.current, got, tt.want)
 		}
 	}
-	if got := BranchesInConnectedStack(state, "loose"); !reflect.DeepEqual(got, []string{"loose"}) {
-		t.Fatalf("BranchesInConnectedStack(loose) = %#v", got)
+	if got := BranchesThroughCurrentAndDescendants(state, "loose"); !reflect.DeepEqual(got, []string{"loose"}) {
+		t.Fatalf("BranchesThroughCurrentAndDescendants(loose) = %#v", got)
 	}
 }
 
@@ -246,7 +257,7 @@ func TestParseArgs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sendOpts.remote != "origin" || !sendOpts.wholeStack || !sendOpts.dryRun {
+	if sendOpts.remote != "origin" || !sendOpts.stack || !sendOpts.dryRun {
 		t.Fatalf("parseSendArgs = %#v", sendOpts)
 	}
 
@@ -254,7 +265,7 @@ func TestParseArgs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sendOpts.remote != "origin" || !sendOpts.wholeStack || !sendOpts.dryRun {
+	if sendOpts.remote != "origin" || !sendOpts.stack || !sendOpts.dryRun {
 		t.Fatalf("parseSendArgs short flags = %#v", sendOpts)
 	}
 
@@ -262,7 +273,7 @@ func TestParseArgs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sendOpts.remote != "origin" || sendOpts.wholeStack || sendOpts.dryRun {
+	if sendOpts.remote != "origin" || sendOpts.stack || sendOpts.dryRun {
 		t.Fatalf("parseSendArgs positional remote = %#v", sendOpts)
 	}
 	force, err := parseForgetArgs([]string{"--force"})

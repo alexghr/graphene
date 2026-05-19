@@ -78,7 +78,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "No release metadata changes to commit."
           else
-            git commit -m "Release $TAG"
+            git commit -m "chore: Release $TAG"
             git push origin "HEAD:$REF"
           fi
 

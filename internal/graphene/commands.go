@@ -650,8 +650,8 @@ func (a *App) sendBranches(args []string, forceWithLease bool) error {
 		return fmt.Errorf("pending rebase exists; use graphene continue or graphene abort")
 	}
 	branches := BranchesThroughCurrent(state, current)
-	if opts.wholeStack {
-		branches = BranchesInConnectedStack(state, current)
+	if opts.stack {
+		branches = BranchesThroughCurrentAndDescendants(state, current)
 	}
 	if len(branches) == 0 {
 		return fmt.Errorf("no branch to send")
@@ -1127,9 +1127,9 @@ func parseForgetArgs(args []string) (bool, error) {
 }
 
 type sendOptions struct {
-	remote     string
-	wholeStack bool
-	dryRun     bool
+	remote string
+	stack  bool
+	dryRun bool
 }
 
 func parseSendArgs(args []string) (sendOptions, error) {
@@ -1139,7 +1139,7 @@ func parseSendArgs(args []string) (sendOptions, error) {
 
 		switch {
 		case arg == "-s" || arg == "--stack":
-			opts.wholeStack = true
+			opts.stack = true
 		case arg == "-n" || arg == "--dry-run":
 			opts.dryRun = true
 		case arg == "--remote":

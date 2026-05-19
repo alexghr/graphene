@@ -979,7 +979,7 @@ func TestSendRejectsGitPushFlags(t *testing.T) {
 	}
 }
 
-func TestSendfUsesSameBranchSetAsSendAndStackFlagPushesWholeStack(t *testing.T) {
+func TestSendfUsesSameBranchSetAsSendAndStackFlagPushesDescendants(t *testing.T) {
 	repo := newTestRepo(t)
 	createStackBranch(t, repo, "one.txt", "one\n", "One")
 	createStackBranch(t, repo, "two.txt", "two\n", "Two")
@@ -1022,6 +1022,31 @@ func TestSendfUsesSameBranchSetAsSendAndStackFlagPushesWholeStack(t *testing.T) 
 	if remoteThree != localThree {
 		t.Fatalf("remote stack/three = %s, want %s", remoteThree, localThree)
 	}
+}
+
+func TestSendStackDoesNotPushSiblingBranches(t *testing.T) {
+	repo := newTestRepo(t)
+	createStackBranch(t, repo, "one.txt", "one\n", "One")
+	createStackBranch(t, repo, "two.txt", "two\n", "Two")
+	runGit(t, repo.dir, "checkout", "stack/one")
+	createStackBranch(t, repo, "fork.txt", "fork\n", "Fork")
+
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	runGit(t, "", "init", "--bare", remote)
+	runGit(t, repo.dir, "remote", "add", "origin", remote)
+
+	runGit(t, repo.dir, "checkout", "stack/two")
+	expectGrapheneOK(t, repo, "send", "--stack", "origin")
+	for _, branch := range []string{"stack/one", "stack/two"} {
+		runGit(t, remote, "show-ref", "--verify", "refs/heads/"+branch)
+	}
+	if refExists(t, remote, "refs/heads/stack/fork") {
+		t.Fatal("stack/fork was pushed from sibling stack/two")
+	}
+
+	runGit(t, repo.dir, "checkout", "stack/one")
+	expectGrapheneOK(t, repo, "send", "--stack", "origin")
+	runGit(t, remote, "show-ref", "--verify", "refs/heads/stack/fork")
 }
 
 func TestSendPrintsCurrentBranchAndDependencyLinks(t *testing.T) {

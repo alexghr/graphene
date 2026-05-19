@@ -176,50 +176,67 @@ func BranchesThroughCurrent(s State, current string) []string {
 	return branches
 }
 
-func BranchesInConnectedStack(s State, current string) []string {
+// BranchesThroughCurrentAndDescendants returns the current dependency path plus
+// branches descended from current. If current is only a stack base, only its
+// descendant branches are returned.
+func BranchesThroughCurrentAndDescendants(s State, current string) []string {
 	if current == "" {
 		return nil
 	}
 
-	adjacent := map[string][]string{}
-	addEdge := func(a, b string) {
-		if a == "" || b == "" {
+	children := map[string][]string{}
+	edgeSeen := map[string]bool{}
+	addChild := func(parent, child string) {
+		if parent == "" || child == "" {
 			return
 		}
-		adjacent[a] = append(adjacent[a], b)
-		adjacent[b] = append(adjacent[b], a)
+		key := parent + "\x00" + child
+		if edgeSeen[key] {
+			return
+		}
+		edgeSeen[key] = true
+		children[parent] = append(children[parent], child)
 	}
 	for _, stack := range s.Stacks {
 		parent := stack.Base
 		for _, branch := range stack.Branches {
-			addEdge(parent, branch)
+			addChild(parent, branch)
 			parent = branch
 		}
 	}
-	if len(adjacent[current]) == 0 && !s.ContainsBranch(current) {
+
+	if len(children[current]) == 0 && !s.ContainsBranch(current) {
 		return []string{current}
 	}
 
-	seen := map[string]bool{current: true}
-	queue := []string{current}
-	for len(queue) > 0 {
-		name := queue[0]
-		queue = queue[1:]
-		for _, next := range adjacent[name] {
-			if seen[next] {
-				continue
-			}
-			seen[next] = true
-			queue = append(queue, next)
+	seen := map[string]bool{}
+	var branches []string
+	addBranch := func(branch string) {
+		if branch != "" && s.ContainsBranch(branch) && !seen[branch] {
+			branches = append(branches, branch)
+			seen[branch] = true
 		}
 	}
 
-	var branches []string
-	for _, name := range StateRefNames(s) {
-		if seen[name] && s.ContainsBranch(name) {
-			branches = append(branches, name)
+	for _, branch := range BranchesThroughCurrent(s, current) {
+		addBranch(branch)
+	}
+
+	var addDescendants func(string, map[string]bool)
+	addDescendants = func(branch string, visiting map[string]bool) {
+		if branch == "" || visiting[branch] {
+			return
+		}
+		visiting[branch] = true
+		defer delete(visiting, branch)
+
+		for _, child := range children[branch] {
+			addBranch(child)
+			addDescendants(child, visiting)
 		}
 	}
+	addDescendants(current, map[string]bool{})
+
 	if len(branches) == 0 && current != "" {
 		return []string{current}
 	}
