@@ -1,6 +1,6 @@
 ---
 name: graphene-stacked-prs
-description: Use when preparing stacked pull requests with the Graphene CLI, splitting work into reviewable branches, amending stacked branches, restacking, or pushing stacked PR branches for review.
+description: Use when preparing stacked pull requests with the Graphene CLI, splitting work into reviewable branches, walking stack branches, amending stacked branches, restacking, or pushing stacked PR branches for review.
 ---
 
 # Graphene Stacked PRs
@@ -33,13 +33,29 @@ git branch --show-current
 graphene graph
 ```
 
-Use the graph output to find the target branch, then switch explicitly:
+Use Graphene stack navigation for tracked branches:
+
+```sh
+graphene go --next
+graphene go --prev
+graphene go --top
+graphene go --bottom
+```
+
+Short flags are available as `-n`, `-p`, `-t`, and `-b`.
+
+When Graphene reports multiple possible branches, choose from the numbered list it prints and rerun with that selector:
+
+```sh
+graphene go --next 2
+graphene go -t2
+```
+
+If you need a branch outside Graphene's tracked stack graph, switch explicitly:
 
 ```sh
 git switch <branch>
 ```
-
-If the installed Graphene version supports stack navigation commands such as `graphene up` or `graphene down`, prefer those for adjacent branch movement after confirming them with `graphene help up` or `graphene help down`.
 
 ## Create A Stack
 

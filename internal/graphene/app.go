@@ -99,6 +99,12 @@ func (a *App) Run(args []string) int {
 				return 0
 			}
 			err = a.restack(args[2:])
+		case "go":
+			if helpArgs(args[2:]) {
+				a.commandUsage("go", a.stdout)
+				return 0
+			}
+			err = a.goBranch(args[2:])
 		case "graph":
 			if helpArgs(args[2:]) {
 				a.commandUsage("graph", a.stdout)
@@ -151,6 +157,7 @@ func (a *App) usage(w io.Writer) {
   graphene send [--remote <remote>] [--stack] [--dry-run]
   graphene sendf [--remote <remote>] [--stack] [--dry-run]
   graphene restack <base>
+  graphene go (--top|--bottom|--next|--prev) [number]
   graphene graph
   graphene version
 
@@ -210,6 +217,15 @@ options:
   -s, --stack            push the current dependency path and descendants
   -n, --dry-run          show what would be pushed without updating refs or upstreams`,
 		"restack": "usage: graphene restack <base>\n\nMove the current branch onto another branch or commit-ish, then restack dependent branches.",
+		"go": `usage: graphene go (--top|--bottom|--next|--prev) [number]
+
+Switch to another branch in the tracked stack graph.
+
+options:
+  -t, --top [number]     switch to a leaf descendant
+  -b, --bottom [number]  switch to the bottom branch in the current stack path
+  -n, --next [number]    switch to a direct child branch
+  -p, --prev [number]    switch to the direct parent branch`,
 		"graph":   "usage: graphene graph\n\nPrint the tracked stack graph.",
 		"version": "usage: graphene version\n\nPrint the Graphene version and Git version.",
 	}

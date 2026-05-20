@@ -3,15 +3,8 @@ package graphene
 import (
 	"fmt"
 	"io"
-	"sort"
 	"strings"
 )
-
-type graphNode struct {
-	Name     string
-	Current  bool
-	Children []*graphNode
-}
 
 func (a *App) graph(args []string) error {
 	if len(args) != 0 {
@@ -39,7 +32,8 @@ func WriteGraph(w io.Writer, state State, current string) error {
 }
 
 func RenderGraph(state State, current string) string {
-	roots := graphRoots(state, current)
+	graph := newStackGraph(state)
+	roots := graph.roots()
 	if len(roots) == 0 && state.Pending == nil {
 		return ""
 	}
@@ -49,7 +43,7 @@ func RenderGraph(state State, current string) string {
 		if i > 0 {
 			b.WriteByte('\n')
 		}
-		writeGraphNode(&b, root, "")
+		writeGraphNode(&b, graph, root, current, "")
 	}
 	if state.Pending != nil {
 		writePending(&b, state.Pending)
@@ -57,92 +51,43 @@ func RenderGraph(state State, current string) string {
 	return b.String()
 }
 
-func graphRoots(state State, current string) []*graphNode {
-	nodes := map[string]*graphNode{}
-	incoming := map[string]bool{}
-	var order []string
-	edgeSeen := map[string]bool{}
-
-	node := func(name string) *graphNode {
-		if existing := nodes[name]; existing != nil {
-			return existing
-		}
-		n := &graphNode{Name: name, Current: name == current}
-		nodes[name] = n
-		order = append(order, name)
-		return n
-	}
-	addEdge := func(parent, child string) {
-		if parent == "" || child == "" {
-			return
-		}
-		parentNode := node(parent)
-		childNode := node(child)
-		key := parent + "\x00" + child
-		if edgeSeen[key] {
-			return
-		}
-		edgeSeen[key] = true
-		parentNode.Children = append(parentNode.Children, childNode)
-		incoming[child] = true
-	}
-
-	for _, stack := range state.Stacks {
-		node(stack.Base)
-		parent := stack.Base
-		for _, branch := range stack.Branches {
-			addEdge(parent, branch)
-			parent = branch
-		}
-	}
-
-	var roots []*graphNode
-	for _, name := range order {
-		if !incoming[name] {
-			roots = append(roots, nodes[name])
-		}
-	}
-	sort.SliceStable(roots, func(i, j int) bool {
-		return roots[i].Name < roots[j].Name
-	})
-	return roots
-}
-
-func writeGraphNode(b *strings.Builder, node *graphNode, prefix string) {
+func writeGraphNode(b *strings.Builder, graph stackGraph, name, current, prefix string) {
 	b.WriteString(prefix)
-	b.WriteString(node.Name)
-	if node.Current {
+	b.WriteString(name)
+	if name == current {
 		b.WriteString(" *")
 	}
 	b.WriteByte('\n')
 
+	children := graph.children[name]
 	childPrefix := prefix + "  "
-	for i, child := range node.Children {
+	for i, child := range children {
 		connector := "|- "
 		nextPrefix := childPrefix + "|  "
-		if i == len(node.Children)-1 {
+		if i == len(children)-1 {
 			connector = "`- "
 			nextPrefix = childPrefix + "   "
 		}
-		writeGraphChild(b, child, childPrefix+connector, nextPrefix)
+		writeGraphChild(b, graph, child, current, childPrefix+connector, nextPrefix)
 	}
 }
 
-func writeGraphChild(b *strings.Builder, node *graphNode, linePrefix, childPrefix string) {
+func writeGraphChild(b *strings.Builder, graph stackGraph, name, current, linePrefix, childPrefix string) {
 	b.WriteString(linePrefix)
-	b.WriteString(node.Name)
-	if node.Current {
+	b.WriteString(name)
+	if name == current {
 		b.WriteString(" *")
 	}
 	b.WriteByte('\n')
-	for i, child := range node.Children {
+	children := graph.children[name]
+	for i, child := range children {
 		connector := "|- "
 		nextPrefix := childPrefix + "|  "
-		if i == len(node.Children)-1 {
+		if i == len(children)-1 {
 			connector = "`- "
 			nextPrefix = childPrefix + "   "
 		}
-		writeGraphChild(b, child, childPrefix+connector, nextPrefix)
+		writeGraphChild(b, graph, child, current, childPrefix+connector, nextPrefix)
 	}
 }
 

@@ -235,6 +235,57 @@ func TestBaseBranch(t *testing.T) {
 	}
 }
 
+func TestStackGraphCandidates(t *testing.T) {
+	state := State{Stacks: []Stack{
+		{Base: "main", Branches: []string{"one", "two", "three"}},
+		{Base: "one", Branches: []string{"fork", "fork-top"}},
+		{Base: "main", Branches: []string{"other"}},
+	}}
+	graph := newStackGraph(state)
+
+	tests := []struct {
+		current   string
+		direction goDirection
+		want      []string
+	}{
+		{current: "main", direction: goNext, want: []string{"one", "other"}},
+		{current: "one", direction: goNext, want: []string{"two", "fork"}},
+		{current: "one", direction: goTop, want: []string{"three", "fork-top"}},
+		{current: "main", direction: goTop, want: []string{"three", "fork-top", "other"}},
+		{current: "three", direction: goBottom, want: []string{"one"}},
+		{current: "main", direction: goBottom, want: []string{"one", "other"}},
+		{current: "fork", direction: goPrev, want: []string{"one"}},
+		{current: "one", direction: goPrev, want: []string{"main"}},
+		{current: "three", direction: goNext, want: nil},
+		{current: "one", direction: goBottom, want: nil},
+	}
+
+	for _, tt := range tests {
+		if got := graph.candidates(tt.current, tt.direction); !reflect.DeepEqual(got, tt.want) {
+			t.Fatalf("%s candidates from %q = %#v, want %#v", tt.direction, tt.current, got, tt.want)
+		}
+	}
+
+	target, err := goTarget(state, "one", goTop, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target != "fork-top" {
+		t.Fatalf("selected target = %q, want fork-top", target)
+	}
+	if _, err := goTarget(state, "one", goTop, 0); err == nil {
+		t.Fatal("goTarget accepted ambiguous top without selector")
+	}
+
+	rootState := State{Stacks: []Stack{
+		{Base: "z", Branches: []string{"z-one"}},
+		{Base: "a", Branches: []string{"a-one"}},
+	}}
+	if got := newStackGraph(rootState).roots(); !reflect.DeepEqual(got, []string{"a", "z"}) {
+		t.Fatalf("roots = %#v, want %#v", got, []string{"a", "z"})
+	}
+}
+
 func TestParseArgs(t *testing.T) {
 	newOpts, err := parseNewArgs([]string{"--branch=feature/exact", "--base=stack/parent", "--message=hi", "--no-verify", "--gpg-sign=key", "--no-gpg-sign"})
 	if err != nil {
@@ -284,6 +335,34 @@ func TestParseArgs(t *testing.T) {
 	if sendOpts.remote != "origin" || sendOpts.stack || sendOpts.dryRun {
 		t.Fatalf("parseSendArgs positional remote = %#v", sendOpts)
 	}
+	goOpts, err := parseGoArgs([]string{"--next", "2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if goOpts.direction != goNext || goOpts.selector != 2 {
+		t.Fatalf("parseGoArgs --next = %#v", goOpts)
+	}
+	goOpts, err = parseGoArgs([]string{"--bottom=3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if goOpts.direction != goBottom || goOpts.selector != 3 {
+		t.Fatalf("parseGoArgs --bottom = %#v", goOpts)
+	}
+	goOpts, err = parseGoArgs([]string{"-t"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if goOpts.direction != goTop || goOpts.selector != 0 {
+		t.Fatalf("parseGoArgs -t = %#v", goOpts)
+	}
+	goOpts, err = parseGoArgs([]string{"-n2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if goOpts.direction != goNext || goOpts.selector != 2 {
+		t.Fatalf("parseGoArgs -n2 = %#v", goOpts)
+	}
 	force, err := parseForgetArgs([]string{"--force"})
 	if err != nil {
 		t.Fatal(err)
@@ -306,6 +385,18 @@ func TestParseArgs(t *testing.T) {
 	}
 	if _, err := parseSendArgs([]string{"--force-with-lease"}); err == nil {
 		t.Fatal("parseSendArgs accepted force flag")
+	}
+	if _, err := parseGoArgs(nil); err == nil {
+		t.Fatal("parseGoArgs accepted no direction")
+	}
+	if _, err := parseGoArgs([]string{"--next", "--top"}); err == nil {
+		t.Fatal("parseGoArgs accepted multiple directions")
+	}
+	if _, err := parseGoArgs([]string{"--next", "0"}); err == nil {
+		t.Fatal("parseGoArgs accepted selector 0")
+	}
+	if _, err := parseGoArgs([]string{"--next="}); err == nil {
+		t.Fatal("parseGoArgs accepted empty inline selector")
 	}
 	if _, err := parseNewArgs([]string{"--amend", "-m", "bad"}); err == nil {
 		t.Fatal("parseNewArgs accepted --amend")

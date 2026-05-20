@@ -39,6 +39,13 @@ Inspect the stack:
 gn graph
 ```
 
+Move through the stack:
+
+```
+gn go --next
+gn go --top 2
+```
+
 Push the current branch and the branches it depends on:
 
 ```

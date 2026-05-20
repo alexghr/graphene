@@ -1227,6 +1227,69 @@ func TestGraphDisplaysForkedStack(t *testing.T) {
 	}
 }
 
+func TestGoWalksForkedStack(t *testing.T) {
+	repo := newTestRepo(t)
+	createStackBranch(t, repo, "one.txt", "one\n", "One")
+	createStackBranch(t, repo, "two.txt", "two\n", "Two")
+
+	runGit(t, repo.dir, "checkout", "stack/one")
+	createStackBranch(t, repo, "fork.txt", "fork\n", "Fork")
+
+	expectGrapheneOK(t, repo, "go", "--prev")
+	if got := currentBranch(t, repo.dir); got != "stack/one" {
+		t.Fatalf("branch = %q, want stack/one", got)
+	}
+
+	code, _, stderr := repo.runGraphene(t, "go", "--next")
+	if code == 0 {
+		t.Fatal("graphene go --next unexpectedly succeeded")
+	}
+	wantNext := "" +
+		"multiple branches match --next; rerun with --next <number>:\n" +
+		"possible branches:\n" +
+		"  1. stack/two\n" +
+		"  2. stack/fork\n"
+	if stderr != wantNext {
+		t.Fatalf("stderr = %q, want %q", stderr, wantNext)
+	}
+	if got := currentBranch(t, repo.dir); got != "stack/one" {
+		t.Fatalf("branch = %q, want stack/one", got)
+	}
+
+	code, _, stderr = repo.runGraphene(t, "go", "--top")
+	if code == 0 {
+		t.Fatal("graphene go --top unexpectedly succeeded")
+	}
+	wantTop := "" +
+		"multiple branches match --top; rerun with --top <number>:\n" +
+		"possible branches:\n" +
+		"  1. stack/two\n" +
+		"  2. stack/fork\n"
+	if stderr != wantTop {
+		t.Fatalf("stderr = %q, want %q", stderr, wantTop)
+	}
+
+	expectGrapheneOK(t, repo, "go", "--next", "2")
+	if got := currentBranch(t, repo.dir); got != "stack/fork" {
+		t.Fatalf("branch = %q, want stack/fork", got)
+	}
+
+	expectGrapheneOK(t, repo, "go", "--bottom")
+	if got := currentBranch(t, repo.dir); got != "stack/one" {
+		t.Fatalf("branch = %q, want stack/one", got)
+	}
+
+	expectGrapheneOK(t, repo, "go", "--top", "1")
+	if got := currentBranch(t, repo.dir); got != "stack/two" {
+		t.Fatalf("branch = %q, want stack/two", got)
+	}
+
+	expectGrapheneOK(t, repo, "go", "-b")
+	if got := currentBranch(t, repo.dir); got != "stack/one" {
+		t.Fatalf("branch = %q, want stack/one", got)
+	}
+}
+
 func createStackBranch(t *testing.T, repo testRepo, path, content, message string) {
 	t.Helper()
 	writeFile(t, repo.dir, path, content)
