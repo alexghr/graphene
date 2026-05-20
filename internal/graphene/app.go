@@ -161,11 +161,12 @@ func (a *App) commandUsage(command string, w io.Writer) bool {
 	usages := map[string]string{
 		"new": `usage: graphene new [options]
 
-Create a new branch from the current branch, commit staged changes, and record it in the stack.
+Commit staged changes on a new branch, or on the current branch with --reuse-current, and record it in the stack.
 
 options:
   -b, --branch <branch>      use an explicit branch name
       --base <branch>        record the new branch as a child of this branch
+      --reuse-current        commit on the current branch instead of creating one
   -m, --message <message>    use the given commit message
       --no-verify            bypass commit hooks
       --gpg-sign[=<key-id>]  GPG-sign the commit

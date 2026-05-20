@@ -27,6 +27,21 @@ func (a *App) newBranch(args []string) error {
 		return fmt.Errorf("pending rebase exists; use graphene continue or graphene abort")
 	}
 
+	if opts.reuseCurrent {
+		if opts.branch != "" {
+			return fmt.Errorf("graphene new --reuse-current cannot use --branch")
+		}
+		if opts.base == "" {
+			return fmt.Errorf("graphene new --reuse-current requires --base")
+		}
+		if opts.base == current {
+			return fmt.Errorf("graphene new --reuse-current cannot use current branch %q as base", current)
+		}
+		if StateContainsName(state, current) {
+			return fmt.Errorf("current branch %q is already recorded in graphene state", current)
+		}
+	}
+
 	recordBase := current
 	if opts.base != "" {
 		if err := a.validateNewBase(opts.base); err != nil {
@@ -38,7 +53,9 @@ func (a *App) newBranch(args []string) error {
 	branch := opts.branch
 	temp := false
 	var cfg Config
-	if branch == "" {
+	if opts.reuseCurrent {
+		branch = current
+	} else if branch == "" {
 		cfg, err = LoadConfig(a.getenv)
 		if err != nil {
 			return err
@@ -50,13 +67,17 @@ func (a *App) newBranch(args []string) error {
 		temp = true
 	}
 
-	if err := a.git.Run("switch", "-c", branch); err != nil {
-		return err
+	if !opts.reuseCurrent {
+		if err := a.git.Run("switch", "-c", branch); err != nil {
+			return err
+		}
 	}
 
 	commitGitArgs := append([]string{"commit"}, opts.commitArgs...)
 	if err := a.git.Run(commitGitArgs...); err != nil {
-		a.cleanupFailedCommit(current, branch)
+		if !opts.reuseCurrent {
+			a.cleanupFailedCommit(current, branch)
+		}
 		return err
 	}
 
@@ -1015,9 +1036,10 @@ func (a *App) validateNewBase(base string) error {
 }
 
 type commitOptions struct {
-	branch     string
-	base       string
-	commitArgs []string
+	branch       string
+	base         string
+	reuseCurrent bool
+	commitArgs   []string
 }
 
 func parseNewArgs(args []string) (commitOptions, error) {
@@ -1081,6 +1103,14 @@ func parseCommitOptions(args []string, allowBranch bool) (commitOptions, error) 
 			if opts.base == "" {
 				return opts, fmt.Errorf("missing base after --base")
 			}
+		case arg == "--reuse-current":
+			if !allowBranch {
+				return opts, fmt.Errorf("graphene amend does not support --reuse-current")
+			}
+			if opts.reuseCurrent {
+				return opts, fmt.Errorf("reuse-current specified more than once")
+			}
+			opts.reuseCurrent = true
 		case arg == "-m" || arg == "--message":
 			if i+1 >= len(args) {
 				return opts, fmt.Errorf("missing message after %s", arg)
@@ -1108,7 +1138,7 @@ func parseCommitOptions(args []string, allowBranch bool) (commitOptions, error) 
 func unsupportedCommitArg(arg string, allowBranch bool) error {
 	supported := "-m/--message, --no-verify, --gpg-sign, and --no-gpg-sign"
 	if allowBranch {
-		supported = "-b/--branch, --base, " + supported
+		supported = "-b/--branch, --base, --reuse-current, " + supported
 	}
 	return fmt.Errorf("unsupported argument %q; supported commit options are %s", arg, supported)
 }

@@ -160,6 +160,88 @@ func TestCommitRecordsExplicitBaseBranch(t *testing.T) {
 	}
 }
 
+func TestCommitReusesCurrentBranchWithExplicitBase(t *testing.T) {
+	repo := newTestRepo(t)
+	baseHead := runGit(t, repo.dir, "rev-parse", "HEAD")
+	runGit(t, repo.dir, "checkout", "-b", "merge-train/spartan")
+	runGit(t, repo.dir, "checkout", "-b", "foo")
+
+	writeFile(t, repo.dir, "foo.txt", "foo\n")
+	runGit(t, repo.dir, "add", ".")
+	expectGrapheneOK(t, repo, "new", "--reuse-current", "--base", "merge-train/spartan", "-m", "Foo")
+
+	if got := currentBranch(t, repo.dir); got != "foo" {
+		t.Fatalf("branch = %q", got)
+	}
+	if got := runGit(t, repo.dir, "rev-parse", "merge-train/spartan"); got != baseHead {
+		t.Fatalf("base ref = %q, want %q", got, baseHead)
+	}
+	if got := runGit(t, repo.dir, "rev-list", "--count", "merge-train/spartan..foo"); got != "1" {
+		t.Fatalf("commit count = %q, want 1", got)
+	}
+
+	state := readState(t, repo.dir)
+	want := []Stack{{Base: "merge-train/spartan", Branches: []string{"foo"}}}
+	if !reflect.DeepEqual(state.Stacks, want) {
+		t.Fatalf("stacks = %#v, want %#v", state.Stacks, want)
+	}
+}
+
+func TestCommitReuseCurrentRequiresBase(t *testing.T) {
+	repo := newTestRepo(t)
+	runGit(t, repo.dir, "checkout", "-b", "foo")
+	oldHead := runGit(t, repo.dir, "rev-parse", "HEAD")
+
+	writeFile(t, repo.dir, "foo.txt", "foo\n")
+	runGit(t, repo.dir, "add", ".")
+	code, _, stderr := repo.runGraphene(t, "new", "--reuse-current", "-m", "Foo")
+	if code == 0 {
+		t.Fatal("graphene new --reuse-current unexpectedly succeeded")
+	}
+	if !strings.Contains(stderr, "requires --base") {
+		t.Fatalf("stderr = %q", stderr)
+	}
+	if got := currentBranch(t, repo.dir); got != "foo" {
+		t.Fatalf("branch = %q, want foo", got)
+	}
+	if got := runGit(t, repo.dir, "rev-parse", "HEAD"); got != oldHead {
+		t.Fatalf("HEAD = %q, want %q", got, oldHead)
+	}
+	state := readState(t, repo.dir)
+	if len(state.Stacks) != 0 {
+		t.Fatalf("stacks = %#v, want none", state.Stacks)
+	}
+}
+
+func TestCommitReuseCurrentRejectsRecordedBranchBeforeCommit(t *testing.T) {
+	repo := newTestRepo(t)
+	createStackBranch(t, repo, "one.txt", "one\n", "One")
+	runGit(t, repo.dir, "branch", "alias/one")
+	oldHead := runGit(t, repo.dir, "rev-parse", "HEAD")
+
+	writeFile(t, repo.dir, "two.txt", "two\n")
+	runGit(t, repo.dir, "add", ".")
+	code, _, stderr := repo.runGraphene(t, "new", "--reuse-current", "--base", "alias/one", "-m", "Two")
+	if code == 0 {
+		t.Fatal("graphene new --reuse-current unexpectedly succeeded")
+	}
+	if !strings.Contains(stderr, "already recorded") {
+		t.Fatalf("stderr = %q", stderr)
+	}
+	if got := currentBranch(t, repo.dir); got != "stack/one" {
+		t.Fatalf("branch = %q, want stack/one", got)
+	}
+	if got := runGit(t, repo.dir, "rev-parse", "HEAD"); got != oldHead {
+		t.Fatalf("HEAD = %q, want %q", got, oldHead)
+	}
+
+	state := readState(t, repo.dir)
+	want := []Stack{{Base: "main", Branches: []string{"stack/one"}}}
+	if !reflect.DeepEqual(state.Stacks, want) {
+		t.Fatalf("stacks = %#v, want %#v", state.Stacks, want)
+	}
+}
+
 func TestCommitRejectsExplicitBaseAtDifferentCommit(t *testing.T) {
 	repo := newTestRepo(t)
 	createStackBranch(t, repo, "one.txt", "one\n", "One")

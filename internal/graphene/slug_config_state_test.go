@@ -245,6 +245,14 @@ func TestParseArgs(t *testing.T) {
 		t.Fatalf("parseNewArgs = %#v", newOpts)
 	}
 
+	reuseOpts, err := parseNewArgs([]string{"--reuse-current", "--base", "main", "-m", "hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reuseOpts.reuseCurrent || reuseOpts.base != "main" || !reflect.DeepEqual(reuseOpts.commitArgs, []string{"-m", "hi"}) {
+		t.Fatalf("parseNewArgs reuse-current = %#v", reuseOpts)
+	}
+
 	amendArgs, err := parseAmendArgs([]string{"-m", "hi", "--gpg-sign"})
 	if err != nil {
 		t.Fatal(err)
@@ -310,6 +318,12 @@ func TestParseArgs(t *testing.T) {
 	}
 	if _, err := parseAmendArgs([]string{"--base", "stack/parent"}); err == nil {
 		t.Fatal("parseAmendArgs accepted base flag")
+	}
+	if _, err := parseAmendArgs([]string{"--reuse-current"}); err == nil {
+		t.Fatal("parseAmendArgs accepted reuse-current flag")
+	}
+	if _, err := parseNewArgs([]string{"--reuse-current", "--reuse-current"}); err == nil {
+		t.Fatal("parseNewArgs accepted duplicate reuse-current flag")
 	}
 }
 
