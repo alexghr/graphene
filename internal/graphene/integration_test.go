@@ -645,6 +645,49 @@ func TestSyncUsesFetchedBaseWhenBaseCheckedOutInAnotherWorktree(t *testing.T) {
 	}
 }
 
+func TestSyncRejectsCheckedOutDescendantBeforeMovingAncestor(t *testing.T) {
+	repo := newTestRepo(t)
+
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	runGit(t, "", "init", "--bare", remote)
+	runGit(t, repo.dir, "remote", "add", "origin", remote)
+	runGit(t, repo.dir, "push", "-u", "origin", "main")
+
+	createStackBranch(t, repo, "one.txt", "one\n", "One")
+	createStackBranch(t, repo, "two.txt", "two\n", "Two")
+	createStackBranch(t, repo, "three.txt", "three\n", "Three")
+
+	other := filepath.Join(t.TempDir(), "other")
+	runGit(t, "", "clone", "--branch", "main", remote, other)
+	runGit(t, other, "config", "user.name", "Graphene Test")
+	runGit(t, other, "config", "user.email", "graphene@example.test")
+	runGit(t, other, "config", "commit.gpgsign", "false")
+	writeFile(t, other, "base.txt", "base update\n")
+	runGit(t, other, "add", ".")
+	runGit(t, other, "commit", "-m", "Base update")
+	runGit(t, other, "push", "origin", "main")
+
+	descendantWorktree := filepath.Join(t.TempDir(), "descendant-worktree")
+	runGit(t, repo.dir, "worktree", "add", descendantWorktree, "stack/two")
+	runGit(t, repo.dir, "switch", "stack/one")
+
+	beforeOne := runGit(t, repo.dir, "rev-parse", "stack/one")
+	code, _, stderr := repo.runGraphene(t, "sync")
+	if code == 0 {
+		t.Fatal("graphene sync unexpectedly succeeded")
+	}
+	if !strings.Contains(stderr, `branch "stack/two" is checked out in another worktree`) {
+		t.Fatalf("stderr = %q", stderr)
+	}
+	afterOne := runGit(t, repo.dir, "rev-parse", "stack/one")
+	if afterOne != beforeOne {
+		t.Fatalf("stack/one changed from %s to %s", beforeOne, afterOne)
+	}
+	if got := runGit(t, descendantWorktree, "status", "--porcelain"); got != "" {
+		t.Fatalf("descendant worktree status = %q, want clean", got)
+	}
+}
+
 func TestSyncDeletesAppliedStackWhenBaseCheckedOutInAnotherWorktree(t *testing.T) {
 	repo := newTestRepo(t)
 

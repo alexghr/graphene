@@ -139,6 +139,9 @@ func (a *App) amend(args []string) error {
 		if dirty {
 			return fmt.Errorf("unstaged changes would prevent restacking; stash or commit them before graphene amend")
 		}
+		if err := a.validateRebaseOpsUpdateable("amend", current, state, oldRefs, ops); err != nil {
+			return err
+		}
 	}
 
 	commitGitArgs := append([]string{"commit", "--amend"}, commitArgs...)
@@ -228,6 +231,9 @@ func (a *App) restack(args []string) error {
 		return err
 	}
 	ops = append(ops, restackOps...)
+	if err := a.validateRebaseOpsUpdateable("restack", current, nextState, oldRefs, ops); err != nil {
+		return err
+	}
 
 	state.Pending = &Pending{
 		Operation:    "restack",
@@ -611,6 +617,9 @@ func (a *App) sync(args []string) error {
 		return err
 	}
 	ops = append(ops, restackOps...)
+	if err := a.validateRebaseOpsUpdateable("sync", current, nextState, oldRefs, ops); err != nil {
+		return err
+	}
 
 	if len(ops) == 0 {
 		if returnBranch != "" {
@@ -926,6 +935,62 @@ func (a *App) validateStackShape(stack Stack) error {
 			return fmt.Errorf("branch %q contains %d commits on top of %q; Graphene expects one commit per stack branch. squash or drop the extra commits before graphene sync", branch, count, parent)
 		}
 		parent = branch
+	}
+	return nil
+}
+
+func (a *App) validateRebaseOpsUpdateable(operation, current string, state State, oldRefs map[string]string, ops []RebaseOp) error {
+	if len(ops) == 0 {
+		return nil
+	}
+
+	checkedOut := map[string]bool{}
+	for _, op := range ops {
+		topRef := oldRefs[op.Top]
+		if topRef == "" {
+			var err error
+			topRef, err = a.git.Output("rev-parse", "--verify", op.Top+"^{commit}")
+			if err != nil {
+				return err
+			}
+		}
+
+		for _, branch := range StateRefNames(state) {
+			if branch == current {
+				continue
+			}
+			ref := oldRefs[branch]
+			if ref == "" || ref == op.Upstream {
+				continue
+			}
+
+			inRange, err := a.isAncestor(op.Upstream, ref)
+			if err != nil {
+				return err
+			}
+			if !inRange {
+				continue
+			}
+			inRange, err = a.isAncestor(ref, topRef)
+			if err != nil {
+				return err
+			}
+			if !inRange {
+				continue
+			}
+
+			isCheckedOut, ok := checkedOut[branch]
+			if !ok {
+				isCheckedOut, err = a.git.BranchCheckedOut(branch)
+				if err != nil {
+					return err
+				}
+				checkedOut[branch] = isCheckedOut
+			}
+			if isCheckedOut {
+				return fmt.Errorf("branch %q is checked out in another worktree; switch that worktree away from the branch before graphene %s", branch, operation)
+			}
+		}
 	}
 	return nil
 }
