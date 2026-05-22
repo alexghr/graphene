@@ -136,7 +136,13 @@ func TestSkillWritesStdoutAndOutFile(t *testing.T) {
 	}
 
 	out := filepath.Join(repo.dir, "nested", "SKILL.md")
-	expectGrapheneOK(t, repo, "skill", "--out", out)
+	code, stdout, stderr = repo.runGraphene(t, "skill", "--out", out)
+	if code != 0 {
+		t.Fatalf("graphene skill --out exited %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if stdout != "Wrote Graphene skill to "+out+"\n" || stderr != "" {
+		t.Fatalf("unexpected --out output\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
+	}
 	data, err := os.ReadFile(out)
 	if err != nil {
 		t.Fatal(err)
@@ -164,10 +170,10 @@ func TestSkillShortcutsWriteCommonAgentPaths(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("graphene skill --codex exited %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
-	if stdout != "" || stderr != "" {
+	codexSkill := filepath.Join(home, ".codex", "skills", "graphene-stacked-prs", "SKILL.md")
+	if stdout != "Wrote Graphene skill to "+codexSkill+"\n" || stderr != "" {
 		t.Fatalf("unexpected output\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
 	}
-	codexSkill := filepath.Join(home, ".codex", "skills", "graphene-stacked-prs", "SKILL.md")
 	data, err := os.ReadFile(codexSkill)
 	if err != nil {
 		t.Fatal(err)
@@ -180,10 +186,10 @@ func TestSkillShortcutsWriteCommonAgentPaths(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("graphene skill --claude exited %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
-	if stdout != "" || stderr != "" {
+	claudeSkill := filepath.Join(home, ".claude", "skills", "graphene-stacked-prs", "SKILL.md")
+	if stdout != "Wrote Graphene skill to "+claudeSkill+"\n" || stderr != "" {
 		t.Fatalf("unexpected output\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
 	}
-	claudeSkill := filepath.Join(home, ".claude", "skills", "graphene-stacked-prs", "SKILL.md")
 	data, err = os.ReadFile(claudeSkill)
 	if err != nil {
 		t.Fatal(err)

@@ -1424,7 +1424,11 @@ func (a *App) skill(args []string) error {
 	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(out, []byte(graphenestackedprs.Content), 0o644)
+	if err := os.WriteFile(out, []byte(graphenestackedprs.Content), 0o644); err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(a.stdout, "Wrote Graphene skill to %s\n", out)
+	return err
 }
 
 func (a *App) skillOutPath(opts skillOptions) (string, error) {
