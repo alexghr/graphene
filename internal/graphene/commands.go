@@ -690,7 +690,10 @@ func (a *App) squashCommitArgs(opts squashOptions, branches []string) ([]string,
 		_ = os.Remove(path)
 	}
 	args = append(args, opts.commitArgs...)
-	args = append(args, "--edit", "-F", path)
+	if !opts.noEdit {
+		args = append(args, "--edit")
+	}
+	args = append(args, "-F", path)
 	return args, cleanup, nil
 }
 
@@ -1870,6 +1873,7 @@ type squashOptions struct {
 	count      int
 	commitArgs []string
 	messageSet bool
+	noEdit     bool
 }
 
 func parseNewArgs(args []string) (commitOptions, error) {
@@ -1932,12 +1936,15 @@ func parseSquashArgs(args []string) (squashOptions, error) {
 		case strings.HasPrefix(arg, "--message="):
 			opts.commitArgs = append(opts.commitArgs, arg)
 			opts.messageSet = true
+		case arg == "--no-edit":
+			opts.commitArgs = append(opts.commitArgs, arg)
+			opts.noEdit = true
 		case arg == "--no-verify":
 			opts.commitArgs = append(opts.commitArgs, arg)
 		case arg == "--gpg-sign" || strings.HasPrefix(arg, "--gpg-sign=") || arg == "--no-gpg-sign":
 			opts.commitArgs = append(opts.commitArgs, arg)
 		default:
-			return opts, fmt.Errorf("unsupported argument %q; supported squash options are -c/--count, -m/--message, --no-verify, --gpg-sign, and --no-gpg-sign", arg)
+			return opts, fmt.Errorf("unsupported argument %q; supported squash options are -c/--count, -m/--message, --no-edit, --no-verify, --gpg-sign, and --no-gpg-sign", arg)
 		}
 	}
 	return opts, nil
@@ -2031,6 +2038,8 @@ func parseCommitOptions(args []string, allowBranch bool) (commitOptions, error) 
 			i++
 		case strings.HasPrefix(arg, "--message="):
 			opts.commitArgs = append(opts.commitArgs, arg)
+		case arg == "--no-edit":
+			opts.commitArgs = append(opts.commitArgs, arg)
 		case arg == "--no-verify":
 			opts.commitArgs = append(opts.commitArgs, arg)
 		case arg == "--gpg-sign" || strings.HasPrefix(arg, "--gpg-sign=") || arg == "--no-gpg-sign":
@@ -2048,7 +2057,7 @@ func parseCommitOptions(args []string, allowBranch bool) (commitOptions, error) 
 }
 
 func unsupportedCommitArg(arg string, allowBranch bool) error {
-	supported := "-m/--message, --no-verify, --gpg-sign, and --no-gpg-sign"
+	supported := "-m/--message, --no-edit, --no-verify, --gpg-sign, and --no-gpg-sign"
 	if allowBranch {
 		supported = "-b/--branch, --base, --reuse-current, " + supported
 	}

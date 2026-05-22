@@ -287,11 +287,11 @@ func TestStackGraphCandidates(t *testing.T) {
 }
 
 func TestParseArgs(t *testing.T) {
-	newOpts, err := parseNewArgs([]string{"--branch=feature/exact", "--base=stack/parent", "--message=hi", "--no-verify", "--gpg-sign=key", "--no-gpg-sign"})
+	newOpts, err := parseNewArgs([]string{"--branch=feature/exact", "--base=stack/parent", "--message=hi", "--no-edit", "--no-verify", "--gpg-sign=key", "--no-gpg-sign"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantCommitArgs := []string{"--message=hi", "--no-verify", "--gpg-sign=key", "--no-gpg-sign"}
+	wantCommitArgs := []string{"--message=hi", "--no-edit", "--no-verify", "--gpg-sign=key", "--no-gpg-sign"}
 	if newOpts.branch != "feature/exact" || newOpts.base != "stack/parent" || !reflect.DeepEqual(newOpts.commitArgs, wantCommitArgs) {
 		t.Fatalf("parseNewArgs = %#v", newOpts)
 	}
@@ -304,12 +304,20 @@ func TestParseArgs(t *testing.T) {
 		t.Fatalf("parseNewArgs reuse-current = %#v", reuseOpts)
 	}
 
-	amendArgs, err := parseAmendArgs([]string{"-m", "hi", "--gpg-sign"})
+	amendArgs, err := parseAmendArgs([]string{"-m", "hi", "--no-edit", "--gpg-sign"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(amendArgs, []string{"-m", "hi", "--gpg-sign"}) {
+	if !reflect.DeepEqual(amendArgs, []string{"-m", "hi", "--no-edit", "--gpg-sign"}) {
 		t.Fatalf("parseAmendArgs = %#v", amendArgs)
+	}
+
+	squashOpts, err := parseSquashArgs([]string{"-c3", "--message=combined", "--no-edit", "--no-verify"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if squashOpts.count != 3 || !squashOpts.messageSet || !squashOpts.noEdit || !reflect.DeepEqual(squashOpts.commitArgs, []string{"--message=combined", "--no-edit", "--no-verify"}) {
+		t.Fatalf("parseSquashArgs = %#v", squashOpts)
 	}
 
 	sendOpts, err := parseSendArgs([]string{"--stack", "--remote", "origin", "--dry-run"})
@@ -403,6 +411,12 @@ func TestParseArgs(t *testing.T) {
 	}
 	if _, err := parseNewArgs([]string{"--signoff", "-m", "bad"}); err == nil {
 		t.Fatal("parseNewArgs accepted unsupported commit flag")
+	}
+	if _, err := parseSquashArgs([]string{"--count", "1"}); err == nil {
+		t.Fatal("parseSquashArgs accepted count 1")
+	}
+	if _, err := parseSquashArgs([]string{"--signoff"}); err == nil {
+		t.Fatal("parseSquashArgs accepted unsupported commit flag")
 	}
 	if _, err := parseAmendArgs([]string{"--branch", "feature/bad"}); err == nil {
 		t.Fatal("parseAmendArgs accepted branch flag")

@@ -141,6 +141,21 @@ func TestCommitNoVerifyBypassesHook(t *testing.T) {
 	}
 }
 
+func TestCommitNoEditIsPassedToGitCommit(t *testing.T) {
+	repo := newTestRepo(t)
+
+	writeFile(t, repo.dir, "one.txt", "one\n")
+	runGit(t, repo.dir, "add", ".")
+	expectGrapheneOK(t, repo, "new", "--no-edit", "-m", "One")
+
+	if got := currentBranch(t, repo.dir); got != "stack/one" {
+		t.Fatalf("branch = %q", got)
+	}
+	if got := runGit(t, repo.dir, "log", "-1", "--format=%s"); got != "One" {
+		t.Fatalf("subject = %q, want One", got)
+	}
+}
+
 func TestCommitRecordsExplicitBaseBranch(t *testing.T) {
 	repo := newTestRepo(t)
 	createStackBranch(t, repo, "one.txt", "one\n", "One")
@@ -427,7 +442,7 @@ func TestSquashDefaultIntoParentRestacksDescendants(t *testing.T) {
 	createStackBranch(t, repo, "fork.txt", "fork\n", "Fork")
 	runGit(t, repo.dir, "checkout", "stack/two")
 
-	expectGrapheneOK(t, repo, "squash")
+	expectGrapheneOK(t, repo, "squash", "--no-edit")
 
 	if got := currentBranch(t, repo.dir); got != "stack/one" {
 		t.Fatalf("branch = %q, want stack/one", got)
@@ -447,6 +462,9 @@ func TestSquashDefaultIntoParentRestacksDescendants(t *testing.T) {
 	}
 	if got := runGit(t, repo.dir, "show", "stack/one:two.txt"); got != "two" {
 		t.Fatalf("stack/one:two.txt = %q, want two", got)
+	}
+	if got := runGit(t, repo.dir, "log", "-1", "--format=%B", "stack/one"); !strings.Contains(got, "Squashed commits:\n\n- Two") {
+		t.Fatalf("stack/one message = %q, want generated squash message", got)
 	}
 	if refFileExists(t, repo.dir, "stack/one:three.txt") {
 		t.Fatal("stack/one unexpectedly contains three.txt")
@@ -580,6 +598,22 @@ func TestAmendRestacksBaseBranch(t *testing.T) {
 	main := runGit(t, repo.dir, "rev-parse", "main")
 	if parent != main {
 		t.Fatalf("stack/one parent = %s, want main %s", parent, main)
+	}
+}
+
+func TestAmendNoEditPreservesCommitMessage(t *testing.T) {
+	repo := newTestRepo(t)
+	createStackBranch(t, repo, "one.txt", "one\n", "One")
+
+	writeFile(t, repo.dir, "one.txt", "one amended\n")
+	runGit(t, repo.dir, "add", ".")
+	expectGrapheneOK(t, repo, "amend", "--no-edit")
+
+	if got := runGit(t, repo.dir, "log", "-1", "--format=%s"); got != "One" {
+		t.Fatalf("subject = %q, want One", got)
+	}
+	if got := runGit(t, repo.dir, "show", "HEAD:one.txt"); got != "one amended" {
+		t.Fatalf("one.txt = %q, want one amended", got)
 	}
 }
 

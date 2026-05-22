@@ -189,6 +189,7 @@ options:
       --base <branch>        record the new branch as a child of this branch
       --reuse-current        commit on the current branch instead of creating one
   -m, --message <message>    use the given commit message
+      --no-edit              use the selected commit message without opening an editor
       --no-verify            bypass commit hooks
       --gpg-sign[=<key-id>]  GPG-sign the commit
       --no-gpg-sign          do not GPG-sign the commit`,
@@ -198,6 +199,7 @@ Amend the current commit and restack dependent branches.
 
 options:
   -m, --message <message>    use the given commit message
+      --no-edit              use the selected commit message without opening an editor
       --no-verify            bypass commit hooks
       --gpg-sign[=<key-id>]  GPG-sign the commit
       --no-gpg-sign          do not GPG-sign the commit`,
@@ -217,6 +219,7 @@ Squash the current branch and one or more direct ancestors into the bottom branc
 options:
   -c, --count <n>            number of branches to squash, including the current branch (default: 2)
   -m, --message <message>    use the given commit message
+      --no-edit              use the generated squash message without opening an editor
       --no-verify            bypass commit hooks
       --gpg-sign[=<key-id>]  GPG-sign the commit
       --no-gpg-sign          do not GPG-sign the commit`,
