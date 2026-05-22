@@ -1,6 +1,6 @@
 ---
 name: graphene-stacked-prs
-description: Use when preparing stacked pull requests with the Graphene CLI, splitting work into reviewable branches, walking stack branches, amending stacked branches, restacking, or pushing stacked PR branches for review.
+description: Use when preparing stacked pull requests with the Graphene CLI, creating reviewable branches, walking stack branches, amending, splitting, squashing, restacking, or pushing stacked PR branches for review.
 ---
 
 # Graphene Stacked PRs
@@ -19,6 +19,9 @@ Use `graphene` in commands. If the repo documents `gn`, treat it as an alias for
 - Stage one logical change at a time.
 - Use `graphene new -m "<message>"` instead of `git commit`.
 - Use `graphene amend` instead of `git commit --amend` on stacked branches.
+- Use `graphene split` to break an existing one-commit stacked branch into smaller reviewable branches.
+- Use `graphene squash` to combine the current branch with one or more direct ancestors.
+- After rewrite workflows such as amend, split, squash, or restack, inspect the stack and use `graphene sendf --dry-run` before pushing.
 - Run `graphene graph` before pushing.
 - Run `graphene send --dry-run` before pushing.
 - Only run `graphene send` or `graphene sendf` when pushing is approved.
@@ -92,15 +95,44 @@ After approval to force-with-lease push rewritten stacked branches:
 graphene sendf
 ```
 
-## Rebase Conflicts
+## Split A Stacked Branch
 
-If a Graphene rebase stops for conflicts, resolve the conflicts, stage the fixes, then run:
+Use this when a tracked one-commit branch should become multiple reviewable branches. If no branch is given, Graphene splits the current branch.
+
+```sh
+graphene split [branch]
+git add -p
+graphene new --reuse-current -m "First split part"
+git add -p
+graphene new -m "Second split part"
+graphene graph
+graphene sendf --dry-run
+```
+
+The first split commit must use `graphene new --reuse-current`; later split parts use normal `graphene new`. When no tracked changes remain, Graphene restacks descendants onto the new split top.
+
+## Squash Stacked Branches
+
+Use this when adjacent stack branches should become one reviewable branch. `-c`/`--count` includes the current branch and defaults to `2`.
+
+```sh
+graphene squash
+graphene squash -c 3 -m "Combine related changes"
+graphene graph
+graphene sendf --dry-run
+```
+
+Graphene preserves the bottom branch name and restacks descendants onto the rewritten branch.
+
+## Pending Operation Conflicts
+
+If a pending Graphene operation stops for conflicts, resolve the conflicts, stage the fixes, then run:
 
 ```sh
 graphene continue
 ```
 
-To abandon the pending Graphene rebase:
+To abandon the pending Graphene operation:
 
 ```sh
 graphene abort
