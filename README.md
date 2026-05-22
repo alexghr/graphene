@@ -88,17 +88,16 @@ Run `gn help` or `gn help <command>` for full command details.
 
 Graphene provides reusable agent instructions as a skill at [skills/graphene-stacked-prs](skills/graphene-stacked-prs).
 
-Ask Codex to install the skill from:
+Install it for Codex:
 
 ```
-https://github.com/alexghr/graphene/tree/main/skills/graphene-stacked-prs
+graphene skill --codex
 ```
 
 Install it for Claude Code:
 
 ```
-mkdir -p "$HOME/.claude/skills/graphene-stacked-prs"
-curl -fL https://raw.githubusercontent.com/alexghr/graphene/main/skills/graphene-stacked-prs/SKILL.md -o "$HOME/.claude/skills/graphene-stacked-prs/SKILL.md"
+graphene skill --claude
 ```
 
 Restart Codex or Claude Code after installing a new skill.

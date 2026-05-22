@@ -388,6 +388,43 @@ func TestParseArgs(t *testing.T) {
 	if _, err := parseForgetArgs([]string{"--bad"}); err == nil {
 		t.Fatal("parseForgetArgs accepted --bad")
 	}
+	skillOpts, err := parseSkillArgs([]string{"--out=SKILL.md"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if skillOpts.out != "SKILL.md" || skillOpts.target != "" {
+		t.Fatalf("parseSkillArgs = %#v, want out SKILL.md", skillOpts)
+	}
+	skillOpts, err = parseSkillArgs([]string{"--out", "-"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if skillOpts.out != "-" || skillOpts.target != "" {
+		t.Fatalf("parseSkillArgs --out - = %#v", skillOpts)
+	}
+	skillOpts, err = parseSkillArgs([]string{"--codex"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if skillOpts.target != "codex" || skillOpts.out != "" {
+		t.Fatalf("parseSkillArgs --codex = %#v", skillOpts)
+	}
+	skillOpts, err = parseSkillArgs([]string{"--claude"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if skillOpts.target != "claude" || skillOpts.out != "" {
+		t.Fatalf("parseSkillArgs --claude = %#v", skillOpts)
+	}
+	if _, err := parseSkillArgs([]string{"--out"}); err == nil {
+		t.Fatal("parseSkillArgs accepted missing path")
+	}
+	if _, err := parseSkillArgs([]string{"--codex", "--out", "SKILL.md"}); err == nil {
+		t.Fatal("parseSkillArgs accepted multiple destinations")
+	}
+	if _, err := parseSkillArgs([]string{"--bad"}); err == nil {
+		t.Fatal("parseSkillArgs accepted unsupported argument")
+	}
 	if _, err := parseSendArgs([]string{"origin", "upstream"}); err == nil {
 		t.Fatal("parseSendArgs accepted multiple remotes")
 	}

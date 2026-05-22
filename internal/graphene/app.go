@@ -69,6 +69,12 @@ func (a *App) Run(args []string) int {
 				return 0
 			}
 			err = a.squash(args[2:])
+		case "skill", "agent-skill":
+			if helpArgs(args[2:]) {
+				a.commandUsage("skill", a.stdout)
+				return 0
+			}
+			err = a.skill(args[2:])
 		case "continue":
 			if helpArgs(args[2:]) {
 				a.commandUsage("continue", a.stdout)
@@ -131,7 +137,11 @@ func (a *App) Run(args []string) int {
 			err = a.version(args[2:], gitVersion)
 		case "help":
 			if len(args) > 2 {
-				if !a.commandUsage(args[2], a.stdout) {
+				command := args[2]
+				if command == "agent-skill" {
+					command = "skill"
+				}
+				if !a.commandUsage(command, a.stdout) {
 					err = fmt.Errorf("unknown command %q", args[2])
 					break
 				}
@@ -173,6 +183,7 @@ func (a *App) usage(w io.Writer) {
   graphene restack <base>
   graphene go (--top|--bottom|--next|--prev) [number]
   graphene graph
+  graphene skill [--codex|--claude|--out <path>]
   graphene version
 
 run "graphene help <command>" for command-specific help`)
@@ -223,6 +234,14 @@ options:
       --no-verify            bypass commit hooks
       --gpg-sign[=<key-id>]  GPG-sign the commit
       --no-gpg-sign          do not GPG-sign the commit`,
+		"skill": `usage: graphene skill [--codex|--claude|--out <path>]
+
+Write Graphene's bundled agent skill to stdout or to the given path.
+
+options:
+      --codex       install to ~/.codex/skills/graphene-stacked-prs/SKILL.md
+      --claude      install to ~/.claude/skills/graphene-stacked-prs/SKILL.md
+      --out <path>  write SKILL.md to this path; use - for stdout`,
 		"continue": "usage: graphene continue\n\nContinue the current Git rebase and any queued Graphene restacks.",
 		"abort":    "usage: graphene abort\n\nAbort the current Git rebase and clear queued Graphene restacks.",
 		"forget": `usage: graphene forget [--force]

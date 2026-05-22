@@ -2,11 +2,14 @@ package graphene
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+
+	graphenestackedprs "github.com/alexghr/graphene/skills/graphene-stacked-prs"
 )
 
 func (a *App) newBranch(args []string) error {
@@ -1405,6 +1408,46 @@ func (a *App) sendf(args []string) error {
 	return a.sendBranches(args, true)
 }
 
+func (a *App) skill(args []string) error {
+	opts, err := parseSkillArgs(args)
+	if err != nil {
+		return err
+	}
+	out, err := a.skillOutPath(opts)
+	if err != nil {
+		return err
+	}
+	if out == "" || out == "-" {
+		_, err := io.WriteString(a.stdout, graphenestackedprs.Content)
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(out, []byte(graphenestackedprs.Content), 0o644)
+}
+
+func (a *App) skillOutPath(opts skillOptions) (string, error) {
+	switch opts.target {
+	case "":
+		return opts.out, nil
+	case "codex":
+		home := a.getenv("HOME")
+		if home == "" {
+			return "", fmt.Errorf("HOME is required for graphene skill --codex")
+		}
+		return filepath.Join(home, ".codex", "skills", "graphene-stacked-prs", "SKILL.md"), nil
+	case "claude":
+		home := a.getenv("HOME")
+		if home == "" {
+			return "", fmt.Errorf("HOME is required for graphene skill --claude")
+		}
+		return filepath.Join(home, ".claude", "skills", "graphene-stacked-prs", "SKILL.md"), nil
+	default:
+		return "", fmt.Errorf("unsupported skill target %q", opts.target)
+	}
+}
+
 func (a *App) sendBranches(args []string, forceWithLease bool) error {
 	opts, err := parseSendArgs(args)
 	if err != nil {
@@ -1876,6 +1919,11 @@ type squashOptions struct {
 	noEdit     bool
 }
 
+type skillOptions struct {
+	out    string
+	target string
+}
+
 func parseNewArgs(args []string) (commitOptions, error) {
 	return parseCommitOptions(args, true)
 }
@@ -2075,6 +2123,57 @@ func parseForgetArgs(args []string) (bool, error) {
 		}
 	}
 	return force, nil
+}
+
+func parseSkillArgs(args []string) (skillOptions, error) {
+	var opts skillOptions
+	setDestination := func(name string) error {
+		if opts.out != "" || opts.target != "" {
+			return fmt.Errorf("graphene skill accepts one destination: --codex, --claude, or --out")
+		}
+		opts.target = name
+		return nil
+	}
+	setOut := func(path string) error {
+		if opts.out != "" || opts.target != "" {
+			return fmt.Errorf("graphene skill accepts one destination: --codex, --claude, or --out")
+		}
+		opts.out = path
+		return nil
+	}
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+
+		switch {
+		case arg == "--codex":
+			if err := setDestination("codex"); err != nil {
+				return skillOptions{}, err
+			}
+		case arg == "--claude":
+			if err := setDestination("claude"); err != nil {
+				return skillOptions{}, err
+			}
+		case arg == "--out":
+			if i+1 >= len(args) || args[i+1] == "" || (strings.HasPrefix(args[i+1], "-") && args[i+1] != "-") {
+				return skillOptions{}, fmt.Errorf("missing path after --out")
+			}
+			if err := setOut(args[i+1]); err != nil {
+				return skillOptions{}, err
+			}
+			i++
+		case strings.HasPrefix(arg, "--out="):
+			out := strings.TrimPrefix(arg, "--out=")
+			if out == "" {
+				return skillOptions{}, fmt.Errorf("missing path after --out")
+			}
+			if err := setOut(out); err != nil {
+				return skillOptions{}, err
+			}
+		default:
+			return skillOptions{}, fmt.Errorf("unsupported argument %q; supported skill options are --codex, --claude, and --out", arg)
+		}
+	}
+	return opts, nil
 }
 
 type sendOptions struct {

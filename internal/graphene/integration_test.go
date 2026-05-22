@@ -9,6 +9,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	graphenestackedprs "github.com/alexghr/graphene/skills/graphene-stacked-prs"
 )
 
 type testRepo struct {
@@ -105,6 +107,89 @@ func TestVersionFlag(t *testing.T) {
 		if stderr.String() != "" {
 			t.Fatalf("stderr = %q", stderr.String())
 		}
+	}
+}
+
+func TestSkillWritesStdoutAndOutFile(t *testing.T) {
+	repo := newTestRepo(t)
+
+	code, stdout, stderr := repo.runGraphene(t, "skill")
+	if code != 0 {
+		t.Fatalf("graphene skill exited %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if stdout != graphenestackedprs.Content {
+		t.Fatalf("stdout = %q, want bundled skill", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q", stderr)
+	}
+
+	code, stdout, stderr = repo.runGraphene(t, "skill", "--out", "-")
+	if code != 0 {
+		t.Fatalf("graphene skill --out - exited %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if stdout != graphenestackedprs.Content {
+		t.Fatalf("--out - stdout = %q, want bundled skill", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("--out - stderr = %q", stderr)
+	}
+
+	out := filepath.Join(repo.dir, "nested", "SKILL.md")
+	expectGrapheneOK(t, repo, "skill", "--out", out)
+	data, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != graphenestackedprs.Content {
+		t.Fatalf("out file = %q, want bundled skill", string(data))
+	}
+
+	aliasOut := filepath.Join(repo.dir, "alias", "SKILL.md")
+	expectGrapheneOK(t, repo, "agent-skill", "--out", aliasOut)
+	data, err = os.ReadFile(aliasOut)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != graphenestackedprs.Content {
+		t.Fatalf("alias out file = %q, want bundled skill", string(data))
+	}
+}
+
+func TestSkillShortcutsWriteCommonAgentPaths(t *testing.T) {
+	repo := newTestRepo(t)
+	home := filepath.Dir(repo.configDir)
+
+	code, stdout, stderr := repo.runGraphene(t, "skill", "--codex")
+	if code != 0 {
+		t.Fatalf("graphene skill --codex exited %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if stdout != "" || stderr != "" {
+		t.Fatalf("unexpected output\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
+	}
+	codexSkill := filepath.Join(home, ".codex", "skills", "graphene-stacked-prs", "SKILL.md")
+	data, err := os.ReadFile(codexSkill)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != graphenestackedprs.Content {
+		t.Fatalf("codex skill = %q, want bundled skill", string(data))
+	}
+
+	code, stdout, stderr = repo.runGraphene(t, "skill", "--claude")
+	if code != 0 {
+		t.Fatalf("graphene skill --claude exited %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if stdout != "" || stderr != "" {
+		t.Fatalf("unexpected output\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
+	}
+	claudeSkill := filepath.Join(home, ".claude", "skills", "graphene-stacked-prs", "SKILL.md")
+	data, err = os.ReadFile(claudeSkill)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != graphenestackedprs.Content {
+		t.Fatalf("claude skill = %q, want bundled skill", string(data))
 	}
 }
 
