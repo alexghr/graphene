@@ -57,6 +57,12 @@ func (a *App) Run(args []string) int {
 				return 0
 			}
 			err = a.amend(args[2:])
+		case "split":
+			if helpArgs(args[2:]) {
+				a.commandUsage("split", a.stdout)
+				return 0
+			}
+			err = a.split(args[2:])
 		case "continue":
 			if helpArgs(args[2:]) {
 				a.commandUsage("continue", a.stdout)
@@ -150,6 +156,7 @@ func (a *App) usage(w io.Writer) {
 	fmt.Fprintln(w, `usage:
   graphene new [options]
   graphene amend [options]
+  graphene split [branch]
   graphene continue
   graphene abort
   graphene forget [--force]
@@ -187,6 +194,15 @@ options:
       --no-verify            bypass commit hooks
       --gpg-sign[=<key-id>]  GPG-sign the commit
       --no-gpg-sign          do not GPG-sign the commit`,
+		"split": `usage: graphene split [branch]
+
+Reset a tracked branch to its base so its commit can be recreated as multiple Graphene branches.
+
+When no branch is given, split the current branch. Commit the first split part with:
+
+  graphene new --reuse-current -m "First part"
+
+Commit later split parts with graphene new. When no tracked changes remain, Graphene restacks the original descendants onto the new split top.`,
 		"continue": "usage: graphene continue\n\nContinue the current Git rebase and any queued Graphene restacks.",
 		"abort":    "usage: graphene abort\n\nAbort the current Git rebase and clear queued Graphene restacks.",
 		"forget": `usage: graphene forget [--force]

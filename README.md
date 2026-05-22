@@ -59,6 +59,16 @@ gn amend -m "Wire export into settings"
 gn sendf
 ```
 
+Split the current stacked branch into multiple branches:
+
+```
+gn split
+git add -p
+gn new --reuse-current -m "Extract helper"
+git add -p
+gn new -m "Wire helper"
+```
+
 Stop tracking the current branch path without deleting any Git branches:
 
 ```

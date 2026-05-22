@@ -18,14 +18,18 @@ type Stack struct {
 }
 
 type Pending struct {
-	Operation    string       `json:"operation"`
-	Branch       string       `json:"branch,omitempty"`
-	ReturnBranch string       `json:"returnBranch,omitempty"`
-	Queue        []RebaseOp   `json:"queue,omitempty"`
-	Top          string       `json:"top,omitempty"`
-	Branches     []string     `json:"branches,omitempty"`
-	NextStacks   []Stack      `json:"nextStacks,omitempty"`
-	BaseChanges  []BaseChange `json:"baseChanges,omitempty"`
+	Operation      string            `json:"operation"`
+	Branch         string            `json:"branch,omitempty"`
+	ReturnBranch   string            `json:"returnBranch,omitempty"`
+	Queue          []RebaseOp        `json:"queue,omitempty"`
+	Top            string            `json:"top,omitempty"`
+	Branches       []string          `json:"branches,omitempty"`
+	NextStacks     []Stack           `json:"nextStacks,omitempty"`
+	BaseChanges    []BaseChange      `json:"baseChanges,omitempty"`
+	OriginalHead   string            `json:"originalHead,omitempty"`
+	OriginalBase   string            `json:"originalBase,omitempty"`
+	OriginalRefs   map[string]string `json:"originalRefs,omitempty"`
+	OriginalStacks []Stack           `json:"originalStacks,omitempty"`
 }
 
 type RebaseOp struct {
@@ -82,6 +86,20 @@ func (g Git) WriteState(state State) error {
 
 func (s State) empty() bool {
 	return len(s.Stacks) == 0 && s.Pending == nil
+}
+
+func cloneStacks(stacks []Stack) []Stack {
+	if len(stacks) == 0 {
+		return nil
+	}
+	cloned := make([]Stack, len(stacks))
+	for i, stack := range stacks {
+		cloned[i] = Stack{
+			Base:     stack.Base,
+			Branches: append([]string(nil), stack.Branches...),
+		}
+	}
+	return cloned
 }
 
 func (s State) BranchLocation(branch string) (BranchLocation, bool) {
@@ -320,6 +338,18 @@ func RemoveStackThroughCurrent(s State, current string) (State, bool) {
 
 	branches := append([]string(nil), stack.Branches[loc.BranchIndex+1:]...)
 	s.Stacks[loc.StackIndex] = Stack{Base: current, Branches: branches}
+	return s, true
+}
+
+func TruncateStackAfterBranch(s State, branch string) (State, bool) {
+	loc, ok := s.BranchLocation(branch)
+	if !ok {
+		return s, false
+	}
+
+	stack := s.Stacks[loc.StackIndex]
+	branches := append([]string(nil), stack.Branches[:loc.BranchIndex+1]...)
+	s.Stacks[loc.StackIndex] = Stack{Base: stack.Base, Branches: branches}
 	return s, true
 }
 

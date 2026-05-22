@@ -24,6 +24,9 @@ func (a *App) newBranch(args []string) error {
 		return err
 	}
 	if state.Pending != nil {
+		if state.Pending.Operation == "split" && len(state.Pending.Queue) == 0 {
+			return a.newDuringSplit(opts, current, state)
+		}
 		return fmt.Errorf("pending rebase exists; use graphene continue or graphene abort")
 	}
 
@@ -99,6 +102,316 @@ func (a *App) newBranch(args []string) error {
 		return err
 	}
 	return a.git.WriteState(state)
+}
+
+func (a *App) split(args []string) error {
+	target, err := parseSplitArgs(args)
+	if err != nil {
+		return err
+	}
+
+	current, err := a.git.CurrentBranch()
+	if err != nil {
+		return err
+	}
+	if target == "" {
+		target = current
+	}
+
+	state, err := a.git.ReadState()
+	if err != nil {
+		return err
+	}
+	if state.Pending != nil {
+		return fmt.Errorf("pending rebase exists; use graphene continue or graphene abort")
+	}
+
+	base, ok := BaseBranch(state, target)
+	if !ok {
+		return fmt.Errorf("branch %q is not in a graphene stack", target)
+	}
+	count, err := a.commitCount(base, target)
+	if err != nil {
+		return err
+	}
+	if count != 1 {
+		return fmt.Errorf("branch %q contains %d commits on top of %q; Graphene can only split a one-commit branch", target, count, base)
+	}
+
+	dirty, err := a.git.HasTrackedChanges()
+	if err != nil {
+		return err
+	}
+	if dirty {
+		return fmt.Errorf("tracked changes would be mixed into split; stash or commit them before graphene split")
+	}
+
+	inProgress, err := a.git.RebaseInProgress()
+	if err != nil {
+		return err
+	}
+	if inProgress {
+		return fmt.Errorf("rebase in progress; use graphene continue or graphene abort before graphene split")
+	}
+
+	originalHead, err := a.git.Output("rev-parse", "--verify", target+"^{commit}")
+	if err != nil {
+		return err
+	}
+	originalRefs := a.trackedBranchRefs(state)
+
+	originalStacks := cloneStacks(state.Stacks)
+	nextState, ok := TruncateStackAfterBranch(State{Stacks: cloneStacks(state.Stacks)}, target)
+	if !ok {
+		return fmt.Errorf("branch %q is not in a graphene stack", target)
+	}
+	nextState.Pending = &Pending{
+		Operation:      "split",
+		Branch:         target,
+		ReturnBranch:   current,
+		Top:            originalHead,
+		Branches:       []string{target},
+		OriginalHead:   originalHead,
+		OriginalBase:   base,
+		OriginalRefs:   originalRefs,
+		OriginalStacks: originalStacks,
+	}
+
+	if target != current {
+		if err := a.git.Run("switch", target); err != nil {
+			return err
+		}
+	}
+	if err := a.git.WriteState(nextState); err != nil {
+		return err
+	}
+	if err := a.git.Run("reset", "-N", base); err != nil {
+		nextState.Pending = nil
+		nextState.Stacks = state.Stacks
+		_ = a.git.WriteState(nextState)
+		return err
+	}
+	return nil
+}
+
+func (a *App) newDuringSplit(opts commitOptions, current string, state State) error {
+	pending := state.Pending
+	if pending == nil || pending.Operation != "split" {
+		return fmt.Errorf("no split in progress")
+	}
+	if opts.base != "" {
+		return fmt.Errorf("graphene new --base cannot be used during graphene split")
+	}
+
+	top := splitTop(pending)
+	if current != top {
+		return fmt.Errorf("split in progress for %q; switch to %q before graphene new", pending.Branch, top)
+	}
+
+	targetCount, err := a.commitCount(pending.OriginalBase, pending.Branch)
+	if err != nil {
+		return err
+	}
+	if opts.reuseCurrent {
+		if opts.branch != "" {
+			return fmt.Errorf("graphene new --reuse-current cannot use --branch")
+		}
+		if current != pending.Branch {
+			return fmt.Errorf("only the first split commit can use --reuse-current")
+		}
+		if targetCount != 0 {
+			return fmt.Errorf("the first split commit already exists; use graphene new without --reuse-current for the next split part")
+		}
+
+		commitGitArgs := append([]string{"commit"}, opts.commitArgs...)
+		if err := a.git.Run(commitGitArgs...); err != nil {
+			return err
+		}
+		return a.finishSplitIfClean(state)
+	}
+	if targetCount == 0 {
+		return fmt.Errorf("the first split commit must use graphene new --reuse-current")
+	}
+
+	recordBase := current
+	branch := opts.branch
+	temp := false
+	var cfg Config
+	if branch == "" {
+		cfg, err = LoadConfig(a.getenv)
+		if err != nil {
+			return err
+		}
+		if err := a.ensureBranchPrefixAvailable(cfg.BranchPrefix); err != nil {
+			return err
+		}
+		branch = tempBranchName(os.Getpid(), time.Now().UnixNano())
+		temp = true
+	}
+
+	if err := a.git.Run("switch", "-c", branch); err != nil {
+		return err
+	}
+
+	commitGitArgs := append([]string{"commit"}, opts.commitArgs...)
+	if err := a.git.Run(commitGitArgs...); err != nil {
+		a.cleanupFailedCommit(current, branch)
+		return err
+	}
+
+	if temp {
+		subject, err := a.git.Output("log", "-1", "--format=%s")
+		if err != nil {
+			return err
+		}
+		branch, err = a.derivedBranchName(cfg, subject)
+		if err != nil {
+			return err
+		}
+		if err := a.git.Run("branch", "-m", branch); err != nil {
+			return err
+		}
+	}
+
+	if err := state.AddCommit(recordBase, branch); err != nil {
+		return err
+	}
+	state.Pending.Branches = append(state.Pending.Branches, branch)
+	if err := a.git.WriteState(state); err != nil {
+		return err
+	}
+	return a.finishSplitIfClean(state)
+}
+
+func (a *App) finishSplitIfClean(state State) error {
+	dirty, err := a.git.HasTrackedChanges()
+	if err != nil {
+		return err
+	}
+	if dirty {
+		return nil
+	}
+	return a.finishSplit(state)
+}
+
+func (a *App) finishSplit(state State) error {
+	pending := state.Pending
+	if pending == nil || pending.Operation != "split" {
+		return fmt.Errorf("no split in progress")
+	}
+
+	current, err := a.git.CurrentBranch()
+	if err != nil {
+		return err
+	}
+	top := splitTop(pending)
+	if current != top {
+		return fmt.Errorf("split in progress for %q; switch to %q before finishing split", pending.Branch, top)
+	}
+
+	nextState, directOps, rewritten, skipTops, err := splitFinalState(state)
+	if err != nil {
+		return err
+	}
+	restackOps, err := RestackOpsAfterRewrites(nextState, rewritten, pending.OriginalRefs, skipTops)
+	if err != nil {
+		return err
+	}
+	ops := append(directOps, restackOps...)
+	if err := a.validateRebaseOpsUpdateable("split", current, nextState, pending.OriginalRefs, ops); err != nil {
+		return err
+	}
+
+	if len(ops) == 0 {
+		nextState.Pending = nil
+		return a.git.WriteState(nextState)
+	}
+
+	state.Pending.ReturnBranch = current
+	state.Pending.Queue = ops
+	state.Pending.NextStacks = nextState.Stacks
+	if err := a.git.WriteState(state); err != nil {
+		return err
+	}
+	return a.runPendingRebases(state)
+}
+
+func splitFinalState(state State) (State, []RebaseOp, []string, map[string]bool, error) {
+	pending := state.Pending
+	if pending == nil {
+		return State{}, nil, nil, nil, fmt.Errorf("no split in progress")
+	}
+	target := pending.Branch
+	top := splitTop(pending)
+
+	original := State{Stacks: cloneStacks(pending.OriginalStacks)}
+	loc, ok := original.BranchLocation(target)
+	if !ok {
+		return State{}, nil, nil, nil, fmt.Errorf("branch %q is not in original split state", target)
+	}
+	originalStack := original.Stacks[loc.StackIndex]
+	suffix := append([]string(nil), originalStack.Branches[loc.BranchIndex+1:]...)
+
+	nextState := State{Stacks: cloneStacks(state.Stacks)}
+	if len(suffix) > 0 {
+		topLoc, ok := nextState.BranchLocation(top)
+		if !ok {
+			return State{}, nil, nil, nil, fmt.Errorf("split top branch %q is not in graphene state", top)
+		}
+		stack := nextState.Stacks[topLoc.StackIndex]
+		branches := make([]string, 0, len(stack.Branches)+len(suffix))
+		branches = append(branches, stack.Branches[:topLoc.BranchIndex+1]...)
+		branches = append(branches, suffix...)
+		branches = append(branches, stack.Branches[topLoc.BranchIndex+1:]...)
+		nextState.Stacks[topLoc.StackIndex] = Stack{Base: stack.Base, Branches: branches}
+	}
+
+	for i, stack := range nextState.Stacks {
+		if stack.Base == target {
+			nextState.Stacks[i].Base = top
+		}
+	}
+
+	upstream := pending.OriginalHead
+	var ops []RebaseOp
+	var rewritten []string
+	skipTops := map[string]bool{}
+	if len(suffix) > 0 {
+		opTop := suffix[len(suffix)-1]
+		ops = append(ops, RebaseOp{
+			Onto:     top,
+			Upstream: upstream,
+			Top:      opTop,
+		})
+		rewritten = append(rewritten, suffix...)
+		skipTops[opTop] = true
+	}
+
+	for _, stack := range original.Stacks {
+		if stack.Base != target || len(stack.Branches) == 0 {
+			continue
+		}
+		opTop := stack.Branches[len(stack.Branches)-1]
+		ops = append(ops, RebaseOp{
+			Onto:     top,
+			Upstream: upstream,
+			Top:      opTop,
+		})
+		rewritten = append(rewritten, stack.Branches...)
+		skipTops[opTop] = true
+	}
+
+	return nextState, ops, rewritten, skipTops, nil
+}
+
+func splitTop(pending *Pending) string {
+	if pending == nil {
+		return ""
+	}
+	if len(pending.Branches) > 0 {
+		return pending.Branches[len(pending.Branches)-1]
+	}
+	return pending.Branch
 }
 
 func (a *App) amend(args []string) error {
@@ -258,6 +571,9 @@ func (a *App) continueRebase(args []string) error {
 		return err
 	}
 	if state.Pending == nil || len(state.Pending.Queue) == 0 {
+		if state.Pending != nil && state.Pending.Operation == "split" {
+			return fmt.Errorf("split in progress; use graphene new to commit split parts or graphene abort")
+		}
 		inProgress, err := a.git.RebaseInProgress()
 		if err != nil {
 			return err
@@ -456,6 +772,9 @@ func (a *App) abortRebase(args []string) error {
 	if err != nil {
 		return err
 	}
+	if state.Pending != nil && state.Pending.Operation == "split" {
+		return a.abortSplit(state, inProgress)
+	}
 	if inProgress {
 		if err := a.git.Run("rebase", "--abort"); err != nil {
 			return err
@@ -465,6 +784,64 @@ func (a *App) abortRebase(args []string) error {
 	}
 	state.Pending = nil
 	return a.git.WriteState(state)
+}
+
+func (a *App) abortSplit(state State, rebaseInProgress bool) error {
+	pending := state.Pending
+	if pending == nil || pending.Operation != "split" {
+		return fmt.Errorf("no split in progress")
+	}
+	if rebaseInProgress {
+		if err := a.git.Run("rebase", "--abort"); err != nil {
+			return err
+		}
+	}
+
+	if pending.Branch != "" {
+		if err := a.git.Run("switch", "--force", pending.Branch); err != nil {
+			return err
+		}
+	}
+	if pending.OriginalHead != "" {
+		if err := a.git.Run("reset", "--hard", pending.OriginalHead); err != nil {
+			return err
+		}
+	}
+
+	for branch, ref := range pending.OriginalRefs {
+		if branch == "" || branch == pending.Branch || ref == "" {
+			continue
+		}
+		if err := a.git.OutputErr("update-ref", "refs/heads/"+branch, ref); err != nil {
+			return err
+		}
+	}
+	for _, branch := range pending.Branches {
+		if branch == "" || branch == pending.Branch {
+			continue
+		}
+		exists, err := a.git.BranchExists(branch)
+		if err != nil {
+			return err
+		}
+		if exists {
+			if err := a.git.Run("branch", "-D", branch); err != nil {
+				return err
+			}
+		}
+	}
+
+	state.Stacks = cloneStacks(pending.OriginalStacks)
+	state.Pending = nil
+	if err := a.git.WriteState(state); err != nil {
+		return err
+	}
+	if pending.ReturnBranch != "" && pending.ReturnBranch != pending.Branch {
+		if err := a.git.Run("switch", pending.ReturnBranch); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (a *App) forget(args []string) error {
@@ -1077,6 +1454,23 @@ func (a *App) stateRefs(state State) map[string]string {
 	return refs
 }
 
+func (a *App) trackedBranchRefs(state State) map[string]string {
+	seen := map[string]bool{}
+	refs := map[string]string{}
+	for _, stack := range state.Stacks {
+		for _, branch := range stack.Branches {
+			if branch == "" || seen[branch] {
+				continue
+			}
+			seen[branch] = true
+			if ref, err := a.git.Output("rev-parse", "--verify", branch+"^{commit}"); err == nil {
+				refs[branch] = ref
+			}
+		}
+	}
+	return refs
+}
+
 func (a *App) validateNewBase(base string) error {
 	exists, err := a.git.BranchExists(base)
 	if err != nil {
@@ -1114,6 +1508,19 @@ func parseNewArgs(args []string) (commitOptions, error) {
 func parseAmendArgs(args []string) ([]string, error) {
 	opts, err := parseCommitOptions(args, false)
 	return opts.commitArgs, err
+}
+
+func parseSplitArgs(args []string) (string, error) {
+	if len(args) > 1 {
+		return "", fmt.Errorf("usage: graphene split [branch]")
+	}
+	if len(args) == 0 {
+		return "", nil
+	}
+	if strings.HasPrefix(args[0], "-") {
+		return "", fmt.Errorf("unsupported argument %q; usage: graphene split [branch]", args[0])
+	}
+	return args[0], nil
 }
 
 func parseCommitOptions(args []string, allowBranch bool) (commitOptions, error) {

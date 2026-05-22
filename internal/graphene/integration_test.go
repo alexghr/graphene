@@ -290,6 +290,133 @@ func TestCommitDeletesTemporaryBranchAfterFailedCommit(t *testing.T) {
 	assertNoGrapheneTmpBranches(t, repo.dir)
 }
 
+func TestSplitCurrentBranchWithNewRestacksDescendants(t *testing.T) {
+	repo := newTestRepo(t)
+
+	writeFile(t, repo.dir, "one.txt", "one\n")
+	writeFile(t, repo.dir, "two.txt", "two\n")
+	runGit(t, repo.dir, "add", ".")
+	expectGrapheneOK(t, repo, "new", "-m", "Combined change")
+	originalCombined := runGit(t, repo.dir, "rev-parse", "stack/combined-change")
+	createStackBranch(t, repo, "after.txt", "after\n", "After")
+	runGit(t, repo.dir, "checkout", "stack/combined-change")
+	createStackBranch(t, repo, "fork.txt", "fork\n", "Fork")
+
+	runGit(t, repo.dir, "checkout", "stack/combined-change")
+	expectGrapheneOK(t, repo, "split")
+	if got := runGit(t, repo.dir, "rev-parse", "stack/combined-change"); got == originalCombined {
+		t.Fatalf("stack/combined-change was not reset during split")
+	}
+
+	runGit(t, repo.dir, "add", "one.txt")
+	expectGrapheneOK(t, repo, "new", "--reuse-current", "-m", "Add one")
+	state := readState(t, repo.dir)
+	if state.Pending == nil || state.Pending.Operation != "split" {
+		t.Fatalf("pending split = %#v, want active split", state.Pending)
+	}
+
+	runGit(t, repo.dir, "add", "two.txt")
+	expectGrapheneOK(t, repo, "new", "-m", "Add two")
+
+	if got := currentBranch(t, repo.dir); got != "stack/add-two" {
+		t.Fatalf("branch = %q, want stack/add-two", got)
+	}
+	main := runGit(t, repo.dir, "rev-parse", "main")
+	parentCombined := runGit(t, repo.dir, "rev-parse", "stack/combined-change^")
+	if parentCombined != main {
+		t.Fatalf("stack/combined-change parent = %s, want main %s", parentCombined, main)
+	}
+	combined := runGit(t, repo.dir, "rev-parse", "stack/combined-change")
+	parentAddTwo := runGit(t, repo.dir, "rev-parse", "stack/add-two^")
+	if parentAddTwo != combined {
+		t.Fatalf("stack/add-two parent = %s, want stack/combined-change %s", parentAddTwo, combined)
+	}
+	addTwo := runGit(t, repo.dir, "rev-parse", "stack/add-two")
+	parentAfter := runGit(t, repo.dir, "rev-parse", "stack/after^")
+	if parentAfter != addTwo {
+		t.Fatalf("stack/after parent = %s, want stack/add-two %s", parentAfter, addTwo)
+	}
+	parentFork := runGit(t, repo.dir, "rev-parse", "stack/fork^")
+	if parentFork != addTwo {
+		t.Fatalf("stack/fork parent = %s, want stack/add-two %s", parentFork, addTwo)
+	}
+	if got := runGit(t, repo.dir, "show", "stack/combined-change:one.txt"); got != "one" {
+		t.Fatalf("stack/combined-change:one.txt = %q, want one", got)
+	}
+	if refFileExists(t, repo.dir, "stack/combined-change:two.txt") {
+		t.Fatal("stack/combined-change unexpectedly contains two.txt")
+	}
+
+	state = readState(t, repo.dir)
+	want := []Stack{
+		{Base: "main", Branches: []string{"stack/combined-change", "stack/add-two", "stack/after"}},
+		{Base: "stack/add-two", Branches: []string{"stack/fork"}},
+	}
+	if !reflect.DeepEqual(state.Stacks, want) {
+		t.Fatalf("stacks = %#v, want %#v", state.Stacks, want)
+	}
+	if state.Pending != nil {
+		t.Fatalf("pending state was not cleared: %#v", state.Pending)
+	}
+}
+
+func TestSplitFirstCommitRequiresReuseCurrent(t *testing.T) {
+	repo := newTestRepo(t)
+
+	writeFile(t, repo.dir, "one.txt", "one\n")
+	writeFile(t, repo.dir, "two.txt", "two\n")
+	runGit(t, repo.dir, "add", ".")
+	expectGrapheneOK(t, repo, "new", "-m", "Combined change")
+
+	expectGrapheneOK(t, repo, "split")
+	runGit(t, repo.dir, "add", "one.txt")
+	code, _, stderr := repo.runGraphene(t, "new", "-m", "Add one")
+	if code == 0 {
+		t.Fatal("graphene new unexpectedly created first split commit without --reuse-current")
+	}
+	if !strings.Contains(stderr, "first split commit must use graphene new --reuse-current") {
+		t.Fatalf("stderr = %q", stderr)
+	}
+}
+
+func TestSplitAbortRestoresOriginalBranchAndState(t *testing.T) {
+	repo := newTestRepo(t)
+
+	writeFile(t, repo.dir, "one.txt", "one\n")
+	writeFile(t, repo.dir, "two.txt", "two\n")
+	writeFile(t, repo.dir, "three.txt", "three\n")
+	runGit(t, repo.dir, "add", ".")
+	expectGrapheneOK(t, repo, "new", "-m", "Combined change")
+	originalCombined := runGit(t, repo.dir, "rev-parse", "stack/combined-change")
+	createStackBranch(t, repo, "after.txt", "after\n", "After")
+	originalState := readState(t, repo.dir)
+
+	runGit(t, repo.dir, "checkout", "stack/combined-change")
+	expectGrapheneOK(t, repo, "split")
+	runGit(t, repo.dir, "add", "one.txt")
+	expectGrapheneOK(t, repo, "new", "--reuse-current", "-m", "Add one")
+	runGit(t, repo.dir, "add", "two.txt")
+	expectGrapheneOK(t, repo, "new", "-m", "Add two")
+	expectGrapheneOK(t, repo, "abort")
+
+	if got := currentBranch(t, repo.dir); got != "stack/combined-change" {
+		t.Fatalf("branch = %q, want stack/combined-change", got)
+	}
+	if got := runGit(t, repo.dir, "rev-parse", "stack/combined-change"); got != originalCombined {
+		t.Fatalf("stack/combined-change = %s, want original %s", got, originalCombined)
+	}
+	if status := runGit(t, repo.dir, "status", "--porcelain"); status != "" {
+		t.Fatalf("status = %q, want clean", status)
+	}
+	if refExists(t, repo.dir, "refs/heads/stack/add-two") {
+		t.Fatal("stack/add-two still exists after abort")
+	}
+	state := readState(t, repo.dir)
+	if !reflect.DeepEqual(state, originalState) {
+		t.Fatalf("state = %#v, want %#v", state, originalState)
+	}
+}
+
 func TestAmendRestacksSuffix(t *testing.T) {
 	repo := newTestRepo(t)
 	createStackBranch(t, repo, "one.txt", "one\n", "One")
@@ -1449,6 +1576,22 @@ func refExists(t *testing.T, dir, ref string) bool {
 		return false
 	}
 	t.Fatalf("git show-ref failed: %v", err)
+	return false
+}
+
+func refFileExists(t *testing.T, dir, spec string) bool {
+	t.Helper()
+
+	cmd := exec.Command("git", "cat-file", "-e", spec)
+	cmd.Dir = dir
+	err := cmd.Run()
+	if err == nil {
+		return true
+	}
+	if _, ok := err.(*exec.ExitError); ok {
+		return false
+	}
+	t.Fatalf("git cat-file failed: %v", err)
 	return false
 }
 
