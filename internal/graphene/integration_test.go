@@ -417,6 +417,110 @@ func TestSplitAbortRestoresOriginalBranchAndState(t *testing.T) {
 	}
 }
 
+func TestSquashDefaultIntoParentRestacksDescendants(t *testing.T) {
+	repo := newTestRepo(t)
+	createStackBranch(t, repo, "one.txt", "one\n", "One")
+	createStackBranch(t, repo, "two.txt", "two\n", "Two")
+	createStackBranch(t, repo, "three.txt", "three\n", "Three")
+
+	runGit(t, repo.dir, "checkout", "stack/two")
+	createStackBranch(t, repo, "fork.txt", "fork\n", "Fork")
+	runGit(t, repo.dir, "checkout", "stack/two")
+
+	expectGrapheneOK(t, repo, "squash")
+
+	if got := currentBranch(t, repo.dir); got != "stack/one" {
+		t.Fatalf("branch = %q, want stack/one", got)
+	}
+	if refExists(t, repo.dir, "refs/heads/stack/two") {
+		t.Fatal("stack/two still exists after squash")
+	}
+	branchOne := runGit(t, repo.dir, "rev-parse", "stack/one")
+	for _, branch := range []string{"stack/three", "stack/fork"} {
+		parent := runGit(t, repo.dir, "rev-parse", branch+"^")
+		if parent != branchOne {
+			t.Fatalf("%s parent = %s, want stack/one %s", branch, parent, branchOne)
+		}
+	}
+	if got := runGit(t, repo.dir, "show", "stack/one:one.txt"); got != "one" {
+		t.Fatalf("stack/one:one.txt = %q, want one", got)
+	}
+	if got := runGit(t, repo.dir, "show", "stack/one:two.txt"); got != "two" {
+		t.Fatalf("stack/one:two.txt = %q, want two", got)
+	}
+	if refFileExists(t, repo.dir, "stack/one:three.txt") {
+		t.Fatal("stack/one unexpectedly contains three.txt")
+	}
+
+	state := readState(t, repo.dir)
+	want := []Stack{
+		{Base: "main", Branches: []string{"stack/one", "stack/three"}},
+		{Base: "stack/one", Branches: []string{"stack/fork"}},
+	}
+	if !reflect.DeepEqual(state.Stacks, want) {
+		t.Fatalf("stacks = %#v, want %#v", state.Stacks, want)
+	}
+	if state.Pending != nil {
+		t.Fatalf("pending state was not cleared: %#v", state.Pending)
+	}
+}
+
+func TestSquashCountThree(t *testing.T) {
+	repo := newTestRepo(t)
+	createStackBranch(t, repo, "one.txt", "one\n", "One")
+	createStackBranch(t, repo, "two.txt", "two\n", "Two")
+	createStackBranch(t, repo, "three.txt", "three\n", "Three")
+	createStackBranch(t, repo, "four.txt", "four\n", "Four")
+
+	runGit(t, repo.dir, "checkout", "stack/three")
+	expectGrapheneOK(t, repo, "squash", "-c", "3", "-m", "Combined first three")
+
+	if got := currentBranch(t, repo.dir); got != "stack/one" {
+		t.Fatalf("branch = %q, want stack/one", got)
+	}
+	for _, branch := range []string{"stack/two", "stack/three"} {
+		if refExists(t, repo.dir, "refs/heads/"+branch) {
+			t.Fatalf("%s still exists after squash", branch)
+		}
+	}
+	branchOne := runGit(t, repo.dir, "rev-parse", "stack/one")
+	parentFour := runGit(t, repo.dir, "rev-parse", "stack/four^")
+	if parentFour != branchOne {
+		t.Fatalf("stack/four parent = %s, want stack/one %s", parentFour, branchOne)
+	}
+	if got := runGit(t, repo.dir, "show", "stack/one:three.txt"); got != "three" {
+		t.Fatalf("stack/one:three.txt = %q, want three", got)
+	}
+	if refFileExists(t, repo.dir, "stack/one:four.txt") {
+		t.Fatal("stack/one unexpectedly contains four.txt")
+	}
+	if got := runGit(t, repo.dir, "log", "-1", "--format=%s", "stack/one"); got != "Combined first three" {
+		t.Fatalf("stack/one subject = %q, want Combined first three", got)
+	}
+
+	state := readState(t, repo.dir)
+	want := []Stack{{Base: "main", Branches: []string{"stack/one", "stack/four"}}}
+	if !reflect.DeepEqual(state.Stacks, want) {
+		t.Fatalf("stacks = %#v, want %#v", state.Stacks, want)
+	}
+}
+
+func TestSquashRejectsCountPastBottom(t *testing.T) {
+	repo := newTestRepo(t)
+	createStackBranch(t, repo, "one.txt", "one\n", "One")
+
+	code, _, stderr := repo.runGraphene(t, "squash", "--count", "2")
+	if code == 0 {
+		t.Fatal("graphene squash unexpectedly succeeded")
+	}
+	if !strings.Contains(stderr, "only 1 tracked branches are available") {
+		t.Fatalf("stderr = %q", stderr)
+	}
+	if got := currentBranch(t, repo.dir); got != "stack/one" {
+		t.Fatalf("branch = %q, want stack/one", got)
+	}
+}
+
 func TestAmendRestacksSuffix(t *testing.T) {
 	repo := newTestRepo(t)
 	createStackBranch(t, repo, "one.txt", "one\n", "One")

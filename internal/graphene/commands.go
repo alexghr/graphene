@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -414,6 +415,348 @@ func splitTop(pending *Pending) string {
 	return pending.Branch
 }
 
+type squashSelection struct {
+	StackIndex int
+	Start      int
+	End        int
+	Base       string
+	Bottom     string
+	Top        string
+	Branches   []string
+	Removed    []string
+	Suffix     []string
+}
+
+func (a *App) squash(args []string) error {
+	opts, err := parseSquashArgs(args)
+	if err != nil {
+		return err
+	}
+
+	current, err := a.git.CurrentBranch()
+	if err != nil {
+		return err
+	}
+	state, err := a.git.ReadState()
+	if err != nil {
+		return err
+	}
+	if state.Pending != nil {
+		return fmt.Errorf("pending rebase exists; use graphene continue or graphene abort")
+	}
+
+	selection, err := squashRange(state, current, opts.count)
+	if err != nil {
+		return err
+	}
+	dirty, err := a.git.HasTrackedChanges()
+	if err != nil {
+		return err
+	}
+	if dirty {
+		return fmt.Errorf("tracked changes would prevent squash; stash or commit them before graphene squash")
+	}
+	inProgress, err := a.git.RebaseInProgress()
+	if err != nil {
+		return err
+	}
+	if inProgress {
+		return fmt.Errorf("rebase in progress; use graphene continue or graphene abort before graphene squash")
+	}
+	if err := a.validateSquashShape(selection); err != nil {
+		return err
+	}
+	if err := a.validateSquashBranchesAvailable(current, selection); err != nil {
+		return err
+	}
+
+	oldRefs := a.trackedBranchRefs(state)
+	topRef := oldRefs[selection.Top]
+	if topRef == "" {
+		return fmt.Errorf("missing old ref for %q", selection.Top)
+	}
+	baseRef, err := a.git.Output("rev-parse", "--verify", selection.Base+"^{commit}")
+	if err != nil {
+		return err
+	}
+
+	nextState, ops, err := squashFinalState(state, selection, oldRefs)
+	if err != nil {
+		return err
+	}
+	if err := a.validateRebaseOpsUpdateable("squash", current, nextState, oldRefs, ops); err != nil {
+		return err
+	}
+
+	commitArgs, cleanup, err := a.squashCommitArgs(opts, selection.Branches)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	if current != selection.Bottom {
+		if err := a.git.Run("switch", selection.Bottom); err != nil {
+			return err
+		}
+	}
+	restore := func(cause error) error {
+		if restoreErr := a.restoreOriginalRewrite(State{Stacks: cloneStacks(state.Stacks)}, oldRefs, selection.Bottom, current); restoreErr != nil {
+			return fmt.Errorf("%w; additionally failed to restore original squash state: %v", cause, restoreErr)
+		}
+		return cause
+	}
+	if err := a.git.Run("reset", "--hard", topRef); err != nil {
+		return restore(err)
+	}
+	if err := a.git.Run("reset", "--soft", baseRef); err != nil {
+		return restore(err)
+	}
+	if err := a.git.Run(commitArgs...); err != nil {
+		return restore(err)
+	}
+
+	if len(ops) == 0 {
+		if err := a.deleteBranches(selection.Removed); err != nil {
+			return restore(err)
+		}
+		if err := a.git.WriteState(nextState); err != nil {
+			return restore(err)
+		}
+		return nil
+	}
+
+	state.Pending = &Pending{
+		Operation:      "squash",
+		Branch:         selection.Bottom,
+		ReturnBranch:   selection.Bottom,
+		Queue:          ops,
+		Top:            selection.Top,
+		Branches:       append([]string(nil), selection.Removed...),
+		NextStacks:     nextState.Stacks,
+		OriginalRefs:   oldRefs,
+		OriginalStacks: cloneStacks(state.Stacks),
+	}
+	if err := a.git.WriteState(state); err != nil {
+		return restore(err)
+	}
+	return a.runPendingRebases(state)
+}
+
+func squashRange(state State, current string, count int) (squashSelection, error) {
+	if count < 2 {
+		return squashSelection{}, fmt.Errorf("squash count must be at least 2")
+	}
+	loc, ok := state.BranchLocation(current)
+	if !ok {
+		return squashSelection{}, fmt.Errorf("branch %q is not in a graphene stack", current)
+	}
+	stack := state.Stacks[loc.StackIndex]
+	if loc.BranchIndex+1 < count {
+		return squashSelection{}, fmt.Errorf("cannot squash %d branches ending at %q; only %d tracked branches are available in this stack path", count, current, loc.BranchIndex+1)
+	}
+
+	start := loc.BranchIndex - count + 1
+	base := stack.Base
+	if start > 0 {
+		base = stack.Branches[start-1]
+	}
+	branches := append([]string(nil), stack.Branches[start:loc.BranchIndex+1]...)
+	return squashSelection{
+		StackIndex: loc.StackIndex,
+		Start:      start,
+		End:        loc.BranchIndex,
+		Base:       base,
+		Bottom:     branches[0],
+		Top:        current,
+		Branches:   branches,
+		Removed:    append([]string(nil), branches[1:]...),
+		Suffix:     append([]string(nil), stack.Branches[loc.BranchIndex+1:]...),
+	}, nil
+}
+
+func (a *App) validateSquashShape(selection squashSelection) error {
+	parent := selection.Base
+	for _, branch := range selection.Branches {
+		count, err := a.commitCount(parent, branch)
+		if err != nil {
+			return err
+		}
+		if count != 1 {
+			return fmt.Errorf("branch %q contains %d commits on top of %q; Graphene can only squash one-commit stack branches", branch, count, parent)
+		}
+		parent = branch
+	}
+	return nil
+}
+
+func (a *App) validateSquashBranchesAvailable(current string, selection squashSelection) error {
+	if selection.Bottom != current {
+		checkedOut, err := a.git.BranchCheckedOut(selection.Bottom)
+		if err != nil {
+			return err
+		}
+		if checkedOut {
+			return fmt.Errorf("branch %q is checked out in another worktree; switch that worktree away from the branch before graphene squash", selection.Bottom)
+		}
+	}
+	for _, branch := range selection.Removed {
+		if branch == current {
+			continue
+		}
+		checkedOut, err := a.git.BranchCheckedOut(branch)
+		if err != nil {
+			return err
+		}
+		if checkedOut {
+			return fmt.Errorf("branch %q is checked out in another worktree; switch that worktree away from the branch before graphene squash", branch)
+		}
+	}
+	return nil
+}
+
+func squashFinalState(state State, selection squashSelection, oldRefs map[string]string) (State, []RebaseOp, error) {
+	nextState := RemoveBranchesWithBase(State{Stacks: cloneStacks(state.Stacks)}, selection.Removed, selection.Bottom)
+	deleted := map[string]bool{}
+	for _, branch := range selection.Removed {
+		deleted[branch] = true
+	}
+
+	upstream := oldRefs[selection.Top]
+	if upstream == "" {
+		return State{}, nil, fmt.Errorf("missing old ref for %q", selection.Top)
+	}
+
+	var ops []RebaseOp
+	rewritten := []string{selection.Bottom}
+	skipTops := map[string]bool{}
+	if len(selection.Suffix) > 0 {
+		top := selection.Suffix[len(selection.Suffix)-1]
+		ops = append(ops, RebaseOp{
+			Onto:     selection.Bottom,
+			Upstream: upstream,
+			Top:      top,
+		})
+		rewritten = append(rewritten, selection.Suffix...)
+		skipTops[top] = true
+	}
+
+	for i, dependent := range state.Stacks {
+		if i == selection.StackIndex || !deleted[dependent.Base] || len(dependent.Branches) == 0 {
+			continue
+		}
+		upstream := oldRefs[dependent.Base]
+		if upstream == "" {
+			return State{}, nil, fmt.Errorf("missing old ref for %q", dependent.Base)
+		}
+		top := dependent.Branches[len(dependent.Branches)-1]
+		ops = append(ops, RebaseOp{
+			Onto:     selection.Bottom,
+			Upstream: upstream,
+			Top:      top,
+		})
+		rewritten = append(rewritten, dependent.Branches...)
+		skipTops[top] = true
+	}
+
+	restackOps, err := RestackOpsAfterRewrites(nextState, rewritten, oldRefs, skipTops)
+	if err != nil {
+		return State{}, nil, err
+	}
+	ops = append(ops, restackOps...)
+	return nextState, ops, nil
+}
+
+func (a *App) squashCommitArgs(opts squashOptions, branches []string) ([]string, func(), error) {
+	args := []string{"commit"}
+	if opts.messageSet {
+		return append(args, opts.commitArgs...), func() {}, nil
+	}
+
+	message, err := a.defaultSquashMessage(branches)
+	if err != nil {
+		return nil, nil, err
+	}
+	path, err := a.git.GitPath("graphene/SQUASH_MSG")
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, nil, err
+	}
+	if err := os.WriteFile(path, []byte(message), 0o644); err != nil {
+		return nil, nil, err
+	}
+	cleanup := func() {
+		_ = os.Remove(path)
+	}
+	args = append(args, opts.commitArgs...)
+	args = append(args, "--edit", "-F", path)
+	return args, cleanup, nil
+}
+
+func (a *App) defaultSquashMessage(branches []string) (string, error) {
+	if len(branches) == 0 {
+		return "", fmt.Errorf("no branches to squash")
+	}
+	message, err := a.git.Output("log", "-1", "--format=%B", branches[0])
+	if err != nil {
+		return "", err
+	}
+	message = strings.TrimSpace(message)
+	if message == "" {
+		message = "Squashed changes"
+	}
+	if len(branches) == 1 {
+		return message + "\n", nil
+	}
+
+	var b strings.Builder
+	b.WriteString(message)
+	b.WriteString("\n\nSquashed commits:\n")
+	for _, branch := range branches[1:] {
+		subject, err := a.git.Output("log", "-1", "--format=%s", branch)
+		if err != nil {
+			return "", err
+		}
+		fmt.Fprintf(&b, "\n- %s", subject)
+	}
+	b.WriteByte('\n')
+	return b.String(), nil
+}
+
+func (a *App) restoreOriginalRewrite(original State, refs map[string]string, resetBranch, returnBranch string) error {
+	if resetBranch != "" {
+		if err := a.git.Run("switch", "--force", resetBranch); err != nil {
+			return err
+		}
+		if ref := refs[resetBranch]; ref != "" {
+			if err := a.git.Run("reset", "--hard", ref); err != nil {
+				return err
+			}
+		}
+	}
+
+	for branch, ref := range refs {
+		if branch == "" || branch == resetBranch || ref == "" {
+			continue
+		}
+		if err := a.git.OutputErr("update-ref", "refs/heads/"+branch, ref); err != nil {
+			return err
+		}
+	}
+
+	restored := State{Stacks: cloneStacks(original.Stacks)}
+	if err := a.git.WriteState(restored); err != nil {
+		return err
+	}
+	if returnBranch != "" && returnBranch != resetBranch {
+		if err := a.git.Run("switch", returnBranch); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (a *App) amend(args []string) error {
 	commitArgs, err := parseAmendArgs(args)
 	if err != nil {
@@ -775,6 +1118,9 @@ func (a *App) abortRebase(args []string) error {
 	if state.Pending != nil && state.Pending.Operation == "split" {
 		return a.abortSplit(state, inProgress)
 	}
+	if state.Pending != nil && state.Pending.Operation == "squash" {
+		return a.abortSquash(state, inProgress)
+	}
 	if inProgress {
 		if err := a.git.Run("rebase", "--abort"); err != nil {
 			return err
@@ -842,6 +1188,23 @@ func (a *App) abortSplit(state State, rebaseInProgress bool) error {
 		}
 	}
 	return nil
+}
+
+func (a *App) abortSquash(state State, rebaseInProgress bool) error {
+	pending := state.Pending
+	if pending == nil || pending.Operation != "squash" {
+		return fmt.Errorf("no squash in progress")
+	}
+	if rebaseInProgress {
+		if err := a.git.Run("rebase", "--abort"); err != nil {
+			return err
+		}
+	}
+	returnBranch := pending.Top
+	if returnBranch == "" {
+		returnBranch = pending.ReturnBranch
+	}
+	return a.restoreOriginalRewrite(State{Stacks: cloneStacks(pending.OriginalStacks)}, pending.OriginalRefs, pending.Branch, returnBranch)
 }
 
 func (a *App) forget(args []string) error {
@@ -1193,8 +1556,10 @@ func (a *App) finishPendingRebases(state State) error {
 	if state.Pending != nil {
 		returnBranch = state.Pending.ReturnBranch
 		nextStacks = state.Pending.NextStacks
-		if state.Pending.Operation == "sync" {
+		if state.Pending.Operation == "sync" || state.Pending.Operation == "squash" {
 			appliedBranches = append([]string(nil), state.Pending.Branches...)
+		}
+		if state.Pending.Operation == "sync" {
 			baseChanges = append([]BaseChange(nil), state.Pending.BaseChanges...)
 		}
 	}
@@ -1501,6 +1866,12 @@ type commitOptions struct {
 	commitArgs   []string
 }
 
+type squashOptions struct {
+	count      int
+	commitArgs []string
+	messageSet bool
+}
+
 func parseNewArgs(args []string) (commitOptions, error) {
 	return parseCommitOptions(args, true)
 }
@@ -1521,6 +1892,75 @@ func parseSplitArgs(args []string) (string, error) {
 		return "", fmt.Errorf("unsupported argument %q; usage: graphene split [branch]", args[0])
 	}
 	return args[0], nil
+}
+
+func parseSquashArgs(args []string) (squashOptions, error) {
+	opts := squashOptions{count: 2}
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+
+		switch {
+		case arg == "-c" || arg == "--count":
+			if i+1 >= len(args) || args[i+1] == "" || strings.HasPrefix(args[i+1], "-") {
+				return opts, fmt.Errorf("missing count after %s", arg)
+			}
+			count, err := parseSquashCount(args[i+1])
+			if err != nil {
+				return opts, err
+			}
+			opts.count = count
+			i++
+		case strings.HasPrefix(arg, "--count="):
+			count, err := parseSquashCount(strings.TrimPrefix(arg, "--count="))
+			if err != nil {
+				return opts, err
+			}
+			opts.count = count
+		case shortSquashCount(arg):
+			count, err := parseSquashCount(strings.TrimPrefix(arg, "-c"))
+			if err != nil {
+				return opts, err
+			}
+			opts.count = count
+		case arg == "-m" || arg == "--message":
+			if i+1 >= len(args) {
+				return opts, fmt.Errorf("missing message after %s", arg)
+			}
+			opts.commitArgs = append(opts.commitArgs, "-m", args[i+1])
+			opts.messageSet = true
+			i++
+		case strings.HasPrefix(arg, "--message="):
+			opts.commitArgs = append(opts.commitArgs, arg)
+			opts.messageSet = true
+		case arg == "--no-verify":
+			opts.commitArgs = append(opts.commitArgs, arg)
+		case arg == "--gpg-sign" || strings.HasPrefix(arg, "--gpg-sign=") || arg == "--no-gpg-sign":
+			opts.commitArgs = append(opts.commitArgs, arg)
+		default:
+			return opts, fmt.Errorf("unsupported argument %q; supported squash options are -c/--count, -m/--message, --no-verify, --gpg-sign, and --no-gpg-sign", arg)
+		}
+	}
+	return opts, nil
+}
+
+func shortSquashCount(arg string) bool {
+	if !strings.HasPrefix(arg, "-c") || len(arg) == len("-c") {
+		return false
+	}
+	for _, r := range strings.TrimPrefix(arg, "-c") {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func parseSquashCount(raw string) (int, error) {
+	count, err := strconv.Atoi(raw)
+	if err != nil || count < 2 {
+		return 0, fmt.Errorf("invalid squash count %q; use 2, 3, ...", raw)
+	}
+	return count, nil
 }
 
 func parseCommitOptions(args []string, allowBranch bool) (commitOptions, error) {

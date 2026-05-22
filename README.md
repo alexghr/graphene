@@ -69,6 +69,13 @@ git add -p
 gn new -m "Wire helper"
 ```
 
+Squash the current branch into its parent, or squash a larger range ending at the current branch:
+
+```
+gn squash
+gn squash -c 3 -m "Combine parser cleanup"
+```
+
 Stop tracking the current branch path without deleting any Git branches:
 
 ```

@@ -63,6 +63,12 @@ func (a *App) Run(args []string) int {
 				return 0
 			}
 			err = a.split(args[2:])
+		case "squash":
+			if helpArgs(args[2:]) {
+				a.commandUsage("squash", a.stdout)
+				return 0
+			}
+			err = a.squash(args[2:])
 		case "continue":
 			if helpArgs(args[2:]) {
 				a.commandUsage("continue", a.stdout)
@@ -157,6 +163,7 @@ func (a *App) usage(w io.Writer) {
   graphene new [options]
   graphene amend [options]
   graphene split [branch]
+  graphene squash [--count <n>]
   graphene continue
   graphene abort
   graphene forget [--force]
@@ -203,6 +210,16 @@ When no branch is given, split the current branch. Commit the first split part w
   graphene new --reuse-current -m "First part"
 
 Commit later split parts with graphene new. When no tracked changes remain, Graphene restacks the original descendants onto the new split top.`,
+		"squash": `usage: graphene squash [options]
+
+Squash the current branch and one or more direct ancestors into the bottom branch.
+
+options:
+  -c, --count <n>            number of branches to squash, including the current branch (default: 2)
+  -m, --message <message>    use the given commit message
+      --no-verify            bypass commit hooks
+      --gpg-sign[=<key-id>]  GPG-sign the commit
+      --no-gpg-sign          do not GPG-sign the commit`,
 		"continue": "usage: graphene continue\n\nContinue the current Git rebase and any queued Graphene restacks.",
 		"abort":    "usage: graphene abort\n\nAbort the current Git rebase and clear queued Graphene restacks.",
 		"forget": `usage: graphene forget [--force]
