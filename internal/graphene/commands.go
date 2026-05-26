@@ -1241,6 +1241,87 @@ func (a *App) forget(args []string) error {
 	return a.git.WriteState(state)
 }
 
+type syncSelection struct {
+	Base        string
+	Current     string
+	BaseCurrent bool
+	Paths       []syncPath
+}
+
+type syncPath struct {
+	StackIndex         int
+	Stack              Stack
+	BranchLimit        int
+	CurrentBranchIndex int
+}
+
+func syncSelectionForCurrent(state State, current string) (syncSelection, bool) {
+	loc, ok := state.BranchLocation(current)
+	if ok {
+		stack, ok := state.StackAt(loc.StackIndex)
+		if !ok {
+			return syncSelection{}, false
+		}
+		return syncSelection{
+			Base:    stack.Base,
+			Current: current,
+			Paths: []syncPath{{
+				StackIndex:         loc.StackIndex,
+				Stack:              stack,
+				BranchLimit:        loc.BranchIndex + 1,
+				CurrentBranchIndex: loc.BranchIndex,
+			}},
+		}, true
+	}
+
+	var paths []syncPath
+	for i, stack := range state.Stacks {
+		if stack.Base != current || len(stack.Branches) == 0 {
+			continue
+		}
+		paths = append(paths, syncPath{
+			StackIndex:         i,
+			Stack:              stack,
+			BranchLimit:        len(stack.Branches),
+			CurrentBranchIndex: -1,
+		})
+	}
+	if len(paths) == 0 {
+		return syncSelection{}, false
+	}
+	return syncSelection{
+		Base:        current,
+		Current:     current,
+		BaseCurrent: true,
+		Paths:       paths,
+	}, true
+}
+
+func (s syncSelection) ContainsStack(index int) bool {
+	for _, path := range s.Paths {
+		if path.StackIndex == index {
+			return true
+		}
+	}
+	return false
+}
+
+func (s syncSelection) ReturnBranch(firstRemaining map[int]int) string {
+	if s.BaseCurrent || len(s.Paths) == 0 {
+		return s.Current
+	}
+
+	path := s.Paths[0]
+	first := firstRemaining[path.StackIndex]
+	if first <= path.CurrentBranchIndex {
+		return s.Current
+	}
+	if first < len(path.Stack.Branches) {
+		return path.Stack.Branches[first]
+	}
+	return ""
+}
+
 func (a *App) sync(args []string) error {
 	if len(args) != 0 {
 		return fmt.Errorf("graphene sync does not accept arguments")
@@ -1258,11 +1339,7 @@ func (a *App) sync(args []string) error {
 		return fmt.Errorf("pending rebase exists; use graphene continue or graphene abort")
 	}
 
-	loc, ok := state.BranchLocation(current)
-	if !ok {
-		return fmt.Errorf("branch %q is not in a graphene stack", current)
-	}
-	stack, ok := state.StackAt(loc.StackIndex)
+	selection, ok := syncSelectionForCurrent(state, current)
 	if !ok {
 		return fmt.Errorf("branch %q is not in a graphene stack", current)
 	}
@@ -1274,52 +1351,58 @@ func (a *App) sync(args []string) error {
 	if dirty {
 		return fmt.Errorf("tracked changes would prevent sync; stash or commit them before graphene sync")
 	}
-	if err := a.validateStackShape(stack); err != nil {
-		return err
+	for _, path := range selection.Paths {
+		if err := a.validateStackShape(path.Stack); err != nil {
+			return err
+		}
 	}
 
 	oldRefs := a.stateRefs(state)
-	baseRef, err := a.fetchBase(stack.Base)
+	baseRef, err := a.fetchSyncBase(selection.Base, current)
 	if err != nil {
 		return err
 	}
 
-	branches, err := a.appliedPrefixBranches(baseRef, stack.Branches[:loc.BranchIndex+1], oldRefs)
-	if err != nil {
-		return err
+	var branches []string
+	firstRemaining := map[int]int{}
+	for _, path := range selection.Paths {
+		applied, err := a.appliedPrefixBranches(baseRef, path.Stack.Branches[:path.BranchLimit], oldRefs)
+		if err != nil {
+			return err
+		}
+		firstRemaining[path.StackIndex] = len(applied)
+		branches = append(branches, applied...)
 	}
 
-	firstRemaining := len(branches)
-	nextState := RemoveBranchesWithBase(state, branches, stack.Base)
+	nextState := RemoveBranchesWithBase(state, branches, selection.Base)
 	baseChanges := branchBaseChanges(state, nextState)
 	deleted := map[string]bool{}
 	for _, branch := range branches {
 		deleted[branch] = true
 	}
 
-	returnBranch := current
-	if firstRemaining > loc.BranchIndex {
-		returnBranch = ""
-		if firstRemaining < len(stack.Branches) {
-			returnBranch = stack.Branches[firstRemaining]
-		}
-	}
+	returnBranch := selection.ReturnBranch(firstRemaining)
 
 	var ops []RebaseOp
 	var rewritten []string
 	skipTops := map[string]bool{}
-	if firstRemaining < len(stack.Branches) {
+	for _, path := range selection.Paths {
+		first := firstRemaining[path.StackIndex]
+		stack := path.Stack
+		if first >= len(stack.Branches) {
+			continue
+		}
 		predecessor := stack.Base
-		if firstRemaining > 0 {
-			predecessor = stack.Branches[firstRemaining-1]
+		if first > 0 {
+			predecessor = stack.Branches[first-1]
 		}
 		upstream := oldRefs[predecessor]
 		if upstream == "" {
 			return fmt.Errorf("missing old ref for %q", predecessor)
 		}
 
-		topIndex := loc.BranchIndex
-		if firstRemaining > loc.BranchIndex {
+		topIndex := path.BranchLimit - 1
+		if path.CurrentBranchIndex >= 0 && first > path.CurrentBranchIndex {
 			topIndex = len(stack.Branches) - 1
 		}
 		top := stack.Branches[topIndex]
@@ -1328,14 +1411,14 @@ func (a *App) sync(args []string) error {
 			Upstream: upstream,
 			Top:      top,
 		})
-		rewritten = append(rewritten, stack.Branches[firstRemaining:topIndex+1]...)
+		rewritten = append(rewritten, stack.Branches[first:topIndex+1]...)
 		if topIndex == len(stack.Branches)-1 {
 			skipTops[top] = true
 		}
 	}
 
 	for i, dependent := range state.Stacks {
-		if i == loc.StackIndex || !deleted[dependent.Base] || len(dependent.Branches) == 0 {
+		if selection.ContainsStack(i) || !deleted[dependent.Base] || len(dependent.Branches) == 0 {
 			continue
 		}
 		if err := a.validateStackShape(dependent); err != nil {
@@ -1372,7 +1455,7 @@ func (a *App) sync(args []string) error {
 			if err := a.git.Run("switch", returnBranch); err != nil {
 				return err
 			}
-		} else if err := a.switchToBaseOrDetach(stack.Base, baseRef); err != nil {
+		} else if err := a.switchToBaseOrDetach(selection.Base, baseRef); err != nil {
 			return err
 		}
 		if err := a.deleteBranches(branches); err != nil {
@@ -1647,36 +1730,70 @@ func (a *App) printSyncBaseChanges(changes []BaseChange) {
 	}
 }
 
-func (a *App) fetchBase(base string) (string, error) {
+func (a *App) fetchSyncBase(base, current string) (string, error) {
+	if base == current {
+		return a.fetchCurrentBase(base)
+	}
+	return a.fetchBase(base)
+}
+
+type fetchedBase struct {
+	Old     string
+	Updated string
+}
+
+func (a *App) fetchBaseUpdate(base string) (fetchedBase, error) {
 	remote, merge, err := a.git.Upstream(base)
 	if err != nil {
-		return "", err
+		return fetchedBase{}, err
 	}
 	if remote == "" || merge == "" {
-		return "", fmt.Errorf("branch %q has no upstream; set one before updating the stack", base)
+		return fetchedBase{}, fmt.Errorf("branch %q has no upstream; set one before updating the stack", base)
 	}
 
 	oldBase, err := a.git.Output("rev-parse", "--verify", "refs/heads/"+base+"^{commit}")
 	if err != nil {
-		return "", err
+		return fetchedBase{}, err
 	}
 	if err := a.git.Run("fetch", remote); err != nil {
-		return "", err
+		return fetchedBase{}, err
 	}
 
 	upstream := base + "@{upstream}"
 	updatedBase, err := a.git.Output("rev-parse", "--verify", upstream+"^{commit}")
 	if err != nil {
-		return "", err
+		return fetchedBase{}, err
 	}
 	ancestor, err := a.isAncestor(oldBase, updatedBase)
 	if err != nil {
-		return "", err
+		return fetchedBase{}, err
 	}
 	if !ancestor {
-		return "", fmt.Errorf("cannot fast-forward %q to %q; resolve the base branch before updating the stack", base, upstream)
+		return fetchedBase{}, fmt.Errorf("cannot fast-forward %q to %q; resolve the base branch before updating the stack", base, upstream)
 	}
-	if oldBase == updatedBase {
+	return fetchedBase{Old: oldBase, Updated: updatedBase}, nil
+}
+
+func (a *App) fetchCurrentBase(base string) (string, error) {
+	fetched, err := a.fetchBaseUpdate(base)
+	if err != nil {
+		return "", err
+	}
+	if fetched.Old == fetched.Updated {
+		return base, nil
+	}
+	if err := a.git.Run("merge", "--ff-only", fetched.Updated); err != nil {
+		return "", err
+	}
+	return base, nil
+}
+
+func (a *App) fetchBase(base string) (string, error) {
+	fetched, err := a.fetchBaseUpdate(base)
+	if err != nil {
+		return "", err
+	}
+	if fetched.Old == fetched.Updated {
 		return base, nil
 	}
 
@@ -1685,9 +1802,9 @@ func (a *App) fetchBase(base string) (string, error) {
 		return "", err
 	}
 	if checkedOut {
-		return updatedBase, nil
+		return fetched.Updated, nil
 	}
-	if err := a.git.OutputErr("update-ref", "refs/heads/"+base, updatedBase, oldBase); err != nil {
+	if err := a.git.OutputErr("update-ref", "refs/heads/"+base, fetched.Updated, fetched.Old); err != nil {
 		return "", err
 	}
 	return base, nil

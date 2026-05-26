@@ -21,6 +21,7 @@ Use `graphene` in commands. If the repo documents `gn`, treat it as an alias for
 - Use `graphene amend` instead of `git commit --amend` on stacked branches. Use `graphene amend --no-edit` when keeping the existing commit message.
 - Use `graphene split` to break an existing one-commit stacked branch into smaller reviewable branches.
 - Use `graphene squash` to combine the current branch with one or more direct ancestors. Use `--no-edit` to accept the generated squash message.
+- Use `graphene sync` after the stack base changes or when stack branches may have landed upstream.
 - After rewrite workflows such as amend, split, squash, or restack, inspect the stack and use `graphene sendf --dry-run` before pushing.
 - Run `graphene graph` before pushing.
 - Run `graphene send --dry-run` before pushing.
@@ -78,6 +79,20 @@ After approval to push:
 ```sh
 graphene send
 ```
+
+## Sync A Stack
+
+Run `graphene sync` after the stack base changes or when one or more stack branches may have landed upstream.
+
+```sh
+graphene sync
+graphene graph
+graphene sendf --dry-run
+```
+
+`graphene sync` can run from a tracked stack branch. It can also run from a stack base such as `main`; from a base branch, it syncs all stacks recorded with that exact base branch name.
+
+If sync reports branches to retarget or rewrites stack branches, use `graphene sendf --dry-run` before pushing. Only force-with-lease push with `graphene sendf` after approval.
 
 ## Amend A Stacked Branch
 
