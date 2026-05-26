@@ -59,6 +59,12 @@ gn amend -m "Wire export into settings"
 gn sendf
 ```
 
+Use `--no-edit` when you want to keep the existing commit message while amending:
+
+```
+gn amend --no-edit
+```
+
 Split the current stacked branch into multiple branches:
 
 ```
@@ -75,6 +81,8 @@ Squash the current branch into its parent, or squash a larger range ending at th
 gn squash
 gn squash -c 3 -m "Combine parser cleanup"
 ```
+
+Use `--no-edit` with `gn squash` to accept the generated squash message without opening an editor.
 
 Stop tracking the current branch path without deleting any Git branches:
 

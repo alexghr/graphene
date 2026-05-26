@@ -18,9 +18,9 @@ Use `graphene` in commands. If the repo documents `gn`, treat it as an alias for
 - Split work into small, reviewable branches.
 - Stage one logical change at a time.
 - Use `graphene new -m "<message>"` instead of `git commit`.
-- Use `graphene amend` instead of `git commit --amend` on stacked branches.
+- Use `graphene amend` instead of `git commit --amend` on stacked branches. Use `graphene amend --no-edit` when keeping the existing commit message.
 - Use `graphene split` to break an existing one-commit stacked branch into smaller reviewable branches.
-- Use `graphene squash` to combine the current branch with one or more direct ancestors.
+- Use `graphene squash` to combine the current branch with one or more direct ancestors. Use `--no-edit` to accept the generated squash message.
 - After rewrite workflows such as amend, split, squash, or restack, inspect the stack and use `graphene sendf --dry-run` before pushing.
 - Run `graphene graph` before pushing.
 - Run `graphene send --dry-run` before pushing.
@@ -81,10 +81,22 @@ graphene send
 
 ## Amend A Stacked Branch
 
+Use `--no-edit` instead of `-m` when the existing commit message should be preserved.
+
 ```sh
 git switch <branch>
 git add <files>
 graphene amend -m "Updated reviewable change"
+graphene graph
+graphene sendf --dry-run
+```
+
+To keep the existing commit message:
+
+```sh
+git switch <branch>
+git add <files>
+graphene amend --no-edit
 graphene graph
 graphene sendf --dry-run
 ```
@@ -113,11 +125,19 @@ The first split commit must use `graphene new --reuse-current`; later split part
 
 ## Squash Stacked Branches
 
-Use this when adjacent stack branches should become one reviewable branch. `-c`/`--count` includes the current branch and defaults to `2`.
+Use this when adjacent stack branches should become one reviewable branch. `-c`/`--count` includes the current branch and defaults to `2`. Use `--no-edit` to accept Graphene's generated squash message without opening an editor.
 
 ```sh
 graphene squash
 graphene squash -c 3 -m "Combine related changes"
+graphene graph
+graphene sendf --dry-run
+```
+
+To use the generated squash message without editing:
+
+```sh
+graphene squash --no-edit
 graphene graph
 graphene sendf --dry-run
 ```
