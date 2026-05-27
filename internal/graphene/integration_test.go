@@ -1554,6 +1554,65 @@ func TestPushPushesStackAndSetsUpstreams(t *testing.T) {
 	}
 }
 
+func TestSendAllowsUnrelatedPendingRebaseInAnotherWorktree(t *testing.T) {
+	repo := newTestRepo(t)
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	runGit(t, "", "init", "--bare", remote)
+	runGit(t, repo.dir, "remote", "add", "origin", remote)
+	runGit(t, repo.dir, "push", "-u", "origin", "main")
+
+	createStackBranch(t, repo, "independent.txt", "independent\n", "Independent")
+	runGit(t, repo.dir, "checkout", "main")
+	sendWorktree := filepath.Join(t.TempDir(), "send-worktree")
+	runGit(t, repo.dir, "worktree", "add", sendWorktree, "stack/independent")
+
+	createStackBranch(t, repo, "file.txt", "one\n", "One")
+	createStackBranch(t, repo, "file.txt", "two\n", "Two")
+	runGit(t, repo.dir, "checkout", "stack/one")
+	writeFile(t, repo.dir, "file.txt", "amended\n")
+	runGit(t, repo.dir, "add", ".")
+	code, _, stderr := repo.runGraphene(t, "amend", "-m", "One amended")
+	if code == 0 {
+		t.Fatal("graphene amend unexpectedly succeeded")
+	}
+	if stderr == "" {
+		t.Fatalf("expected conflict output on stderr")
+	}
+
+	sendRepo := testRepo{dir: sendWorktree, configDir: repo.configDir}
+	expectGrapheneOK(t, sendRepo, "send", "--dry-run", "origin")
+}
+
+func TestSendRejectsBranchPendingInAnotherWorktree(t *testing.T) {
+	repo := newTestRepo(t)
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	runGit(t, "", "init", "--bare", remote)
+	runGit(t, repo.dir, "remote", "add", "origin", remote)
+
+	createStackBranch(t, repo, "one.txt", "one\n", "One")
+	createStackBranch(t, repo, "two.txt", "two\n", "Two")
+	state := readState(t, repo.dir)
+	state.Pending = &Pending{
+		Operation: "amend",
+		Worktree:  filepath.Join(t.TempDir(), "other-worktree-git-dir"),
+		Branch:    "stack/one",
+		Queue: []RebaseOp{
+			{Onto: "stack/one", Upstream: "old-one", Top: "stack/two"},
+		},
+	}
+	if err := (Git{Dir: repo.dir}).WriteState(state); err != nil {
+		t.Fatal(err)
+	}
+
+	code, _, stderr := repo.runGraphene(t, "send", "--dry-run", "origin")
+	if code == 0 {
+		t.Fatal("graphene send unexpectedly succeeded")
+	}
+	if !strings.Contains(stderr, "pending rebase in another worktree is rewriting branch") {
+		t.Fatalf("stderr = %q", stderr)
+	}
+}
+
 func TestSendRejectsGitPushFlags(t *testing.T) {
 	repo := newTestRepo(t)
 	createStackBranch(t, repo, "one.txt", "one\n", "One")

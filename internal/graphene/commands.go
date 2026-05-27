@@ -169,7 +169,7 @@ func (a *App) split(args []string) error {
 	if !ok {
 		return fmt.Errorf("branch %q is not in a graphene stack", target)
 	}
-	nextState.Pending = &Pending{
+	pending, err := a.pendingForCurrentWorktree(Pending{
 		Operation:      "split",
 		Branch:         target,
 		ReturnBranch:   current,
@@ -179,7 +179,11 @@ func (a *App) split(args []string) error {
 		OriginalBase:   base,
 		OriginalRefs:   originalRefs,
 		OriginalStacks: originalStacks,
+	})
+	if err != nil {
+		return err
 	}
+	nextState.Pending = pending
 
 	if target != current {
 		if err := a.git.Run("switch", target); err != nil {
@@ -528,7 +532,7 @@ func (a *App) squash(args []string) error {
 		return nil
 	}
 
-	state.Pending = &Pending{
+	pending, err := a.pendingForCurrentWorktree(Pending{
 		Operation:      "squash",
 		Branch:         selection.Bottom,
 		ReturnBranch:   selection.Bottom,
@@ -538,7 +542,11 @@ func (a *App) squash(args []string) error {
 		NextStacks:     nextState.Stacks,
 		OriginalRefs:   oldRefs,
 		OriginalStacks: cloneStacks(state.Stacks),
+	})
+	if err != nil {
+		return restore(err)
 	}
+	state.Pending = pending
 	if err := a.git.WriteState(state); err != nil {
 		return restore(err)
 	}
@@ -814,12 +822,16 @@ func (a *App) amend(args []string) error {
 		return nil
 	}
 
-	state.Pending = &Pending{
+	pending, err := a.pendingForCurrentWorktree(Pending{
 		Operation:    "amend",
 		Branch:       current,
 		ReturnBranch: current,
 		Queue:        ops,
+	})
+	if err != nil {
+		return err
 	}
+	state.Pending = pending
 	if err := a.git.WriteState(state); err != nil {
 		return err
 	}
@@ -897,13 +909,17 @@ func (a *App) restack(args []string) error {
 		return err
 	}
 
-	state.Pending = &Pending{
+	pending, err := a.pendingForCurrentWorktree(Pending{
 		Operation:    "restack",
 		Branch:       current,
 		ReturnBranch: current,
 		Queue:        ops,
 		NextStacks:   nextState.Stacks,
+	})
+	if err != nil {
+		return err
 	}
+	state.Pending = pending
 	if err := a.git.WriteState(state); err != nil {
 		return err
 	}
@@ -1241,6 +1257,15 @@ func (a *App) forget(args []string) error {
 	return a.git.WriteState(state)
 }
 
+func (a *App) pendingForCurrentWorktree(pending Pending) (*Pending, error) {
+	worktree, err := a.git.WorktreeID()
+	if err != nil {
+		return nil, err
+	}
+	pending.Worktree = worktree
+	return &pending, nil
+}
+
 type syncSelection struct {
 	Base        string
 	Current     string
@@ -1468,7 +1493,7 @@ func (a *App) sync(args []string) error {
 		return nil
 	}
 
-	state.Pending = &Pending{
+	pending, err := a.pendingForCurrentWorktree(Pending{
 		Operation:    "sync",
 		Branch:       returnBranch,
 		ReturnBranch: returnBranch,
@@ -1476,7 +1501,11 @@ func (a *App) sync(args []string) error {
 		Branches:     branches,
 		NextStacks:   nextState.Stacks,
 		BaseChanges:  baseChanges,
+	})
+	if err != nil {
+		return err
 	}
+	state.Pending = pending
 	if err := a.git.WriteState(state); err != nil {
 		return err
 	}
@@ -1549,15 +1578,15 @@ func (a *App) sendBranches(args []string, forceWithLease bool) error {
 	if err != nil {
 		return err
 	}
-	if state.Pending != nil {
-		return fmt.Errorf("pending rebase exists; use graphene continue or graphene abort")
-	}
 	branches := BranchesThroughCurrent(state, current)
 	if opts.stack {
 		branches = BranchesThroughCurrentAndDescendants(state, current)
 	}
 	if len(branches) == 0 {
 		return fmt.Errorf("no branch to send")
+	}
+	if err := a.validateSendAllowed(state, branches); err != nil {
+		return err
 	}
 	remote := opts.remote
 	if remote == "" {
@@ -1595,6 +1624,82 @@ func (a *App) sendBranches(args []string, forceWithLease bool) error {
 		}
 	}
 	return a.printPullRequestURLs(remote, state, branches)
+}
+
+func (a *App) validateSendAllowed(state State, branches []string) error {
+	if state.Pending == nil {
+		return nil
+	}
+
+	currentWorktree, err := a.pendingBelongsToCurrentWorktree(state.Pending)
+	if err != nil {
+		return err
+	}
+	if currentWorktree {
+		return fmt.Errorf("pending rebase exists; use graphene continue or graphene abort")
+	}
+	if branch := pendingBranchBeingRewritten(state, branches); branch != "" {
+		return fmt.Errorf("pending rebase in another worktree is rewriting branch %q; use graphene continue or graphene abort there before graphene send", branch)
+	}
+	return nil
+}
+
+func (a *App) pendingBelongsToCurrentWorktree(pending *Pending) (bool, error) {
+	if pending.Worktree == "" {
+		return a.git.RebaseInProgress()
+	}
+	current, err := a.git.WorktreeID()
+	if err != nil {
+		return false, err
+	}
+	return filepath.Clean(pending.Worktree) == current, nil
+}
+
+func pendingBranchBeingRewritten(state State, branches []string) string {
+	affected := pendingAffectedBranches(state)
+	for _, branch := range branches {
+		if affected[branch] {
+			return branch
+		}
+	}
+	return ""
+}
+
+func pendingAffectedBranches(state State) map[string]bool {
+	affected := map[string]bool{}
+	if state.Pending == nil {
+		return affected
+	}
+
+	add := func(branch string) {
+		if branch != "" && state.ContainsBranch(branch) {
+			affected[branch] = true
+		}
+	}
+	addStack := func(branch string) {
+		loc, ok := state.BranchLocation(branch)
+		if !ok {
+			return
+		}
+		for _, stackBranch := range state.Stacks[loc.StackIndex].Branches {
+			add(stackBranch)
+		}
+	}
+
+	pending := state.Pending
+	for _, branch := range []string{pending.Branch, pending.ReturnBranch, pending.Top} {
+		add(branch)
+		addStack(branch)
+	}
+	for _, branch := range pending.Branches {
+		add(branch)
+		addStack(branch)
+	}
+	for _, op := range pending.Queue {
+		add(op.Top)
+		addStack(op.Top)
+	}
+	return affected
 }
 
 func (a *App) cleanupFailedCommit(original, branch string) {

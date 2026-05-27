@@ -310,6 +310,14 @@ func (g Git) RebaseInProgress() (bool, error) {
 	return false, nil
 }
 
+func (g Git) WorktreeID() (string, error) {
+	path, err := g.Output("rev-parse", "--absolute-git-dir")
+	if err != nil {
+		return "", err
+	}
+	return filepath.Clean(path), nil
+}
+
 func (g Git) GitPath(name string) (string, error) {
 	path, err := g.Output("rev-parse", "--git-path", name)
 	if err != nil {

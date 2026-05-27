@@ -19,6 +19,7 @@ type Stack struct {
 
 type Pending struct {
 	Operation      string            `json:"operation"`
+	Worktree       string            `json:"worktree,omitempty"`
 	Branch         string            `json:"branch,omitempty"`
 	ReturnBranch   string            `json:"returnBranch,omitempty"`
 	Queue          []RebaseOp        `json:"queue,omitempty"`
