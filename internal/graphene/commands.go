@@ -57,13 +57,17 @@ func (a *App) newBranch(args []string) error {
 		recordBase = opts.base
 	}
 
+	if err := a.stageRequestedChanges(opts); err != nil {
+		return err
+	}
+
 	branch := opts.branch
 	temp := false
 	var cfg Config
 	if opts.reuseCurrent {
 		branch = current
 	} else if branch == "" {
-		cfg, err = LoadConfig(a.getenv)
+		cfg, err = a.loadConfig()
 		if err != nil {
 			return err
 		}
@@ -232,6 +236,9 @@ func (a *App) newDuringSplit(opts commitOptions, current string, state State) er
 		}
 
 		commitGitArgs := append([]string{"commit"}, opts.commitArgs...)
+		if err := a.stageRequestedChanges(opts); err != nil {
+			return err
+		}
 		if err := a.git.Run(commitGitArgs...); err != nil {
 			return err
 		}
@@ -246,7 +253,7 @@ func (a *App) newDuringSplit(opts commitOptions, current string, state State) er
 	temp := false
 	var cfg Config
 	if branch == "" {
-		cfg, err = LoadConfig(a.getenv)
+		cfg, err = a.loadConfig()
 		if err != nil {
 			return err
 		}
@@ -255,6 +262,10 @@ func (a *App) newDuringSplit(opts commitOptions, current string, state State) er
 		}
 		branch = tempBranchName(os.Getpid(), time.Now().UnixNano())
 		temp = true
+	}
+
+	if err := a.stageRequestedChanges(opts); err != nil {
+		return err
 	}
 
 	if err := a.git.Run("switch", "-c", branch); err != nil {
@@ -772,7 +783,7 @@ func (a *App) restoreOriginalRewrite(original State, refs map[string]string, res
 }
 
 func (a *App) amend(args []string) error {
-	commitArgs, err := parseAmendArgs(args)
+	opts, err := parseAmendArgs(args)
 	if err != nil {
 		return err
 	}
@@ -788,6 +799,10 @@ func (a *App) amend(args []string) error {
 	}
 	if state.Pending != nil {
 		return fmt.Errorf("pending rebase exists; use graphene continue or graphene abort")
+	}
+
+	if err := a.stageRequestedChanges(opts); err != nil {
+		return err
 	}
 
 	oldRefs := a.stateRefs(state)
@@ -814,7 +829,7 @@ func (a *App) amend(args []string) error {
 		}
 	}
 
-	commitGitArgs := append([]string{"commit", "--amend"}, commitArgs...)
+	commitGitArgs := append([]string{"commit", "--amend"}, opts.commitArgs...)
 	if err := a.git.Run(commitGitArgs...); err != nil {
 		return err
 	}
@@ -1260,13 +1275,9 @@ func (a *App) forget(args []string) error {
 	return a.git.WriteState(state)
 }
 
-func (a *App) track(args []string) error {
-	base, branch, err := parseTrackArgs(args)
-	if err != nil {
-		return err
-	}
-
+func (a *App) trackBranch(base, branch string) error {
 	if branch == "" {
+		var err error
 		branch, err = a.git.CurrentBranch()
 		if err != nil {
 			return err
@@ -1289,6 +1300,14 @@ func (a *App) track(args []string) error {
 		return err
 	}
 	return a.git.WriteState(nextState)
+}
+
+func (a *App) track(args []string) error {
+	base, branch, err := parseTrackArgs(args)
+	if err != nil {
+		return err
+	}
+	return a.trackBranch(base, branch)
 }
 
 func (a *App) pendingForCurrentWorktree(pending Pending) (*Pending, error) {
@@ -2234,6 +2253,8 @@ type commitOptions struct {
 	branch       string
 	base         string
 	reuseCurrent bool
+	stageAll     bool
+	stageUpdate  bool
 	commitArgs   []string
 }
 
@@ -2253,9 +2274,8 @@ func parseNewArgs(args []string) (commitOptions, error) {
 	return parseCommitOptions(args, true)
 }
 
-func parseAmendArgs(args []string) ([]string, error) {
-	opts, err := parseCommitOptions(args, false)
-	return opts.commitArgs, err
+func parseAmendArgs(args []string) (commitOptions, error) {
+	return parseCommitOptions(args, false)
 }
 
 func parseSplitArgs(args []string) (string, error) {
@@ -2349,6 +2369,22 @@ func parseCommitOptions(args []string, allowBranch bool) (commitOptions, error) 
 		arg := args[i]
 
 		switch {
+		case arg == "-a" || arg == "--all":
+			opts.stageAll = true
+		case arg == "-u" || arg == "--update":
+			opts.stageUpdate = true
+		case shortCommitFlags(arg):
+			message, err := parseShortCommitFlags(arg, &opts)
+			if err != nil {
+				return opts, err
+			}
+			if message {
+				if i+1 >= len(args) {
+					return opts, fmt.Errorf("missing message after %s", arg)
+				}
+				opts.commitArgs = append(opts.commitArgs, "-m", args[i+1])
+				i++
+			}
 		case arg == "-b" || arg == "--branch":
 			if !allowBranch {
 				return opts, fmt.Errorf("graphene amend does not support %s", arg)
@@ -2429,10 +2465,57 @@ func parseCommitOptions(args []string, allowBranch bool) (commitOptions, error) 
 	return opts, nil
 }
 
+func shortCommitFlags(arg string) bool {
+	if !strings.HasPrefix(arg, "-") || strings.HasPrefix(arg, "--") || len(arg) <= 2 {
+		return false
+	}
+	for _, r := range strings.TrimPrefix(arg, "-") {
+		switch r {
+		case 'a', 'u', 'm':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func parseShortCommitFlags(arg string, opts *commitOptions) (bool, error) {
+	message := false
+	for _, r := range strings.TrimPrefix(arg, "-") {
+		switch r {
+		case 'a':
+			opts.stageAll = true
+		case 'u':
+			opts.stageUpdate = true
+		case 'm':
+			if message {
+				return false, fmt.Errorf("message flag specified more than once")
+			}
+			message = true
+		default:
+			return false, fmt.Errorf("unsupported argument %q", arg)
+		}
+	}
+	return message, nil
+}
+
+func (a *App) stageRequestedChanges(opts commitOptions) error {
+	switch {
+	case opts.stageAll:
+		return a.git.Run("add", "-A")
+	case opts.stageUpdate:
+		return a.git.Run("add", "-u")
+	default:
+		return nil
+	}
+}
+
 func unsupportedCommitArg(arg string, allowBranch bool) error {
 	supported := "-m/--message, --no-edit, --no-verify, --gpg-sign, and --no-gpg-sign"
 	if allowBranch {
-		supported = "-b/--branch, --base, --reuse-current, " + supported
+		supported = "-a/--all, -u/--update, -b/--branch, --base, --reuse-current, " + supported
+	} else {
+		supported = "-a/--all, -u/--update, " + supported
 	}
 	return fmt.Errorf("unsupported argument %q; supported commit options are %s", arg, supported)
 }
@@ -2451,17 +2534,41 @@ func parseForgetArgs(args []string) (bool, error) {
 }
 
 func parseTrackArgs(args []string) (string, string, error) {
-	if len(args) < 1 || len(args) > 2 || args[0] == "" {
-		return "", "", fmt.Errorf("usage: graphene track <base> [branch]")
-	}
-	if len(args) == 2 && args[1] == "" {
-		return "", "", fmt.Errorf("usage: graphene track <base> [branch]")
-	}
+	base := ""
 	branch := ""
-	if len(args) == 2 {
-		branch = args[1]
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		switch {
+		case arg == "-p" || arg == "--parent":
+			if base != "" {
+				return "", "", fmt.Errorf("graphene track accepts one --parent branch")
+			}
+			if i+1 >= len(args) || args[i+1] == "" || strings.HasPrefix(args[i+1], "-") {
+				return "", "", fmt.Errorf("missing branch after %s", arg)
+			}
+			base = args[i+1]
+			i++
+		case strings.HasPrefix(arg, "--parent="):
+			if base != "" {
+				return "", "", fmt.Errorf("graphene track accepts one --parent branch")
+			}
+			base = strings.TrimPrefix(arg, "--parent=")
+			if base == "" {
+				return "", "", fmt.Errorf("missing branch after --parent")
+			}
+		case strings.HasPrefix(arg, "-"):
+			return "", "", fmt.Errorf("unsupported argument %q; supported track option is --parent", arg)
+		default:
+			if branch != "" {
+				return "", "", fmt.Errorf("graphene track accepts one branch")
+			}
+			branch = arg
+		}
 	}
-	return args[0], branch, nil
+	if base == "" {
+		return "", "", fmt.Errorf("usage: graphene track --parent <base> [branch]")
+	}
+	return base, branch, nil
 }
 
 func parseSkillArgs(args []string) (skillOptions, error) {

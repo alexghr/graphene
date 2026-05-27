@@ -1,8 +1,6 @@
 package graphene
 
 import (
-	"os"
-	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -37,44 +35,6 @@ func TestBranchNameAndCandidate(t *testing.T) {
 	}
 	if got := CandidateName("stack/fix", 3); got != "stack/fix-3" {
 		t.Fatalf("CandidateName = %q", got)
-	}
-}
-
-func TestLoadConfig(t *testing.T) {
-	home := t.TempDir()
-	env := func(key string) string {
-		switch key {
-		case "XDG_CONFIG_HOME":
-			return filepath.Join(home, "xdg")
-		case "HOME":
-			return home
-		default:
-			return ""
-		}
-	}
-
-	cfg, err := LoadConfig(env)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.BranchPrefix != defaultBranchPrefix {
-		t.Fatalf("default prefix = %q", cfg.BranchPrefix)
-	}
-
-	configDir := filepath.Join(home, "xdg", "graphene")
-	if err := os.MkdirAll(configDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(configDir, "config.json"), []byte(`{"branchPrefix":""}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg, err = LoadConfig(env)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.BranchPrefix != "" {
-		t.Fatalf("empty prefix should be preserved, got %q", cfg.BranchPrefix)
 	}
 }
 
@@ -312,15 +272,15 @@ func TestStackGraphCandidates(t *testing.T) {
 		direction goDirection
 		want      []string
 	}{
-		{current: "main", direction: goNext, want: []string{"one", "other"}},
-		{current: "one", direction: goNext, want: []string{"two", "fork"}},
+		{current: "main", direction: goUp, want: []string{"one", "other"}},
+		{current: "one", direction: goUp, want: []string{"two", "fork"}},
 		{current: "one", direction: goTop, want: []string{"three", "fork-top"}},
 		{current: "main", direction: goTop, want: []string{"three", "fork-top", "other"}},
 		{current: "three", direction: goBottom, want: []string{"one"}},
 		{current: "main", direction: goBottom, want: []string{"one", "other"}},
-		{current: "fork", direction: goPrev, want: []string{"one"}},
-		{current: "one", direction: goPrev, want: []string{"main"}},
-		{current: "three", direction: goNext, want: nil},
+		{current: "fork", direction: goDown, want: []string{"one"}},
+		{current: "one", direction: goDown, want: []string{"main"}},
+		{current: "three", direction: goUp, want: nil},
 		{current: "one", direction: goBottom, want: nil},
 	}
 
@@ -368,12 +328,12 @@ func TestParseArgs(t *testing.T) {
 		t.Fatalf("parseNewArgs reuse-current = %#v", reuseOpts)
 	}
 
-	amendArgs, err := parseAmendArgs([]string{"-m", "hi", "--no-edit", "--gpg-sign"})
+	amendOpts, err := parseAmendArgs([]string{"-m", "hi", "--no-edit", "--gpg-sign"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(amendArgs, []string{"-m", "hi", "--no-edit", "--gpg-sign"}) {
-		t.Fatalf("parseAmendArgs = %#v", amendArgs)
+	if !reflect.DeepEqual(amendOpts.commitArgs, []string{"-m", "hi", "--no-edit", "--gpg-sign"}) {
+		t.Fatalf("parseAmendArgs = %#v", amendOpts)
 	}
 
 	squashOpts, err := parseSquashArgs([]string{"-c3", "--message=combined", "--no-edit", "--no-verify"})
@@ -407,12 +367,12 @@ func TestParseArgs(t *testing.T) {
 	if sendOpts.remote != "origin" || sendOpts.stack || sendOpts.dryRun {
 		t.Fatalf("parseSendArgs positional remote = %#v", sendOpts)
 	}
-	goOpts, err := parseGoArgs([]string{"--next", "2"})
+	goOpts, err := parseGoArgs([]string{"up", "2"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if goOpts.direction != goNext || goOpts.selector != 2 {
-		t.Fatalf("parseGoArgs --next = %#v", goOpts)
+	if goOpts.direction != goUp || goOpts.selector != 2 {
+		t.Fatalf("parseGoArgs up = %#v", goOpts)
 	}
 	goOpts, err = parseGoArgs([]string{"--bottom=3"})
 	if err != nil {
@@ -428,12 +388,12 @@ func TestParseArgs(t *testing.T) {
 	if goOpts.direction != goTop || goOpts.selector != 0 {
 		t.Fatalf("parseGoArgs -t = %#v", goOpts)
 	}
-	goOpts, err = parseGoArgs([]string{"-n2"})
+	goOpts, err = parseGoArgs([]string{"-u2"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if goOpts.direction != goNext || goOpts.selector != 2 {
-		t.Fatalf("parseGoArgs -n2 = %#v", goOpts)
+	if goOpts.direction != goUp || goOpts.selector != 2 {
+		t.Fatalf("parseGoArgs -u2 = %#v", goOpts)
 	}
 	force, err := parseForgetArgs([]string{"--force"})
 	if err != nil {
@@ -452,22 +412,36 @@ func TestParseArgs(t *testing.T) {
 	if _, err := parseForgetArgs([]string{"--bad"}); err == nil {
 		t.Fatal("parseForgetArgs accepted --bad")
 	}
-	base, branch, err := parseTrackArgs([]string{"main", "feature/existing"})
+	aliasNew, err := parseNewArgs([]string{"-am", "One", "--branch", "feature/one"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if base != "main" || branch != "feature/existing" {
-		t.Fatalf("parseTrackArgs = %q %q, want main feature/existing", base, branch)
+	if !aliasNew.stageAll || aliasNew.branch != "feature/one" || !reflect.DeepEqual(aliasNew.commitArgs, []string{"-m", "One"}) {
+		t.Fatalf("parseNewArgs alias form = %#v", aliasNew)
 	}
-	base, branch, err = parseTrackArgs([]string{"main"})
+	aliasAmend, err := parseAmendArgs([]string{"--update", "--message=One"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if base != "main" || branch != "" {
-		t.Fatalf("parseTrackArgs current branch = %q %q, want main empty branch", base, branch)
+	if !aliasAmend.stageUpdate || !reflect.DeepEqual(aliasAmend.commitArgs, []string{"--message=One"}) {
+		t.Fatalf("parseAmendArgs alias form = %#v", aliasAmend)
 	}
-	if _, _, err := parseTrackArgs(nil); err == nil {
-		t.Fatal("parseTrackArgs accepted missing base")
+	if _, err := parseAmendArgs([]string{"-cam", "One"}); err == nil {
+		t.Fatal("parseAmendArgs accepted unsupported short commit option")
+	}
+	base, branch, err := parseTrackArgs([]string{"--parent", "main", "feature/one"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if base != "main" || branch != "feature/one" {
+		t.Fatalf("parseTrackArgs = base %q branch %q", base, branch)
+	}
+	aliasWords, err := splitAlias(`new --branch "feature one" -m hi`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(aliasWords, []string{"new", "--branch", "feature one", "-m", "hi"}) {
+		t.Fatalf("splitAlias = %#v", aliasWords)
 	}
 	skillOpts, err := parseSkillArgs([]string{"--out=SKILL.md"})
 	if err != nil {
@@ -515,13 +489,13 @@ func TestParseArgs(t *testing.T) {
 	if _, err := parseGoArgs(nil); err == nil {
 		t.Fatal("parseGoArgs accepted no direction")
 	}
-	if _, err := parseGoArgs([]string{"--next", "--top"}); err == nil {
+	if _, err := parseGoArgs([]string{"--up", "--top"}); err == nil {
 		t.Fatal("parseGoArgs accepted multiple directions")
 	}
-	if _, err := parseGoArgs([]string{"--next", "0"}); err == nil {
+	if _, err := parseGoArgs([]string{"--up", "0"}); err == nil {
 		t.Fatal("parseGoArgs accepted selector 0")
 	}
-	if _, err := parseGoArgs([]string{"--next="}); err == nil {
+	if _, err := parseGoArgs([]string{"--up="}); err == nil {
 		t.Fatal("parseGoArgs accepted empty inline selector")
 	}
 	if _, err := parseNewArgs([]string{"--amend", "-m", "bad"}); err == nil {

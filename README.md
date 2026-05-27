@@ -42,8 +42,8 @@ gn graph
 Move through the stack:
 
 ```
-gn go --next
-gn go --top 2
+gn go up
+gn go top 2
 ```
 
 Push the current branch and the branches it depends on:
@@ -93,11 +93,50 @@ gn forget
 Record an existing one-commit branch on top of a base branch:
 
 ```
-gn track main
-gn track main feature/already-created
+gn track --parent main
+gn track --parent main feature/already-created
 ```
 
 Run `gn help` or `gn help <command>` for full command details.
+
+## Aliases
+
+Graphene has Git-style aliases stored as config keys under `alias.<name>`. For example, you can create the common short commands yourself:
+
+```
+graphene config set --global alias.create new
+graphene config set --global alias.modify amend
+graphene config set --global alias.submit sendf
+graphene config set --global alias.ss sendf --stack
+graphene config set --global alias.up go up
+graphene config set --global alias.down go down
+graphene config set --global alias.top go top
+graphene config set --global alias.bottom go bottom
+graphene config set --global alias.log graph
+graphene config set --global alias.tr track
+```
+
+Non-shell aliases are split like shell words and receive any extra arguments after the alias expansion. Shell aliases start with `!` and run through `sh`, with extra arguments appended the same way Git does:
+
+```
+graphene config set --global alias.save "!git add -A && graphene new -m"
+```
+
+## Config
+
+Graphene settings are stored in Git config. Use `--global` for user-wide defaults and omit it for repository-local settings:
+
+```
+graphene config set --global branchPrefix stack
+graphene config get branchPrefix
+graphene config unset branchPrefix
+```
+
+For non-GitHub remotes, set a pull request URL template:
+
+```
+graphene config set prUrlTemplate "https://example.test/pr/${baseBranch}/${targetBranch}"
+```
 
 ## Agents
 

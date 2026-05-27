@@ -11,8 +11,8 @@ type goDirection string
 const (
 	goTop    goDirection = "top"
 	goBottom goDirection = "bottom"
-	goNext   goDirection = "next"
-	goPrev   goDirection = "prev"
+	goUp     goDirection = "up"
+	goDown   goDirection = "down"
 )
 
 type goOptions struct {
@@ -57,6 +57,14 @@ func parseGoArgs(args []string) (goOptions, error) {
 		)
 
 		switch {
+		case arg == "top":
+			direction, ok = goTop, true
+		case arg == "bottom":
+			direction, ok = goBottom, true
+		case arg == "up":
+			direction, ok = goUp, true
+		case arg == "down":
+			direction, ok = goDown, true
 		case arg == "--top" || arg == "-t":
 			direction, ok = goTop, true
 		case strings.HasPrefix(arg, "--top="):
@@ -69,20 +77,20 @@ func parseGoArgs(args []string) (goOptions, error) {
 			direction, selector, inlineSelector, ok = goBottom, strings.TrimPrefix(arg, "--bottom="), true, true
 		case shortGoSelector(arg, "b"):
 			direction, selector, ok = goBottom, strings.TrimPrefix(arg, "-b"), true
-		case arg == "--next" || arg == "-n":
-			direction, ok = goNext, true
-		case strings.HasPrefix(arg, "--next="):
-			direction, selector, inlineSelector, ok = goNext, strings.TrimPrefix(arg, "--next="), true, true
-		case shortGoSelector(arg, "n"):
-			direction, selector, ok = goNext, strings.TrimPrefix(arg, "-n"), true
-		case arg == "--prev" || arg == "-p":
-			direction, ok = goPrev, true
-		case strings.HasPrefix(arg, "--prev="):
-			direction, selector, inlineSelector, ok = goPrev, strings.TrimPrefix(arg, "--prev="), true, true
-		case shortGoSelector(arg, "p"):
-			direction, selector, ok = goPrev, strings.TrimPrefix(arg, "-p"), true
+		case arg == "--up" || arg == "-u":
+			direction, ok = goUp, true
+		case strings.HasPrefix(arg, "--up="):
+			direction, selector, inlineSelector, ok = goUp, strings.TrimPrefix(arg, "--up="), true, true
+		case shortGoSelector(arg, "u"):
+			direction, selector, ok = goUp, strings.TrimPrefix(arg, "-u"), true
+		case arg == "--down" || arg == "-d":
+			direction, ok = goDown, true
+		case strings.HasPrefix(arg, "--down="):
+			direction, selector, inlineSelector, ok = goDown, strings.TrimPrefix(arg, "--down="), true, true
+		case shortGoSelector(arg, "d"):
+			direction, selector, ok = goDown, strings.TrimPrefix(arg, "-d"), true
 		default:
-			return opts, fmt.Errorf("unsupported argument %q; supported go options are -t/--top, -b/--bottom, -n/--next, and -p/--prev", arg)
+			return opts, fmt.Errorf("unsupported argument %q; supported go directions are up, down, top, and bottom", arg)
 		}
 
 		if ok {
@@ -107,7 +115,7 @@ func parseGoArgs(args []string) (goOptions, error) {
 		}
 	}
 	if opts.direction == "" {
-		return opts, fmt.Errorf("usage: graphene go (--top|--bottom|--next|--prev) [number]")
+		return opts, fmt.Errorf("usage: graphene go <up|down|top|bottom> [number]")
 	}
 	return opts, nil
 }
@@ -157,9 +165,9 @@ func goTarget(state State, current string, direction goDirection, selector int) 
 
 func (g stackGraph) candidates(current string, direction goDirection) []string {
 	switch direction {
-	case goNext:
+	case goUp:
 		return append([]string(nil), g.children[current]...)
-	case goPrev:
+	case goDown:
 		if parent := g.parent[current]; parent != "" {
 			return []string{parent}
 		}
@@ -210,10 +218,10 @@ func noGoCandidateError(current string, direction goDirection) error {
 		return fmt.Errorf("branch %q is already at the top of its stack", current)
 	case goBottom:
 		return fmt.Errorf("branch %q is already at the bottom of its stack", current)
-	case goNext:
-		return fmt.Errorf("branch %q has no next branch", current)
-	case goPrev:
-		return fmt.Errorf("branch %q has no previous branch", current)
+	case goUp:
+		return fmt.Errorf("branch %q has no branch upstack", current)
+	case goDown:
+		return fmt.Errorf("branch %q has no branch downstack", current)
 	default:
 		return fmt.Errorf("branch %q has no branch for --%s", current, direction)
 	}

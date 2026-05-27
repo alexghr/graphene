@@ -178,7 +178,7 @@ func (g Git) RemoteURL(remote string) (string, error) {
 }
 
 func (g Git) PRURLTemplate() (string, error) {
-	template, err := g.Output("config", "--local", "--get", "graphene.prUrlTemplate")
+	template, err := g.Output("config", "--get", "graphene.prUrlTemplate")
 	if err == nil {
 		return template, nil
 	}

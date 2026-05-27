@@ -40,18 +40,18 @@ graphene graph
 Use Graphene stack navigation for tracked branches:
 
 ```sh
-graphene go --next
-graphene go --prev
-graphene go --top
-graphene go --bottom
+graphene go up
+graphene go down
+graphene go top
+graphene go bottom
 ```
 
-Short flags are available as `-n`, `-p`, `-t`, and `-b`.
+Short flags are available as `-u`, `-d`, `-t`, and `-b`.
 
 When Graphene reports multiple possible branches, choose from the numbered list it prints and rerun with that selector:
 
 ```sh
-graphene go --next 2
+graphene go up 2
 graphene go -t2
 ```
 

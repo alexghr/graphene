@@ -306,7 +306,7 @@ func TestTrackCurrentBranchExtendsExistingStack(t *testing.T) {
 	expectGrapheneOK(t, repo, "new", "--branch", "b", "-m", "B")
 
 	runGit(t, repo.dir, "checkout", "a")
-	expectGrapheneOK(t, repo, "track", "z")
+	expectGrapheneOK(t, repo, "track", "--parent", "z")
 
 	state := readState(t, repo.dir)
 	want := []Stack{{Base: "z", Branches: []string{"a", "b"}}}
@@ -339,7 +339,7 @@ func TestTrackRejectsMultiCommitBranch(t *testing.T) {
 	runGit(t, repo.dir, "add", ".")
 	runGit(t, repo.dir, "commit", "-m", "AA")
 
-	code, _, stderr := repo.runGraphene(t, "track", "z")
+	code, _, stderr := repo.runGraphene(t, "track", "--parent", "z")
 	if code == 0 {
 		t.Fatal("graphene track unexpectedly succeeded")
 	}
@@ -349,6 +349,173 @@ func TestTrackRejectsMultiCommitBranch(t *testing.T) {
 	state := readState(t, repo.dir)
 	if len(state.Stacks) != 0 {
 		t.Fatalf("stacks = %#v, want none", state.Stacks)
+	}
+}
+
+func TestCreateAliasStagesAll(t *testing.T) {
+	repo := newTestRepo(t)
+	runGit(t, repo.dir, "config", "graphene.alias.create", "new")
+
+	writeFile(t, repo.dir, "one.txt", "one\n")
+	expectGrapheneOK(t, repo, "create", "-am", "One")
+
+	if got := currentBranch(t, repo.dir); got != "stack/one" {
+		t.Fatalf("branch = %q, want stack/one", got)
+	}
+	if got := runGit(t, repo.dir, "show", "HEAD:one.txt"); got != "one" {
+		t.Fatalf("one.txt = %q, want one", got)
+	}
+	state := readState(t, repo.dir)
+	want := []Stack{{Base: "main", Branches: []string{"stack/one"}}}
+	if !reflect.DeepEqual(state.Stacks, want) {
+		t.Fatalf("stacks = %#v, want %#v", state.Stacks, want)
+	}
+}
+
+func TestModifyAliasStagesAllAndRestacksDescendants(t *testing.T) {
+	repo := newTestRepo(t)
+	runGit(t, repo.dir, "config", "graphene.alias.modify", "amend")
+	createStackBranch(t, repo, "one.txt", "one\n", "One")
+	createStackBranch(t, repo, "two.txt", "two\n", "Two")
+
+	runGit(t, repo.dir, "checkout", "stack/one")
+	writeFile(t, repo.dir, "one.txt", "one amended\n")
+	expectGrapheneOK(t, repo, "modify", "-am", "One amended")
+
+	if got := runGit(t, repo.dir, "show", "stack/one:one.txt"); got != "one amended" {
+		t.Fatalf("one.txt = %q, want one amended", got)
+	}
+	parentTwo := runGit(t, repo.dir, "rev-parse", "stack/two^")
+	branchOne := runGit(t, repo.dir, "rev-parse", "stack/one")
+	if parentTwo != branchOne {
+		t.Fatalf("stack/two parent = %s, want stack/one %s", parentTwo, branchOne)
+	}
+}
+
+func TestNavigationAndLogAliases(t *testing.T) {
+	repo := newTestRepo(t)
+	runGit(t, repo.dir, "config", "graphene.alias.down", "go down")
+	runGit(t, repo.dir, "config", "graphene.alias.up", "go up")
+	runGit(t, repo.dir, "config", "graphene.alias.bottom", "go bottom")
+	runGit(t, repo.dir, "config", "graphene.alias.top", "go top")
+	runGit(t, repo.dir, "config", "graphene.alias.log", "graph")
+	createStackBranch(t, repo, "one.txt", "one\n", "One")
+	createStackBranch(t, repo, "two.txt", "two\n", "Two")
+
+	expectGrapheneOK(t, repo, "down")
+	if got := currentBranch(t, repo.dir); got != "stack/one" {
+		t.Fatalf("branch after down = %q, want stack/one", got)
+	}
+	expectGrapheneOK(t, repo, "up")
+	if got := currentBranch(t, repo.dir); got != "stack/two" {
+		t.Fatalf("branch after up = %q, want stack/two", got)
+	}
+	expectGrapheneOK(t, repo, "bottom")
+	if got := currentBranch(t, repo.dir); got != "stack/one" {
+		t.Fatalf("branch after bottom = %q, want stack/one", got)
+	}
+	expectGrapheneOK(t, repo, "top")
+	if got := currentBranch(t, repo.dir); got != "stack/two" {
+		t.Fatalf("branch after top = %q, want stack/two", got)
+	}
+
+	code, stdout, stderr := repo.runGraphene(t, "log", "short")
+	if code != 0 {
+		t.Fatalf("graphene log short exited %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	want := "" +
+		"main\n" +
+		"  `- stack/one\n" +
+		"     `- stack/two *\n"
+	if stdout != want {
+		t.Fatalf("stdout = %q, want %q", stdout, want)
+	}
+}
+
+func TestTrackShortAlias(t *testing.T) {
+	repo := newTestRepo(t)
+	runGit(t, repo.dir, "config", "graphene.alias.tr", "track")
+	runGit(t, repo.dir, "checkout", "-b", "z")
+	runGit(t, repo.dir, "checkout", "-b", "a")
+	writeFile(t, repo.dir, "a.txt", "a\n")
+	runGit(t, repo.dir, "add", ".")
+	runGit(t, repo.dir, "commit", "-m", "A")
+
+	expectGrapheneOK(t, repo, "tr", "--parent", "z")
+
+	state := readState(t, repo.dir)
+	want := []Stack{{Base: "z", Branches: []string{"a"}}}
+	if !reflect.DeepEqual(state.Stacks, want) {
+		t.Fatalf("stacks = %#v, want %#v", state.Stacks, want)
+	}
+}
+
+func TestConfigAliasExpandsBeforeDispatch(t *testing.T) {
+	repo := newTestRepo(t)
+	runGit(t, repo.dir, "config", "graphene.alias.makeone", `new -m "Alias One"`)
+
+	writeFile(t, repo.dir, "one.txt", "one\n")
+	runGit(t, repo.dir, "add", ".")
+	expectGrapheneOK(t, repo, "makeone")
+
+	if got := currentBranch(t, repo.dir); got != "stack/alias-one" {
+		t.Fatalf("branch = %q, want stack/alias-one", got)
+	}
+}
+
+func TestShellAliasRunsWithArguments(t *testing.T) {
+	repo := newTestRepo(t)
+	runGit(t, repo.dir, "config", "graphene.alias.echo-one", `!printf '%s\n'`)
+
+	code, stdout, stderr := repo.runGraphene(t, "echo-one", "a'b")
+	if code != 0 {
+		t.Fatalf("shell alias exited %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if stdout != "a'b\n" || stderr != "" {
+		t.Fatalf("unexpected shell alias output\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
+	}
+}
+
+func TestAliasLoopFails(t *testing.T) {
+	repo := newTestRepo(t)
+	runGit(t, repo.dir, "config", "graphene.alias.one", "two")
+	runGit(t, repo.dir, "config", "graphene.alias.two", "one")
+
+	code, _, stderr := repo.runGraphene(t, "one")
+	if code == 0 {
+		t.Fatal("alias loop unexpectedly succeeded")
+	}
+	if !strings.Contains(stderr, `alias loop detected at "one"`) {
+		t.Fatalf("stderr = %q", stderr)
+	}
+}
+
+func TestConfigSetGetUnsetAndBranchPrefix(t *testing.T) {
+	repo := newTestRepo(t)
+
+	expectGrapheneOK(t, repo, "config", "set", "alias.up", "go", "up")
+	code, stdout, stderr := repo.runGraphene(t, "config", "get", "alias.up")
+	if code != 0 {
+		t.Fatalf("graphene config get exited %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if stdout != "go up\n" || stderr != "" {
+		t.Fatalf("unexpected config get output\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
+	}
+
+	expectGrapheneOK(t, repo, "config", "set", "branchPrefix", "feature")
+	writeFile(t, repo.dir, "one.txt", "one\n")
+	expectGrapheneOK(t, repo, "new", "-am", "One")
+	if got := currentBranch(t, repo.dir); got != "feature/one" {
+		t.Fatalf("branch = %q, want feature/one", got)
+	}
+
+	expectGrapheneOK(t, repo, "config", "unset", "alias.up")
+	code, _, stderr = repo.runGraphene(t, "config", "get", "alias.up")
+	if code == 0 {
+		t.Fatal("graphene config get unexpectedly found alias.up after unset")
+	}
+	if !strings.Contains(stderr, `config key "alias.up" is not set`) {
+		t.Fatalf("stderr = %q", stderr)
 	}
 }
 
@@ -1883,17 +2050,17 @@ func TestGoWalksForkedStack(t *testing.T) {
 	runGit(t, repo.dir, "checkout", "stack/one")
 	createStackBranch(t, repo, "fork.txt", "fork\n", "Fork")
 
-	expectGrapheneOK(t, repo, "go", "--prev")
+	expectGrapheneOK(t, repo, "go", "down")
 	if got := currentBranch(t, repo.dir); got != "stack/one" {
 		t.Fatalf("branch = %q, want stack/one", got)
 	}
 
-	code, _, stderr := repo.runGraphene(t, "go", "--next")
+	code, _, stderr := repo.runGraphene(t, "go", "up")
 	if code == 0 {
-		t.Fatal("graphene go --next unexpectedly succeeded")
+		t.Fatal("graphene go up unexpectedly succeeded")
 	}
 	wantNext := "" +
-		"multiple branches match --next; rerun with --next <number>:\n" +
+		"multiple branches match --up; rerun with --up <number>:\n" +
 		"possible branches:\n" +
 		"  1. stack/two\n" +
 		"  2. stack/fork\n"
@@ -1904,9 +2071,9 @@ func TestGoWalksForkedStack(t *testing.T) {
 		t.Fatalf("branch = %q, want stack/one", got)
 	}
 
-	code, _, stderr = repo.runGraphene(t, "go", "--top")
+	code, _, stderr = repo.runGraphene(t, "go", "top")
 	if code == 0 {
-		t.Fatal("graphene go --top unexpectedly succeeded")
+		t.Fatal("graphene go top unexpectedly succeeded")
 	}
 	wantTop := "" +
 		"multiple branches match --top; rerun with --top <number>:\n" +
@@ -1917,17 +2084,17 @@ func TestGoWalksForkedStack(t *testing.T) {
 		t.Fatalf("stderr = %q, want %q", stderr, wantTop)
 	}
 
-	expectGrapheneOK(t, repo, "go", "--next", "2")
+	expectGrapheneOK(t, repo, "go", "up", "2")
 	if got := currentBranch(t, repo.dir); got != "stack/fork" {
 		t.Fatalf("branch = %q, want stack/fork", got)
 	}
 
-	expectGrapheneOK(t, repo, "go", "--bottom")
+	expectGrapheneOK(t, repo, "go", "bottom")
 	if got := currentBranch(t, repo.dir); got != "stack/one" {
 		t.Fatalf("branch = %q, want stack/one", got)
 	}
 
-	expectGrapheneOK(t, repo, "go", "--top", "1")
+	expectGrapheneOK(t, repo, "go", "top", "1")
 	if got := currentBranch(t, repo.dir); got != "stack/two" {
 		t.Fatalf("branch = %q, want stack/two", got)
 	}

@@ -7,8 +7,8 @@ import (
 )
 
 func (a *App) graph(args []string) error {
-	if len(args) != 0 {
-		return fmt.Errorf("graphene graph does not accept arguments")
+	if len(args) > 1 || (len(args) == 1 && args[0] != "short" && args[0] != "long") {
+		return fmt.Errorf("graphene graph accepts only optional alias format short or long")
 	}
 
 	state, err := a.git.ReadState()

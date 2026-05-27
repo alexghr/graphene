@@ -32,7 +32,7 @@ func (a *App) Run(args []string) int {
 	if len(args) >= 2 {
 		command = args[1]
 	}
-
+	shellAliasRan := false
 	gitVersion, err := a.git.Version()
 	if err == nil && !isVersionCommand(command) && gitVersion.less(minimumGitVersion) {
 		err = fmt.Errorf("graphene requires git >= %s; found git %s", minimumGitVersion, gitVersion)
@@ -44,6 +44,23 @@ func (a *App) Run(args []string) int {
 			return 1
 		}
 
+		expanded, expandErr := a.expandAliases(args)
+		if expandErr != nil {
+			err = expandErr
+		} else if expanded.shell != nil {
+			err = a.runShellAlias(*expanded.shell)
+			shellAliasRan = true
+		} else {
+			args = expanded.args
+			command = args[1]
+		}
+	}
+
+	if err == nil && shellAliasRan {
+		return 0
+	}
+
+	if err == nil {
 		switch command {
 		case "new":
 			if helpArgs(args[2:]) {
@@ -87,6 +104,12 @@ func (a *App) Run(args []string) int {
 				return 0
 			}
 			err = a.abortRebase(args[2:])
+		case "config":
+			if helpArgs(args[2:]) {
+				a.commandUsage("config", a.stdout)
+				return 0
+			}
+			err = a.config(args[2:])
 		case "forget":
 			if helpArgs(args[2:]) {
 				a.commandUsage("forget", a.stdout)
@@ -143,9 +166,9 @@ func (a *App) Run(args []string) int {
 			err = a.version(args[2:], gitVersion)
 		case "help":
 			if len(args) > 2 {
-				command := args[2]
-				if command == "agent-skill" {
-					command = "skill"
+				command, err := a.helpCommand(args[2])
+				if err != nil {
+					break
 				}
 				if !a.commandUsage(command, a.stdout) {
 					err = fmt.Errorf("unknown command %q", args[2])
@@ -168,7 +191,8 @@ func (a *App) Run(args []string) int {
 	}
 
 	var gitErr *GitError
-	if !(errors.As(err, &gitErr) && gitErr.Streamed) {
+	var aliasErr *shellAliasError
+	if !(errors.As(err, &gitErr) && gitErr.Streamed) && !errors.As(err, &aliasErr) {
 		fmt.Fprintln(a.stderr, err)
 	}
 	return errorExitCode(err)
@@ -182,13 +206,14 @@ func (a *App) usage(w io.Writer) {
   graphene squash [--count <n>]
   graphene continue
   graphene abort
+  graphene config <get|set|unset> [--global|--local] <key> [value]
   graphene forget [--force]
-  graphene track <base> [branch]
+  graphene track --parent <base> [branch]
   graphene sync
   graphene send [--remote <remote>] [--stack] [--dry-run]
   graphene sendf [--remote <remote>] [--stack] [--dry-run]
   graphene restack <base>
-  graphene go (--top|--bottom|--next|--prev) [number]
+  graphene go <up|down|top|bottom> [number]
   graphene graph
   graphene skill [--codex|--claude|--out <path>]
   graphene version
@@ -203,6 +228,8 @@ func (a *App) commandUsage(command string, w io.Writer) bool {
 Commit staged changes on a new branch, or on the current branch with --reuse-current, and record it in the stack.
 
 options:
+  -a, --all                  stage all changes before committing
+  -u, --update               stage tracked-file updates before committing
   -b, --branch <branch>      use an explicit branch name
       --base <branch>        record the new branch as a child of this branch
       --reuse-current        commit on the current branch instead of creating one
@@ -216,6 +243,8 @@ options:
 Amend the current commit and restack dependent branches.
 
 options:
+  -a, --all                  stage all changes before amending
+  -u, --update               stage tracked-file updates before amending
   -m, --message <message>    use the given commit message
       --no-edit              use the selected commit message without opening an editor
       --no-verify            bypass commit hooks
@@ -251,13 +280,22 @@ options:
       --out <path>  write SKILL.md to this path; use - for stdout`,
 		"continue": "usage: graphene continue\n\nContinue the current Git rebase and any queued Graphene restacks.",
 		"abort":    "usage: graphene abort\n\nAbort the current Git rebase and clear queued Graphene restacks.",
+		"config": `usage: graphene config <get|set|unset> [--global|--local] <key> [value]
+
+Read and write Graphene settings in Git config. Keys may be written with or without the graphene. prefix.
+
+examples:
+  graphene config set --global alias.up go up
+  graphene config get branchPrefix
+  graphene config set branchPrefix stack
+  graphene config unset alias.up`,
 		"forget": `usage: graphene forget [--force]
 
 Remove Graphene tracking through the current branch without deleting Git branches.
 
 options:
       --force  clear pending Graphene rebase state while forgetting`,
-		"track": `usage: graphene track <base> [branch]
+		"track": `usage: graphene track --parent <base> [branch]
 
 Record an existing one-commit branch in the Graphene stack graph.
 
@@ -284,15 +322,15 @@ options:
   -s, --stack            push the current dependency path and descendants
   -n, --dry-run          show what would be pushed without updating refs or upstreams`,
 		"restack": "usage: graphene restack <base>\n\nMove the current branch onto another local branch, then restack dependent branches.",
-		"go": `usage: graphene go (--top|--bottom|--next|--prev) [number]
+		"go": `usage: graphene go <up|down|top|bottom> [number]
 
 Switch to another branch in the tracked stack graph.
 
 options:
   -t, --top [number]     switch to a leaf descendant
   -b, --bottom [number]  switch to the bottom branch in the current stack path
-  -n, --next [number]    switch to a direct child branch
-  -p, --prev [number]    switch to the direct parent branch`,
+  -u, --up [number]      switch to a direct child branch
+  -d, --down [number]    switch to the direct parent branch`,
 		"graph":   "usage: graphene graph\n\nPrint the tracked stack graph.",
 		"version": "usage: graphene version\n\nPrint the Graphene version and Git version.",
 	}
@@ -308,6 +346,10 @@ func errorExitCode(err error) int {
 	var gitErr *GitError
 	if errors.As(err, &gitErr) && gitErr.Code > 0 {
 		return gitErr.Code
+	}
+	var aliasErr *shellAliasError
+	if errors.As(err, &aliasErr) && aliasErr.code > 0 {
+		return aliasErr.code
 	}
 	return 1
 }
