@@ -93,6 +93,12 @@ func (a *App) Run(args []string) int {
 				return 0
 			}
 			err = a.forget(args[2:])
+		case "track":
+			if helpArgs(args[2:]) {
+				a.commandUsage("track", a.stdout)
+				return 0
+			}
+			err = a.track(args[2:])
 		case "sync":
 			if helpArgs(args[2:]) {
 				a.commandUsage("sync", a.stdout)
@@ -177,6 +183,7 @@ func (a *App) usage(w io.Writer) {
   graphene continue
   graphene abort
   graphene forget [--force]
+  graphene track <base> [branch]
   graphene sync
   graphene send [--remote <remote>] [--stack] [--dry-run]
   graphene sendf [--remote <remote>] [--stack] [--dry-run]
@@ -250,6 +257,11 @@ Remove Graphene tracking through the current branch without deleting Git branche
 
 options:
       --force  clear pending Graphene rebase state while forgetting`,
+		"track": `usage: graphene track <base> [branch]
+
+Record an existing one-commit branch in the Graphene stack graph.
+
+When branch is omitted, Graphene tracks the current branch. If the branch is already the base of child stacks, the first child path is folded into the new stack path.`,
 		"sync": `usage: graphene sync
 
 Fetch the stack base, drop already-applied branches on the current path, and restack affected children.
@@ -271,7 +283,7 @@ options:
       --remote <remote>  push to this remote
   -s, --stack            push the current dependency path and descendants
   -n, --dry-run          show what would be pushed without updating refs or upstreams`,
-		"restack": "usage: graphene restack <base>\n\nMove the current branch onto another branch or commit-ish, then restack dependent branches.",
+		"restack": "usage: graphene restack <base>\n\nMove the current branch onto another local branch, then restack dependent branches.",
 		"go": `usage: graphene go (--top|--bottom|--next|--prev) [number]
 
 Switch to another branch in the tracked stack graph.

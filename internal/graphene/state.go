@@ -150,6 +150,84 @@ func (s *State) AddCommit(current, next string) error {
 	return nil
 }
 
+func TrackBranch(s State, base, branch string) (State, error) {
+	if base == "" || branch == "" {
+		return s, fmt.Errorf("base and branch are required")
+	}
+	if base == branch {
+		return s, fmt.Errorf("cannot track branch %q onto itself", branch)
+	}
+	if s.ContainsBranch(branch) {
+		return s, fmt.Errorf("branch %q is already recorded in graphene state", branch)
+	}
+	if stateHasPath(s, branch, base) {
+		return s, fmt.Errorf("cannot track branch %q onto descendant %q", branch, base)
+	}
+
+	next := State{
+		Stacks:  cloneStacks(s.Stacks),
+		Pending: s.Pending,
+	}
+
+	childIndex := -1
+	for i, stack := range next.Stacks {
+		if stack.Base == branch {
+			childIndex = i
+			break
+		}
+	}
+
+	branches := []string{branch}
+	if childIndex >= 0 {
+		branches = append(branches, next.Stacks[childIndex].Branches...)
+	}
+
+	if loc, ok := next.BranchLocation(base); ok {
+		stack := &next.Stacks[loc.StackIndex]
+		if loc.BranchIndex == len(stack.Branches)-1 {
+			stack.Branches = append(stack.Branches, branches...)
+			if childIndex >= 0 {
+				next.Stacks = append(next.Stacks[:childIndex], next.Stacks[childIndex+1:]...)
+			}
+			return next, nil
+		}
+	}
+
+	stack := Stack{Base: base, Branches: branches}
+	if childIndex >= 0 {
+		next.Stacks[childIndex] = stack
+		return next, nil
+	}
+	next.Stacks = append(next.Stacks, stack)
+	return next, nil
+}
+
+func stateHasPath(s State, from, to string) bool {
+	if from == "" || to == "" {
+		return false
+	}
+
+	graph := newStackGraph(s)
+	seen := map[string]bool{}
+	var walk func(string) bool
+	walk = func(branch string) bool {
+		if branch == "" || seen[branch] {
+			return false
+		}
+		if branch == to {
+			return true
+		}
+		seen[branch] = true
+		for _, child := range graph.children[branch] {
+			if walk(child) {
+				return true
+			}
+		}
+		return false
+	}
+	return walk(from)
+}
+
 func BranchesThroughCurrent(s State, current string) []string {
 	loc, ok := s.BranchLocation(current)
 	if !ok {

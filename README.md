@@ -90,6 +90,13 @@ Stop tracking the current branch path without deleting any Git branches:
 gn forget
 ```
 
+Record an existing one-commit branch on top of a base branch:
+
+```
+gn track main
+gn track main feature/already-created
+```
+
 Run `gn help` or `gn help <command>` for full command details.
 
 ## Agents

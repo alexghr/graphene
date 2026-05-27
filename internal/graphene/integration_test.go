@@ -293,6 +293,65 @@ func TestCommitReusesCurrentBranchWithExplicitBase(t *testing.T) {
 	}
 }
 
+func TestTrackCurrentBranchExtendsExistingStack(t *testing.T) {
+	repo := newTestRepo(t)
+	runGit(t, repo.dir, "checkout", "-b", "z")
+	runGit(t, repo.dir, "checkout", "-b", "a")
+	writeFile(t, repo.dir, "a.txt", "a\n")
+	runGit(t, repo.dir, "add", ".")
+	runGit(t, repo.dir, "commit", "-m", "A")
+
+	writeFile(t, repo.dir, "b.txt", "b\n")
+	runGit(t, repo.dir, "add", ".")
+	expectGrapheneOK(t, repo, "new", "--branch", "b", "-m", "B")
+
+	runGit(t, repo.dir, "checkout", "a")
+	expectGrapheneOK(t, repo, "track", "z")
+
+	state := readState(t, repo.dir)
+	want := []Stack{{Base: "z", Branches: []string{"a", "b"}}}
+	if !reflect.DeepEqual(state.Stacks, want) {
+		t.Fatalf("stacks = %#v, want %#v", state.Stacks, want)
+	}
+
+	runGit(t, repo.dir, "checkout", "b")
+	code, stdout, stderr := repo.runGraphene(t, "graph")
+	if code != 0 {
+		t.Fatalf("graphene graph exited %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	graph := "" +
+		"z\n" +
+		"  `- a\n" +
+		"     `- b *\n"
+	if stdout != graph {
+		t.Fatalf("stdout = %q, want %q", stdout, graph)
+	}
+}
+
+func TestTrackRejectsMultiCommitBranch(t *testing.T) {
+	repo := newTestRepo(t)
+	runGit(t, repo.dir, "checkout", "-b", "z")
+	runGit(t, repo.dir, "checkout", "-b", "a")
+	writeFile(t, repo.dir, "a.txt", "a\n")
+	runGit(t, repo.dir, "add", ".")
+	runGit(t, repo.dir, "commit", "-m", "A")
+	writeFile(t, repo.dir, "aa.txt", "aa\n")
+	runGit(t, repo.dir, "add", ".")
+	runGit(t, repo.dir, "commit", "-m", "AA")
+
+	code, _, stderr := repo.runGraphene(t, "track", "z")
+	if code == 0 {
+		t.Fatal("graphene track unexpectedly succeeded")
+	}
+	if !strings.Contains(stderr, "contains 2 commits") {
+		t.Fatalf("stderr = %q", stderr)
+	}
+	state := readState(t, repo.dir)
+	if len(state.Stacks) != 0 {
+		t.Fatalf("stacks = %#v, want none", state.Stacks)
+	}
+}
+
 func TestCommitReuseCurrentRequiresBase(t *testing.T) {
 	repo := newTestRepo(t)
 	runGit(t, repo.dir, "checkout", "-b", "foo")
@@ -764,6 +823,30 @@ func TestRestackOntoBranchAtSameCommitUpdatesStateOnly(t *testing.T) {
 		{Base: "main", Branches: []string{"stack/one"}},
 		{Base: "alias/one", Branches: []string{"stack/two"}},
 	}
+	if !reflect.DeepEqual(state.Stacks, want) {
+		t.Fatalf("stacks = %#v, want %#v", state.Stacks, want)
+	}
+}
+
+func TestRestackRejectsRemoteTrackingBase(t *testing.T) {
+	repo := newTestRepo(t)
+
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	runGit(t, "", "init", "--bare", remote)
+	runGit(t, repo.dir, "remote", "add", "origin", remote)
+	runGit(t, repo.dir, "push", "-u", "origin", "main")
+
+	createStackBranch(t, repo, "one.txt", "one\n", "One")
+	code, _, stderr := repo.runGraphene(t, "restack", "origin/main")
+	if code == 0 {
+		t.Fatal("graphene restack origin/main unexpectedly succeeded")
+	}
+	if !strings.Contains(stderr, "remote-tracking ref") {
+		t.Fatalf("stderr = %q", stderr)
+	}
+
+	state := readState(t, repo.dir)
+	want := []Stack{{Base: "main", Branches: []string{"stack/one"}}}
 	if !reflect.DeepEqual(state.Stacks, want) {
 		t.Fatalf("stacks = %#v, want %#v", state.Stacks, want)
 	}

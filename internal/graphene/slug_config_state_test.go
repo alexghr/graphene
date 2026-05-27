@@ -99,6 +99,70 @@ func TestStateAddCommit(t *testing.T) {
 	}
 }
 
+func TestTrackBranchFoldsExistingChildPath(t *testing.T) {
+	state := State{Stacks: []Stack{
+		{Base: "a", Branches: []string{"b"}},
+	}}
+
+	got, err := TrackBranch(state, "z", "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := State{Stacks: []Stack{
+		{Base: "z", Branches: []string{"a", "b"}},
+	}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("state = %#v, want %#v", got, want)
+	}
+}
+
+func TestTrackBranchAppendsToTrackedTip(t *testing.T) {
+	state := State{Stacks: []Stack{
+		{Base: "z", Branches: []string{"x"}},
+		{Base: "a", Branches: []string{"b"}},
+	}}
+
+	got, err := TrackBranch(state, "x", "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := State{Stacks: []Stack{
+		{Base: "z", Branches: []string{"x", "a", "b"}},
+	}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("state = %#v, want %#v", got, want)
+	}
+}
+
+func TestTrackBranchKeepsSiblingChildStacks(t *testing.T) {
+	state := State{Stacks: []Stack{
+		{Base: "a", Branches: []string{"b"}},
+		{Base: "a", Branches: []string{"c"}},
+	}}
+
+	got, err := TrackBranch(state, "z", "a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := State{Stacks: []Stack{
+		{Base: "z", Branches: []string{"a", "b"}},
+		{Base: "a", Branches: []string{"c"}},
+	}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("state = %#v, want %#v", got, want)
+	}
+}
+
+func TestTrackBranchRejectsCycles(t *testing.T) {
+	state := State{Stacks: []Stack{
+		{Base: "a", Branches: []string{"b"}},
+	}}
+
+	if _, err := TrackBranch(state, "b", "a"); err == nil {
+		t.Fatal("TrackBranch allowed a branch to track onto its descendant")
+	}
+}
+
 func TestBranchesThroughCurrent(t *testing.T) {
 	state := State{Stacks: []Stack{
 		{Base: "main", Branches: []string{"a", "b", "c"}},
@@ -387,6 +451,23 @@ func TestParseArgs(t *testing.T) {
 	}
 	if _, err := parseForgetArgs([]string{"--bad"}); err == nil {
 		t.Fatal("parseForgetArgs accepted --bad")
+	}
+	base, branch, err := parseTrackArgs([]string{"main", "feature/existing"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if base != "main" || branch != "feature/existing" {
+		t.Fatalf("parseTrackArgs = %q %q, want main feature/existing", base, branch)
+	}
+	base, branch, err = parseTrackArgs([]string{"main"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if base != "main" || branch != "" {
+		t.Fatalf("parseTrackArgs current branch = %q %q, want main empty branch", base, branch)
+	}
+	if _, _, err := parseTrackArgs(nil); err == nil {
+		t.Fatal("parseTrackArgs accepted missing base")
 	}
 	skillOpts, err := parseSkillArgs([]string{"--out=SKILL.md"})
 	if err != nil {

@@ -855,6 +855,9 @@ func (a *App) restack(args []string) error {
 	if state.Pending != nil {
 		return fmt.Errorf("pending rebase exists; use graphene continue or graphene abort")
 	}
+	if err := a.validateRestackBase(base); err != nil {
+		return err
+	}
 
 	oldBase, ok := BaseBranch(state, current)
 	if !ok {
@@ -1255,6 +1258,37 @@ func (a *App) forget(args []string) error {
 		state.Pending = nil
 	}
 	return a.git.WriteState(state)
+}
+
+func (a *App) track(args []string) error {
+	base, branch, err := parseTrackArgs(args)
+	if err != nil {
+		return err
+	}
+
+	if branch == "" {
+		branch, err = a.git.CurrentBranch()
+		if err != nil {
+			return err
+		}
+	}
+
+	state, err := a.git.ReadState()
+	if err != nil {
+		return err
+	}
+	if state.Pending != nil {
+		return fmt.Errorf("pending rebase exists; use graphene continue or graphene abort")
+	}
+
+	nextState, err := TrackBranch(state, base, branch)
+	if err != nil {
+		return err
+	}
+	if err := a.validateTrackBranch(base, branch); err != nil {
+		return err
+	}
+	return a.git.WriteState(nextState)
 }
 
 func (a *App) pendingForCurrentWorktree(pending Pending) (*Pending, error) {
@@ -2081,6 +2115,17 @@ func (a *App) isAncestor(ancestor, descendant string) (bool, error) {
 	return false, err
 }
 
+func (a *App) refExists(ref string) (bool, error) {
+	_, err := a.git.Output("show-ref", "--verify", "--quiet", ref)
+	if err == nil {
+		return true, nil
+	}
+	if isGitExit(err, 1) {
+		return false, nil
+	}
+	return false, err
+}
+
 func (a *App) stateRefs(state State) map[string]string {
 	refs := map[string]string{}
 	for _, name := range StateRefNames(state) {
@@ -2127,6 +2172,60 @@ func (a *App) validateNewBase(base string) error {
 	}
 	if baseRef != head {
 		return fmt.Errorf("base branch %q does not point to current HEAD", base)
+	}
+	return nil
+}
+
+func (a *App) validateRestackBase(base string) error {
+	exists, err := a.git.BranchExists(base)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return nil
+	}
+
+	if remoteExists, err := a.refExists("refs/remotes/" + base); err != nil {
+		return err
+	} else if remoteExists {
+		return fmt.Errorf("base %q is a remote-tracking ref; use a local branch name for graphene restack", base)
+	}
+	return fmt.Errorf("base branch %q does not exist", base)
+}
+
+func (a *App) validateTrackBranch(base, branch string) error {
+	baseExists, err := a.git.BranchExists(base)
+	if err != nil {
+		return err
+	}
+	if !baseExists {
+		return fmt.Errorf("base branch %q does not exist", base)
+	}
+
+	branchExists, err := a.git.BranchExists(branch)
+	if err != nil {
+		return err
+	}
+	if !branchExists {
+		return fmt.Errorf("branch %q does not exist", branch)
+	}
+
+	baseRef := "refs/heads/" + base
+	branchRef := "refs/heads/" + branch
+	ancestor, err := a.isAncestor(baseRef, branchRef)
+	if err != nil {
+		return err
+	}
+	if !ancestor {
+		return fmt.Errorf("base branch %q is not an ancestor of branch %q", base, branch)
+	}
+
+	count, err := a.commitCount(baseRef, branchRef)
+	if err != nil {
+		return err
+	}
+	if count != 1 {
+		return fmt.Errorf("branch %q contains %d commits on top of %q; Graphene can only track one-commit branches", branch, count, base)
 	}
 	return nil
 }
@@ -2349,6 +2448,20 @@ func parseForgetArgs(args []string) (bool, error) {
 		}
 	}
 	return force, nil
+}
+
+func parseTrackArgs(args []string) (string, string, error) {
+	if len(args) < 1 || len(args) > 2 || args[0] == "" {
+		return "", "", fmt.Errorf("usage: graphene track <base> [branch]")
+	}
+	if len(args) == 2 && args[1] == "" {
+		return "", "", fmt.Errorf("usage: graphene track <base> [branch]")
+	}
+	branch := ""
+	if len(args) == 2 {
+		branch = args[1]
+	}
+	return args[0], branch, nil
 }
 
 func parseSkillArgs(args []string) (skillOptions, error) {
