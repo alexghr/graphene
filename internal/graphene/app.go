@@ -209,7 +209,7 @@ func (a *App) usage(w io.Writer) {
   graphene config <get|set|unset> [--global|--local] <key> [value]
   graphene forget [--force]
   graphene track --parent <base> [branch]
-  graphene sync
+  graphene sync [-a|--all] [--dry-run]
   graphene send [--remote <remote>] [--stack] [--dry-run]
   graphene sendf [--remote <remote>] [--stack] [--dry-run]
   graphene restack <base>
@@ -300,11 +300,17 @@ options:
 Record an existing one-commit branch in the Graphene stack graph.
 
 When branch is omitted, Graphene tracks the current branch. If the branch is already the base of child stacks, the first child path is folded into the new stack path.`,
-		"sync": `usage: graphene sync
+		"sync": `usage: graphene sync [-a|--all] [--dry-run]
 
 Fetch the stack base, drop already-applied branches on the current path, and restack affected children.
 
-Branches detected as already applied upstream are removed from Graphene state and deleted locally.`,
+From an untracked stack base, --all syncs every stack descendant of the current branch.
+
+Branches detected as already applied upstream are removed from Graphene state and deleted locally.
+
+options:
+  -a, --all             sync every stack descendant from the current base branch
+  -n, --dry-run        show the planned fetch, deletions, retargets, and rebases without changing refs or state`,
 		"send": `usage: graphene send [options] [remote]
 
 Push the current branch and its dependency path, then print pull request URLs.

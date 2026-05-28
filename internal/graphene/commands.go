@@ -1352,6 +1352,10 @@ func syncSelectionForCurrent(state State, current string) (syncSelection, bool) 
 		}, true
 	}
 
+	return syncSelectionForBase(state, current)
+}
+
+func syncSelectionForBase(state State, current string) (syncSelection, bool) {
 	var paths []syncPath
 	for i, stack := range state.Stacks {
 		if stack.Base != current || len(stack.Branches) == 0 {
@@ -1401,8 +1405,9 @@ func (s syncSelection) ReturnBranch(firstRemaining map[int]int) string {
 }
 
 func (a *App) sync(args []string) error {
-	if len(args) != 0 {
-		return fmt.Errorf("graphene sync does not accept arguments")
+	opts, err := parseSyncArgs(args)
+	if err != nil {
+		return err
 	}
 
 	current, err := a.git.CurrentBranch()
@@ -1417,7 +1422,19 @@ func (a *App) sync(args []string) error {
 		return fmt.Errorf("pending rebase exists; use graphene continue or graphene abort")
 	}
 
-	selection, ok := syncSelectionForCurrent(state, current)
+	var selection syncSelection
+	var ok bool
+	if opts.all {
+		if state.ContainsBranch(current) {
+			return fmt.Errorf("graphene sync --all must be run from a stack base; %q is a tracked branch", current)
+		}
+		selection, ok = syncSelectionForBase(state, current)
+		if !ok {
+			return fmt.Errorf("branch %q has no graphene stack descendants", current)
+		}
+	} else {
+		selection, ok = syncSelectionForCurrent(state, current)
+	}
 	if !ok {
 		return fmt.Errorf("branch %q is not in a graphene stack", current)
 	}
@@ -1436,9 +1453,18 @@ func (a *App) sync(args []string) error {
 	}
 
 	oldRefs := a.stateRefs(state)
-	baseRef, err := a.fetchSyncBase(selection.Base, current)
-	if err != nil {
-		return err
+	var baseRef string
+	var basePlan syncBaseDryRun
+	if opts.dryRun {
+		baseRef, basePlan, err = a.fetchSyncBaseDryRun(selection.Base)
+		if err != nil {
+			return err
+		}
+	} else {
+		baseRef, err = a.fetchSyncBase(selection.Base, current)
+		if err != nil {
+			return err
+		}
 	}
 
 	var branches []string
@@ -1526,6 +1552,11 @@ func (a *App) sync(args []string) error {
 	ops = append(ops, restackOps...)
 	if err := a.validateRebaseOpsUpdateable("sync", current, nextState, oldRefs, ops); err != nil {
 		return err
+	}
+
+	if opts.dryRun {
+		a.printSyncDryRun(basePlan, branches, baseChanges, ops, returnBranch, baseRef)
+		return nil
 	}
 
 	if len(ops) == 0 {
@@ -1888,11 +1919,67 @@ func (a *App) printSyncBaseChanges(changes []BaseChange) {
 	}
 }
 
+func (a *App) printSyncDryRun(base syncBaseDryRun, branches []string, changes []BaseChange, ops []RebaseOp, returnBranch, baseRef string) {
+	fmt.Fprintf(a.stdout, "Dry run: sync %s\n", base.Branch)
+	fmt.Fprintf(a.stdout, "  fetch: %s\n", base.UpstreamName())
+	if base.Old == base.Updated {
+		fmt.Fprintf(a.stdout, "  base: %s is up to date\n", base.Branch)
+	} else {
+		fmt.Fprintf(a.stdout, "  base: %s %s -> %s\n", base.Branch, shortSyncRef(base.Old), shortSyncRef(base.Updated))
+	}
+
+	if len(branches) == 0 {
+		fmt.Fprintln(a.stdout, "  delete applied branches: none")
+	} else {
+		fmt.Fprintln(a.stdout, "  delete applied branches:")
+		for _, branch := range branches {
+			fmt.Fprintf(a.stdout, "    %s\n", branch)
+		}
+	}
+
+	if len(changes) > 0 {
+		fmt.Fprintln(a.stdout, "  retarget existing PRs:")
+		for _, change := range changes {
+			fmt.Fprintf(a.stdout, "    %s: %s -> %s\n", change.Branch, change.OldBase, change.NewBase)
+		}
+	}
+
+	if len(ops) == 0 {
+		fmt.Fprintln(a.stdout, "  rebase: none")
+	} else {
+		fmt.Fprintln(a.stdout, "  rebase:")
+		for _, op := range ops {
+			fmt.Fprintf(a.stdout, "    git rebase --update-refs --onto %s %s %s\n", shortSyncRef(op.Onto), shortSyncRef(op.Upstream), op.Top)
+		}
+	}
+
+	if returnBranch != "" {
+		fmt.Fprintf(a.stdout, "  return: %s\n", returnBranch)
+	} else {
+		fmt.Fprintf(a.stdout, "  return: detach at %s\n", shortSyncRef(baseRef))
+	}
+}
+
 func (a *App) fetchSyncBase(base, current string) (string, error) {
 	if base == current {
 		return a.fetchCurrentBase(base)
 	}
 	return a.fetchBase(base)
+}
+
+type syncBaseDryRun struct {
+	Branch  string
+	Remote  string
+	Merge   string
+	Old     string
+	Updated string
+}
+
+func (b syncBaseDryRun) UpstreamName() string {
+	if strings.HasPrefix(b.Merge, "refs/heads/") {
+		return b.Remote + "/" + strings.TrimPrefix(b.Merge, "refs/heads/")
+	}
+	return b.Remote + " " + b.Merge
 }
 
 type fetchedBase struct {
@@ -1966,6 +2053,54 @@ func (a *App) fetchBase(base string) (string, error) {
 		return "", err
 	}
 	return base, nil
+}
+
+func (a *App) fetchSyncBaseDryRun(base string) (string, syncBaseDryRun, error) {
+	remote, merge, err := a.git.Upstream(base)
+	if err != nil {
+		return "", syncBaseDryRun{}, err
+	}
+	if remote == "" || merge == "" {
+		return "", syncBaseDryRun{}, fmt.Errorf("branch %q has no upstream; set one before updating the stack", base)
+	}
+
+	oldBase, err := a.git.Output("rev-parse", "--verify", "refs/heads/"+base+"^{commit}")
+	if err != nil {
+		return "", syncBaseDryRun{}, err
+	}
+	tempRef := fmt.Sprintf("refs/graphene/dry-run/%d-%d", os.Getpid(), time.Now().UnixNano())
+	// Fetch into a private ref so dry-run can inspect the new base without moving local or remote-tracking refs.
+	if err := a.git.OutputErr("fetch", "--no-write-fetch-head", "--refmap=", remote, "+"+merge+":"+tempRef); err != nil {
+		return "", syncBaseDryRun{}, err
+	}
+	updatedBase, refErr := a.git.Output("rev-parse", "--verify", tempRef+"^{commit}")
+	cleanupErr := a.git.OutputErr("update-ref", "-d", tempRef)
+	if refErr != nil {
+		return "", syncBaseDryRun{}, refErr
+	}
+	if cleanupErr != nil {
+		return "", syncBaseDryRun{}, cleanupErr
+	}
+
+	ancestor, err := a.isAncestor(oldBase, updatedBase)
+	if err != nil {
+		return "", syncBaseDryRun{}, err
+	}
+	if !ancestor {
+		return "", syncBaseDryRun{}, fmt.Errorf("cannot fast-forward %q to %q; resolve the base branch before updating the stack", base, base+"@{upstream}")
+	}
+
+	baseRef := base
+	if oldBase != updatedBase {
+		baseRef = updatedBase
+	}
+	return baseRef, syncBaseDryRun{
+		Branch:  base,
+		Remote:  remote,
+		Merge:   merge,
+		Old:     oldBase,
+		Updated: updatedBase,
+	}, nil
 }
 
 func (a *App) switchToBaseOrDetach(base, baseRef string) error {
@@ -2123,6 +2258,21 @@ func (a *App) appliedCommitRefs(base, top string) (map[string]bool, error) {
 	return applied, nil
 }
 
+func shortSyncRef(ref string) string {
+	if len(ref) < 12 {
+		return ref
+	}
+	for _, r := range ref {
+		switch {
+		case r >= '0' && r <= '9':
+		case r >= 'a' && r <= 'f':
+		default:
+			return ref
+		}
+	}
+	return ref[:12]
+}
+
 func (a *App) isAncestor(ancestor, descendant string) (bool, error) {
 	_, err := a.git.Output("merge-base", "--is-ancestor", ancestor, descendant)
 	if err == nil {
@@ -2270,6 +2420,11 @@ type skillOptions struct {
 	target string
 }
 
+type syncOptions struct {
+	all    bool
+	dryRun bool
+}
+
 func parseNewArgs(args []string) (commitOptions, error) {
 	return parseCommitOptions(args, true)
 }
@@ -2289,6 +2444,21 @@ func parseSplitArgs(args []string) (string, error) {
 		return "", fmt.Errorf("unsupported argument %q; usage: graphene split [branch]", args[0])
 	}
 	return args[0], nil
+}
+
+func parseSyncArgs(args []string) (syncOptions, error) {
+	var opts syncOptions
+	for _, arg := range args {
+		switch arg {
+		case "-a", "--all":
+			opts.all = true
+		case "-n", "--dry-run":
+			opts.dryRun = true
+		default:
+			return opts, fmt.Errorf("unsupported argument %q; supported sync options are -a/--all and -n/--dry-run", arg)
+		}
+	}
+	return opts, nil
 }
 
 func parseSquashArgs(args []string) (squashOptions, error) {

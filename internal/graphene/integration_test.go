@@ -1129,6 +1129,136 @@ func TestSyncFromBaseRebasesDescendantStack(t *testing.T) {
 	}
 }
 
+func TestSyncAllFromBaseRebasesSiblingAndNestedStacks(t *testing.T) {
+	repo := newTestRepo(t)
+
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	runGit(t, "", "init", "--bare", remote)
+	runGit(t, repo.dir, "remote", "add", "origin", remote)
+	runGit(t, repo.dir, "push", "-u", "origin", "main")
+
+	createStackBranch(t, repo, "one.txt", "one\n", "One")
+	createStackBranch(t, repo, "one-top.txt", "one top\n", "One top")
+	runGit(t, repo.dir, "checkout", "main")
+	createStackBranch(t, repo, "two.txt", "two\n", "Two")
+	runGit(t, repo.dir, "checkout", "stack/one")
+	createStackBranch(t, repo, "fork.txt", "fork\n", "Fork")
+
+	other := filepath.Join(t.TempDir(), "other")
+	runGit(t, "", "clone", "--branch", "main", remote, other)
+	runGit(t, other, "config", "user.name", "Graphene Test")
+	runGit(t, other, "config", "user.email", "graphene@example.test")
+	runGit(t, other, "config", "commit.gpgsign", "false")
+	writeFile(t, other, "base.txt", "base update\n")
+	runGit(t, other, "add", ".")
+	runGit(t, other, "commit", "-m", "Base update")
+	runGit(t, other, "push", "origin", "main")
+
+	runGit(t, repo.dir, "checkout", "main")
+	expectGrapheneOK(t, repo, "sync", "--all")
+
+	main := runGit(t, repo.dir, "rev-parse", "main")
+	originMain := runGit(t, repo.dir, "rev-parse", "origin/main")
+	if main != originMain {
+		t.Fatalf("main = %s, want origin/main %s", main, originMain)
+	}
+	parentOne := runGit(t, repo.dir, "rev-parse", "stack/one^")
+	if parentOne != main {
+		t.Fatalf("stack/one parent = %s, want main %s", parentOne, main)
+	}
+	branchOne := runGit(t, repo.dir, "rev-parse", "stack/one")
+	for _, branch := range []string{"stack/one-top", "stack/fork"} {
+		parent := runGit(t, repo.dir, "rev-parse", branch+"^")
+		if parent != branchOne {
+			t.Fatalf("%s parent = %s, want stack/one %s", branch, parent, branchOne)
+		}
+	}
+	parentTwo := runGit(t, repo.dir, "rev-parse", "stack/two^")
+	if parentTwo != main {
+		t.Fatalf("stack/two parent = %s, want main %s", parentTwo, main)
+	}
+	if got := currentBranch(t, repo.dir); got != "main" {
+		t.Fatalf("branch = %q, want main", got)
+	}
+
+	state := readState(t, repo.dir)
+	want := []Stack{
+		{Base: "main", Branches: []string{"stack/one", "stack/one-top"}},
+		{Base: "main", Branches: []string{"stack/two"}},
+		{Base: "stack/one", Branches: []string{"stack/fork"}},
+	}
+	if !reflect.DeepEqual(state.Stacks, want) {
+		t.Fatalf("stacks = %#v, want %#v", state.Stacks, want)
+	}
+}
+
+func TestSyncDryRunPrintsPlanWithoutChangingRefsOrState(t *testing.T) {
+	repo := newTestRepo(t)
+
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	runGit(t, "", "init", "--bare", remote)
+	runGit(t, repo.dir, "remote", "add", "origin", remote)
+	runGit(t, repo.dir, "push", "-u", "origin", "main")
+
+	createStackBranch(t, repo, "one.txt", "one\n", "One")
+	createStackBranch(t, repo, "two.txt", "two\n", "Two")
+
+	other := filepath.Join(t.TempDir(), "other")
+	runGit(t, "", "clone", "--branch", "main", remote, other)
+	runGit(t, other, "config", "user.name", "Graphene Test")
+	runGit(t, other, "config", "user.email", "graphene@example.test")
+	runGit(t, other, "config", "commit.gpgsign", "false")
+	writeFile(t, other, "one.txt", "one\n")
+	runGit(t, other, "add", ".")
+	runGit(t, other, "commit", "-m", "One (#1)")
+	runGit(t, other, "push", "origin", "main")
+
+	runGit(t, repo.dir, "checkout", "main")
+	mainBefore := runGit(t, repo.dir, "rev-parse", "main")
+	originMainBefore := runGit(t, repo.dir, "rev-parse", "origin/main")
+	oneBefore := runGit(t, repo.dir, "rev-parse", "stack/one")
+	twoBefore := runGit(t, repo.dir, "rev-parse", "stack/two")
+	stateBefore := readState(t, repo.dir)
+
+	code, stdout, stderr := repo.runGraphene(t, "sync", "-a", "-n")
+	if code != 0 {
+		t.Fatalf("graphene sync -a -n exited %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	for _, want := range []string{
+		"Dry run: sync main\n",
+		"  fetch: origin/main\n",
+		"  delete applied branches:\n    stack/one\n",
+		"  retarget existing PRs:\n    stack/two: stack/one -> main\n",
+		"  rebase:\n    git rebase --update-refs --onto ",
+		" stack/two\n",
+		"  return: main\n",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout = %q, want it to contain %q", stdout, want)
+		}
+	}
+
+	if got := runGit(t, repo.dir, "rev-parse", "main"); got != mainBefore {
+		t.Fatalf("main changed from %s to %s", mainBefore, got)
+	}
+	if got := runGit(t, repo.dir, "rev-parse", "origin/main"); got != originMainBefore {
+		t.Fatalf("origin/main changed from %s to %s", originMainBefore, got)
+	}
+	if got := runGit(t, repo.dir, "rev-parse", "stack/one"); got != oneBefore {
+		t.Fatalf("stack/one changed from %s to %s", oneBefore, got)
+	}
+	if got := runGit(t, repo.dir, "rev-parse", "stack/two"); got != twoBefore {
+		t.Fatalf("stack/two changed from %s to %s", twoBefore, got)
+	}
+	if got := currentBranch(t, repo.dir); got != "main" {
+		t.Fatalf("branch = %q, want main", got)
+	}
+	state := readState(t, repo.dir)
+	if !reflect.DeepEqual(state, stateBefore) {
+		t.Fatalf("state = %#v, want %#v", state, stateBefore)
+	}
+}
+
 func TestSyncFromBaseDeletesAppliedIntermediateBranches(t *testing.T) {
 	repo := newTestRepo(t)
 

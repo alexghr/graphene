@@ -367,6 +367,27 @@ func TestParseArgs(t *testing.T) {
 	if sendOpts.remote != "origin" || sendOpts.stack || sendOpts.dryRun {
 		t.Fatalf("parseSendArgs positional remote = %#v", sendOpts)
 	}
+	syncOpts, err := parseSyncArgs([]string{"--all"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !syncOpts.all || syncOpts.dryRun {
+		t.Fatalf("parseSyncArgs --all = %#v", syncOpts)
+	}
+	syncOpts, err = parseSyncArgs([]string{"-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !syncOpts.all || syncOpts.dryRun {
+		t.Fatalf("parseSyncArgs -a = %#v", syncOpts)
+	}
+	syncOpts, err = parseSyncArgs([]string{"--dry-run"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if syncOpts.all || !syncOpts.dryRun {
+		t.Fatalf("parseSyncArgs --dry-run = %#v", syncOpts)
+	}
 	goOpts, err := parseGoArgs([]string{"up", "2"})
 	if err != nil {
 		t.Fatal(err)
@@ -485,6 +506,12 @@ func TestParseArgs(t *testing.T) {
 	}
 	if _, err := parseSendArgs([]string{"--force-with-lease"}); err == nil {
 		t.Fatal("parseSendArgs accepted force flag")
+	}
+	if _, err := parseSyncArgs([]string{"--bad"}); err == nil {
+		t.Fatal("parseSyncArgs accepted unsupported argument")
+	}
+	if _, err := parseSyncArgs([]string{"--global"}); err == nil {
+		t.Fatal("parseSyncArgs accepted --global")
 	}
 	if _, err := parseGoArgs(nil); err == nil {
 		t.Fatal("parseGoArgs accepted no direction")

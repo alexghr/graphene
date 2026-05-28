@@ -90,6 +90,19 @@ Stop tracking the current branch path without deleting any Git branches:
 gn forget
 ```
 
+Sync all descendants from a base branch:
+
+```
+git checkout merge-train/spartan
+gn sync -a
+```
+
+Preview the same sync first:
+
+```
+gn sync -a --dry-run
+```
+
 Record an existing one-commit branch on top of a base branch:
 
 ```

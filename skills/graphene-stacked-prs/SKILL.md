@@ -92,6 +92,8 @@ graphene sendf --dry-run
 
 `graphene sync` can run from a tracked stack branch. It can also run from a stack base such as `main`; from a base branch, it syncs all stacks recorded with that exact base branch name.
 
+Use `graphene sync -a` or `graphene sync --all` when intentionally syncing every descendant from the current base branch. Use `graphene sync --dry-run` or `graphene sync -a --dry-run` to preview the planned fetch, deletions, retargets, and rebases without changing refs or Graphene state.
+
 If sync reports branches to retarget or rewrites stack branches, use `graphene sendf --dry-run` before pushing. Only force-with-lease push with `graphene sendf` after approval.
 
 ## Amend A Stacked Branch
