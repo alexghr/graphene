@@ -1679,6 +1679,11 @@ func (a *App) sendBranches(args []string, forceWithLease bool) error {
 			return err
 		}
 	}
+	if forceWithLease {
+		if err := a.validateForcePushPreservesRemoteDescendantPatches(remote, state, branches); err != nil {
+			return err
+		}
+	}
 
 	pushArgs := []string{"push"}
 	if forceWithLease {
@@ -1708,6 +1713,105 @@ func (a *App) sendBranches(args []string, forceWithLease bool) error {
 		}
 	}
 	return a.printPullRequestURLs(remote, state, branches)
+}
+
+func (a *App) validateForcePushPreservesRemoteDescendantPatches(remote string, state State, branches []string) error {
+	if len(branches) < 2 {
+		return nil
+	}
+
+	commitRefs := map[string]string{}
+	commitRef := func(branch string) (string, error) {
+		if ref := commitRefs[branch]; ref != "" {
+			return ref, nil
+		}
+		ref, err := a.git.Output("rev-parse", "--verify", branch+"^{commit}")
+		if err != nil {
+			return "", err
+		}
+		commitRefs[branch] = ref
+		return ref, nil
+	}
+
+	for _, branch := range branches {
+		remoteRef := "refs/remotes/" + remote + "/" + branch
+		if valid, err := a.validRefName(remoteRef); err != nil {
+			return err
+		} else if !valid {
+			continue
+		}
+
+		remoteCommit, err := a.git.Output("rev-parse", "--verify", remoteRef+"^{commit}")
+		if err != nil {
+			if isGitExit(err, 1) {
+				continue
+			}
+			return err
+		}
+
+		for _, descendant := range branches {
+			if descendant == branch || !stateHasPath(state, branch, descendant) {
+				continue
+			}
+
+			descendantCommit, err := commitRef(descendant)
+			if err != nil {
+				return err
+			}
+			remoteHasPatch, err := a.commitPatchAppliedTo(remoteCommit, descendantCommit)
+			if err != nil {
+				return err
+			}
+			if !remoteHasPatch {
+				continue
+			}
+
+			localHasPatch, err := a.commitPatchAppliedTo(branch, descendantCommit)
+			if err != nil {
+				return err
+			}
+			if localHasPatch {
+				continue
+			}
+
+			return fmt.Errorf("refusing to force-push %q because %s/%s already contains the patch from descendant %q", branch, remote, branch, descendant)
+		}
+	}
+	return nil
+}
+
+func (a *App) validRefName(ref string) (bool, error) {
+	_, err := a.git.Output("check-ref-format", "--normalize", ref)
+	if err == nil {
+		return true, nil
+	}
+	if isGitExit(err, 1) {
+		return false, nil
+	}
+	return false, err
+}
+
+func (a *App) commitPatchAppliedTo(upstream, commit string) (bool, error) {
+	ancestor, err := a.isAncestor(commit, upstream)
+	if err != nil {
+		return false, err
+	}
+	if ancestor {
+		return true, nil
+	}
+
+	out, err := a.git.Output("cherry", upstream, commit)
+	if err != nil {
+		return false, err
+	}
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 || fields[1] != commit {
+			continue
+		}
+		return fields[0] == "-", nil
+	}
+	return false, nil
 }
 
 func (a *App) validateSendAllowed(state State, branches []string) error {
