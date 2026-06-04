@@ -840,6 +840,21 @@ func (a *App) amend(args []string) error {
 	if err := a.stageRequestedChanges(opts); err != nil {
 		return err
 	}
+	if !opts.stageAll && !opts.stageUpdate {
+		unstaged, err := a.git.HasUnstagedChanges()
+		if err != nil {
+			return err
+		}
+		if unstaged {
+			staged, err := a.git.HasStagedChanges()
+			if err != nil {
+				return err
+			}
+			if !staged {
+				return fmt.Errorf("unstaged changes are not included by graphene amend; stage them first or use -a/--all or -u/--update")
+			}
+		}
+	}
 
 	oldRefs := a.stateRefs(state)
 	oldHead, err := a.git.Head()

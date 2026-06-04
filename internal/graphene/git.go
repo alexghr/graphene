@@ -340,6 +340,17 @@ func (g Git) HasUnstagedChanges() (bool, error) {
 	return false, err
 }
 
+func (g Git) HasStagedChanges() (bool, error) {
+	_, err := g.Output("diff", "--cached", "--quiet", "--ignore-submodules", "--")
+	if err == nil {
+		return false, nil
+	}
+	if isGitExit(err, 1) {
+		return true, nil
+	}
+	return false, err
+}
+
 func (g Git) HasTrackedChanges() (bool, error) {
 	out, err := g.Output("status", "--porcelain", "--untracked-files=no")
 	if err != nil {

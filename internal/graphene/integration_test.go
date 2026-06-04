@@ -968,6 +968,21 @@ func TestAmendNoEditPreservesCommitMessage(t *testing.T) {
 	}
 }
 
+func TestAmendMessageOnlyWithCleanWorktree(t *testing.T) {
+	t.Parallel()
+	repo := newTestRepo(t)
+	createStackBranch(t, repo, "one.txt", "one\n", "One")
+
+	expectGrapheneOK(t, repo, "amend", "-m", "One renamed")
+
+	if got := runGit(t, repo.dir, "log", "-1", "--format=%s"); got != "One renamed" {
+		t.Fatalf("subject = %q, want One renamed", got)
+	}
+	if got := runGit(t, repo.dir, "show", "HEAD:one.txt"); got != "one" {
+		t.Fatalf("one.txt = %q, want one", got)
+	}
+}
+
 func TestRestackMovesBranchAndDescendants(t *testing.T) {
 	t.Parallel()
 	repo := newTestRepo(t)
