@@ -434,15 +434,18 @@ func splitTop(pending *Pending) string {
 }
 
 type squashSelection struct {
-	StackIndex int
-	Start      int
-	End        int
-	Base       string
-	Bottom     string
-	Top        string
-	Branches   []string
-	Removed    []string
-	Suffix     []string
+	Base          string
+	Bottom        string
+	Top           string
+	Branches      []string
+	Removed       []string
+	Suffixes      []squashSuffix
+	HandledStacks map[int]bool
+}
+
+type squashSuffix struct {
+	Upstream string
+	Branches []string
 }
 
 func (a *App) squash(args []string) error {
@@ -568,32 +571,63 @@ func squashRange(state State, current string, count int) (squashSelection, error
 	if count < 2 {
 		return squashSelection{}, fmt.Errorf("squash count must be at least 2")
 	}
-	loc, ok := state.BranchLocation(current)
+	_, ok := state.BranchLocation(current)
 	if !ok {
 		return squashSelection{}, fmt.Errorf("branch %q is not in a graphene stack", current)
 	}
-	stack := state.Stacks[loc.StackIndex]
-	if loc.BranchIndex+1 < count {
-		return squashSelection{}, fmt.Errorf("cannot squash %d branches ending at %q; only %d tracked branches are available in this stack path", count, current, loc.BranchIndex+1)
+	path := BranchesThroughCurrent(state, current)
+	if len(path) < count {
+		return squashSelection{}, fmt.Errorf("cannot squash %d branches ending at %q; only %d tracked branches are available in this stack path", count, current, len(path))
 	}
 
-	start := loc.BranchIndex - count + 1
-	base := stack.Base
+	start := len(path) - count
+	base := ""
 	if start > 0 {
-		base = stack.Branches[start-1]
+		base = path[start-1]
+	} else if visibleBase, ok := BaseBranch(state, path[0]); ok {
+		base = visibleBase
 	}
-	branches := append([]string(nil), stack.Branches[start:loc.BranchIndex+1]...)
+	branches := append([]string(nil), path[start:]...)
+	removed := append([]string(nil), branches[1:]...)
+	suffixes, handledStacks := squashSuffixes(state, removed)
+
 	return squashSelection{
-		StackIndex: loc.StackIndex,
-		Start:      start,
-		End:        loc.BranchIndex,
-		Base:       base,
-		Bottom:     branches[0],
-		Top:        current,
-		Branches:   branches,
-		Removed:    append([]string(nil), branches[1:]...),
-		Suffix:     append([]string(nil), stack.Branches[loc.BranchIndex+1:]...),
+		Base:          base,
+		Bottom:        branches[0],
+		Top:           current,
+		Branches:      branches,
+		Removed:       removed,
+		Suffixes:      suffixes,
+		HandledStacks: handledStacks,
 	}, nil
+}
+
+func squashSuffixes(state State, removed []string) ([]squashSuffix, map[int]bool) {
+	deleted := map[string]bool{}
+	for _, branch := range removed {
+		deleted[branch] = true
+	}
+
+	handledStacks := map[int]bool{}
+	var suffixes []squashSuffix
+	for stackIndex, stack := range state.Stacks {
+		lastDeleted := -1
+		for branchIndex, branch := range stack.Branches {
+			if deleted[branch] {
+				lastDeleted = branchIndex
+				handledStacks[stackIndex] = true
+				continue
+			}
+			if lastDeleted >= 0 {
+				suffixes = append(suffixes, squashSuffix{
+					Upstream: stack.Branches[lastDeleted],
+					Branches: append([]string(nil), stack.Branches[branchIndex:]...),
+				})
+				break
+			}
+		}
+	}
+	return suffixes, handledStacks
 }
 
 func (a *App) validateSquashShape(selection squashSelection) error {
@@ -643,27 +677,29 @@ func squashFinalState(state State, selection squashSelection, oldRefs map[string
 		deleted[branch] = true
 	}
 
-	upstream := oldRefs[selection.Top]
-	if upstream == "" {
-		return State{}, nil, fmt.Errorf("missing old ref for %q", selection.Top)
-	}
-
 	var ops []RebaseOp
 	rewritten := []string{selection.Bottom}
 	skipTops := map[string]bool{}
-	if len(selection.Suffix) > 0 {
-		top := selection.Suffix[len(selection.Suffix)-1]
+	for _, suffix := range selection.Suffixes {
+		if len(suffix.Branches) == 0 {
+			continue
+		}
+		upstream := oldRefs[suffix.Upstream]
+		if upstream == "" {
+			return State{}, nil, fmt.Errorf("missing old ref for %q", suffix.Upstream)
+		}
+		top := suffix.Branches[len(suffix.Branches)-1]
 		ops = append(ops, RebaseOp{
 			Onto:     selection.Bottom,
 			Upstream: upstream,
 			Top:      top,
 		})
-		rewritten = append(rewritten, selection.Suffix...)
+		rewritten = append(rewritten, suffix.Branches...)
 		skipTops[top] = true
 	}
 
 	for i, dependent := range state.Stacks {
-		if i == selection.StackIndex || !deleted[dependent.Base] || len(dependent.Branches) == 0 {
+		if selection.HandledStacks[i] || !deleted[dependent.Base] || len(dependent.Branches) == 0 {
 			continue
 		}
 		upstream := oldRefs[dependent.Base]
