@@ -2,6 +2,7 @@ package graphene
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -334,6 +335,14 @@ func TestParseArgs(t *testing.T) {
 		t.Fatalf("parseNewArgs = %#v", newOpts)
 	}
 
+	positionalNewOpts, err := parseNewArgs([]string{"feature/positional", "--message=hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if positionalNewOpts.branch != "feature/positional" || !reflect.DeepEqual(positionalNewOpts.commitArgs, []string{"--message=hi"}) {
+		t.Fatalf("parseNewArgs positional branch = %#v", positionalNewOpts)
+	}
+
 	reuseOpts, err := parseNewArgs([]string{"--reuse-current", "--base", "main", "-m", "hi"})
 	if err != nil {
 		t.Fatal(err)
@@ -599,6 +608,9 @@ func TestParseArgs(t *testing.T) {
 	}
 	if _, err := parseNewArgs([]string{"--reuse-current", "--reuse-current"}); err == nil {
 		t.Fatal("parseNewArgs accepted duplicate reuse-current flag")
+	}
+	if _, err := parseNewArgs([]string{"feature/one", "--branch", "feature/two", "-m", "bad"}); err == nil || !strings.Contains(err.Error(), "either positional branch or -b/--branch") {
+		t.Fatalf("parseNewArgs positional and flag error = %v", err)
 	}
 }
 

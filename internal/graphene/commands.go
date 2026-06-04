@@ -3081,6 +3081,8 @@ func parseSquashCount(raw string) (int, error) {
 
 func parseCommitOptions(args []string, allowBranch bool) (commitOptions, error) {
 	var opts commitOptions
+	branchFromFlag := false
+	branchFromPosition := false
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 
@@ -3106,24 +3108,32 @@ func parseCommitOptions(args []string, allowBranch bool) (commitOptions, error) 
 				return opts, fmt.Errorf("graphene amend does not support %s", arg)
 			}
 			if opts.branch != "" {
+				if branchFromPosition {
+					return opts, fmt.Errorf("graphene new accepts either positional branch or -b/--branch, not both")
+				}
 				return opts, fmt.Errorf("new branch specified more than once")
 			}
 			if i+1 >= len(args) || args[i+1] == "" || strings.HasPrefix(args[i+1], "-") {
 				return opts, fmt.Errorf("missing branch after %s", arg)
 			}
 			opts.branch = args[i+1]
+			branchFromFlag = true
 			i++
 		case strings.HasPrefix(arg, "--branch="):
 			if !allowBranch {
 				return opts, fmt.Errorf("graphene amend does not support --branch")
 			}
 			if opts.branch != "" {
+				if branchFromPosition {
+					return opts, fmt.Errorf("graphene new accepts either positional branch or -b/--branch, not both")
+				}
 				return opts, fmt.Errorf("new branch specified more than once")
 			}
 			opts.branch = strings.TrimPrefix(arg, "--branch=")
 			if opts.branch == "" {
 				return opts, fmt.Errorf("missing branch after --branch")
 			}
+			branchFromFlag = true
 		case arg == "--base":
 			if !allowBranch {
 				return opts, fmt.Errorf("graphene amend does not support --base")
@@ -3175,6 +3185,17 @@ func parseCommitOptions(args []string, allowBranch bool) (commitOptions, error) 
 			}
 			return opts, unsupportedCommitArg(arg, allowBranch)
 		default:
+			if allowBranch && !strings.HasPrefix(arg, "-") {
+				if opts.branch != "" {
+					if branchFromFlag {
+						return opts, fmt.Errorf("graphene new accepts either positional branch or -b/--branch, not both")
+					}
+					return opts, fmt.Errorf("graphene new accepts at most one branch")
+				}
+				opts.branch = arg
+				branchFromPosition = true
+				continue
+			}
 			return opts, unsupportedCommitArg(arg, allowBranch)
 		}
 	}

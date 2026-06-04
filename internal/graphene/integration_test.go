@@ -221,6 +221,25 @@ func TestCommitExactBranch(t *testing.T) {
 	}
 }
 
+func TestCommitPositionalBranch(t *testing.T) {
+	t.Parallel()
+	repo := newTestRepo(t)
+
+	writeFile(t, repo.dir, "positional.txt", "positional\n")
+	runGit(t, repo.dir, "add", ".")
+	// Regression for https://github.com/alexghr/graphene/issues/4.
+	expectGrapheneOK(t, repo, "new", "feature/positional", "--message", "Positional subject")
+
+	if got := currentBranch(t, repo.dir); got != "feature/positional" {
+		t.Fatalf("branch = %q", got)
+	}
+	state := readState(t, repo.dir)
+	want := []Stack{{Base: "main", Branches: []string{"feature/positional"}}}
+	if !reflect.DeepEqual(state.Stacks, want) {
+		t.Fatalf("stacks = %#v, want %#v", state.Stacks, want)
+	}
+}
+
 func TestCommitNoVerifyBypassesHook(t *testing.T) {
 	t.Parallel()
 	repo := newTestRepo(t)

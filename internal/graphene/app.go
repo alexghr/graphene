@@ -206,7 +206,7 @@ func (a *App) Run(args []string) int {
 
 func (a *App) usage(w io.Writer) {
 	fmt.Fprintln(w, `usage:
-  graphene new [options]
+  graphene new [options] [branch]
   graphene amend [options]
   graphene split [branch]
   graphene squash [--count <n>]
@@ -230,7 +230,7 @@ run "graphene help <command>" for command-specific help`)
 
 func (a *App) commandUsage(command string, w io.Writer) bool {
 	usages := map[string]string{
-		"new": `usage: graphene new [options]
+		"new": `usage: graphene new [options] [branch]
 
 Commit staged changes on a new branch, or on the current branch with --reuse-current, and record it in the stack.
 
