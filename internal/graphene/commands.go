@@ -933,6 +933,10 @@ func (a *App) restack(args []string) error {
 		return err
 	}
 	oldRefs[current] = oldHead
+	headUpdated, err := a.updateCurrentBranchFromUpstream(current, oldHead)
+	if err != nil {
+		return err
+	}
 	oldBaseRef := oldRefs[oldBase]
 	if oldBaseRef == "" {
 		oldBaseRef, err = a.git.Output("rev-parse", "--verify", oldBase+"^{commit}")
@@ -945,22 +949,30 @@ func (a *App) restack(args []string) error {
 		return err
 	}
 
-	if oldBaseRef == baseRef {
+	if oldBaseRef == baseRef && !headUpdated {
 		return a.git.WriteState(nextState)
 	}
 
-	ops := []RebaseOp{{
-		Onto:     base,
-		Upstream: oldBaseRef,
-		Top:      current,
-	}}
-	restackOps, err := RestackOpsAfterRewrite(nextState, current, oldRefs)
-	if err != nil {
-		return err
+	var ops []RebaseOp
+	if oldBaseRef != baseRef {
+		ops = append(ops, RebaseOp{
+			Onto:     base,
+			Upstream: oldBaseRef,
+			Top:      current,
+		})
 	}
-	ops = append(ops, restackOps...)
+	if oldBaseRef != baseRef || headUpdated {
+		restackOps, err := RestackOpsAfterRewrite(nextState, current, oldRefs)
+		if err != nil {
+			return err
+		}
+		ops = append(ops, restackOps...)
+	}
 	if err := a.validateRebaseOpsUpdateable("restack", current, nextState, oldRefs, ops); err != nil {
 		return err
+	}
+	if len(ops) == 0 {
+		return a.git.WriteState(nextState)
 	}
 
 	pending, err := a.pendingForCurrentWorktree(Pending{
@@ -2139,6 +2151,46 @@ func (a *App) fetchSyncBase(base, current string) (string, error) {
 		return a.fetchCurrentBase(base)
 	}
 	return a.fetchBase(base)
+}
+
+func (a *App) updateCurrentBranchFromUpstream(branch, oldHead string) (bool, error) {
+	remote, merge, err := a.git.Upstream(branch)
+	if err != nil {
+		return false, err
+	}
+	if remote == "" || merge == "" {
+		return false, nil
+	}
+	if err := a.git.Run("fetch", remote); err != nil {
+		return false, err
+	}
+
+	upstream := branch + "@{upstream}"
+	updatedHead, err := a.git.Output("rev-parse", "--verify", upstream+"^{commit}")
+	if err != nil {
+		return false, err
+	}
+	if oldHead == updatedHead {
+		return false, nil
+	}
+	ancestor, err := a.isAncestor(updatedHead, oldHead)
+	if err != nil {
+		return false, err
+	}
+	if ancestor {
+		return false, nil
+	}
+	ancestor, err = a.isAncestor(oldHead, updatedHead)
+	if err != nil {
+		return false, err
+	}
+	if !ancestor {
+		return false, fmt.Errorf("cannot fast-forward %q to %q; resolve the branch before restacking", branch, upstream)
+	}
+	if err := a.git.Run("merge", "--ff-only", updatedHead); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 type syncBaseDryRun struct {
