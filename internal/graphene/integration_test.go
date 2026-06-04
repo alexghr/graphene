@@ -363,6 +363,50 @@ func TestTrackRejectsMultiCommitBranch(t *testing.T) {
 	}
 }
 
+func TestTrackFastForwardsParentFromUpstream(t *testing.T) {
+	t.Parallel()
+	repo := newTestRepo(t)
+
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	runGit(t, "", "init", "--bare", remote)
+	runGit(t, repo.dir, "remote", "add", "origin", remote)
+	runGit(t, repo.dir, "checkout", "-b", "merge-train/spartan")
+	runGit(t, repo.dir, "push", "-u", "origin", "merge-train/spartan")
+	oldParent := runGit(t, repo.dir, "rev-parse", "merge-train/spartan")
+
+	other := cloneConfiguredRepo(t, remote, "merge-train/spartan")
+	writeFile(t, other, "base.txt", "base update\n")
+	runGit(t, other, "add", ".")
+	runGit(t, other, "commit", "-m", "Base update")
+	runGit(t, other, "push", "origin", "merge-train/spartan")
+
+	runGit(t, repo.dir, "fetch", "origin")
+	originParent := runGit(t, repo.dir, "rev-parse", "origin/merge-train/spartan")
+	if originParent == oldParent {
+		t.Fatal("remote parent did not advance")
+	}
+	runGit(t, repo.dir, "checkout", "-b", "ag/fix-partial-epoch-job", "origin/merge-train/spartan")
+	writeFile(t, repo.dir, "feature.txt", "feature\n")
+	runGit(t, repo.dir, "add", ".")
+	runGit(t, repo.dir, "commit", "-m", "Feature")
+	featureParent := runGit(t, repo.dir, "rev-parse", "ag/fix-partial-epoch-job^")
+	if featureParent != originParent {
+		t.Fatalf("feature parent = %s, want %s", featureParent, originParent)
+	}
+
+	expectGrapheneOK(t, repo, "track", "--parent", "merge-train/spartan", "ag/fix-partial-epoch-job")
+
+	localParent := runGit(t, repo.dir, "rev-parse", "merge-train/spartan")
+	if localParent != originParent {
+		t.Fatalf("local parent = %s, want %s", localParent, originParent)
+	}
+	state := readState(t, repo.dir)
+	want := []Stack{{Base: "merge-train/spartan", Branches: []string{"ag/fix-partial-epoch-job"}}}
+	if !reflect.DeepEqual(state.Stacks, want) {
+		t.Fatalf("stacks = %#v, want %#v", state.Stacks, want)
+	}
+}
+
 func TestCreateAliasStagesAll(t *testing.T) {
 	t.Parallel()
 	repo := newTestRepo(t)

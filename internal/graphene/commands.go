@@ -1359,7 +1359,13 @@ func (a *App) trackBranch(base, branch string) error {
 	if err != nil {
 		return err
 	}
-	if err := a.validateTrackBranch(base, branch); err != nil {
+	if err := a.validateTrackBranchesExist(base, branch); err != nil {
+		return err
+	}
+	if err := a.updateTrackParentFromUpstream(base); err != nil {
+		return err
+	}
+	if err := a.validateTrackBranchShape(base, branch); err != nil {
 		return err
 	}
 	return a.git.WriteState(nextState)
@@ -2180,6 +2186,65 @@ func (a *App) fetchSyncBase(base, current string) (string, error) {
 	return a.fetchBase(base)
 }
 
+func (a *App) updateTrackParentFromUpstream(base string) error {
+	exists, err := a.git.BranchExists(base)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return nil
+	}
+
+	remote, merge, err := a.git.Upstream(base)
+	if err != nil {
+		return err
+	}
+	if remote == "" || merge == "" {
+		return nil
+	}
+
+	oldBase, err := a.git.Output("rev-parse", "--verify", "refs/heads/"+base+"^{commit}")
+	if err != nil {
+		return err
+	}
+	if err := a.git.Run("fetch", "--prune", remote); err != nil {
+		return err
+	}
+
+	upstream := base + "@{upstream}"
+	updatedBase, err := a.git.Output("rev-parse", "--verify", upstream+"^{commit}")
+	if err != nil {
+		return err
+	}
+	if oldBase == updatedBase {
+		return nil
+	}
+	ancestor, err := a.isAncestor(oldBase, updatedBase)
+	if err != nil {
+		return err
+	}
+	if !ancestor {
+		return fmt.Errorf("cannot fast-forward %q to %q; resolve the parent branch before tracking", base, upstream)
+	}
+
+	current, err := a.git.Output("branch", "--show-current")
+	if err != nil {
+		return err
+	}
+	if current == base {
+		return a.git.Run("merge", "--ff-only", updatedBase)
+	}
+
+	checkedOut, err := a.git.BranchCheckedOut(base)
+	if err != nil {
+		return err
+	}
+	if checkedOut {
+		return fmt.Errorf("branch %q is checked out in another worktree; switch that worktree away from the branch before graphene track", base)
+	}
+	return a.git.OutputErr("update-ref", "refs/heads/"+base, updatedBase, oldBase)
+}
+
 func (a *App) updateCurrentBranchFromUpstream(branch, oldHead string) (bool, error) {
 	remote, merge, err := a.git.Upstream(branch)
 	if err != nil {
@@ -2665,6 +2730,13 @@ func (a *App) validateRestackBase(base string) error {
 }
 
 func (a *App) validateTrackBranch(base, branch string) error {
+	if err := a.validateTrackBranchesExist(base, branch); err != nil {
+		return err
+	}
+	return a.validateTrackBranchShape(base, branch)
+}
+
+func (a *App) validateTrackBranchesExist(base, branch string) error {
 	baseExists, err := a.git.BranchExists(base)
 	if err != nil {
 		return err
@@ -2680,7 +2752,10 @@ func (a *App) validateTrackBranch(base, branch string) error {
 	if !branchExists {
 		return fmt.Errorf("branch %q does not exist", branch)
 	}
+	return nil
+}
 
+func (a *App) validateTrackBranchShape(base, branch string) error {
 	baseRef := "refs/heads/" + base
 	branchRef := "refs/heads/" + branch
 	ancestor, err := a.isAncestor(baseRef, branchRef)
