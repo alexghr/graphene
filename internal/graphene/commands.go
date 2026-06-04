@@ -1331,6 +1331,7 @@ type syncPath struct {
 	Stack              Stack
 	BranchLimit        int
 	CurrentBranchIndex int
+	SkipTops           []string
 }
 
 func syncSelectionForCurrent(state State, current string) (syncSelection, bool) {
@@ -1340,19 +1341,49 @@ func syncSelectionForCurrent(state State, current string) (syncSelection, bool) 
 		if !ok {
 			return syncSelection{}, false
 		}
+		branches := BranchesThroughCurrent(state, current)
+		if len(branches) == 0 {
+			return syncSelection{}, false
+		}
+		base := stack.Base
+		if visibleBase, ok := BaseBranch(state, branches[0]); ok {
+			base = visibleBase
+		}
 		return syncSelection{
-			Base:    stack.Base,
+			Base:    base,
 			Current: current,
 			Paths: []syncPath{{
 				StackIndex:         loc.StackIndex,
-				Stack:              stack,
-				BranchLimit:        loc.BranchIndex + 1,
-				CurrentBranchIndex: loc.BranchIndex,
+				Stack:              Stack{Base: base, Branches: branches},
+				BranchLimit:        len(branches),
+				CurrentBranchIndex: len(branches) - 1,
+				SkipTops:           stackTopsInBranches(state, branches),
 			}},
 		}, true
 	}
 
 	return syncSelectionForBase(state, current)
+}
+
+func stackTopsInBranches(state State, branches []string) []string {
+	included := map[string]bool{}
+	for _, branch := range branches {
+		included[branch] = true
+	}
+
+	seen := map[string]bool{}
+	var tops []string
+	for _, stack := range state.Stacks {
+		if len(stack.Branches) == 0 {
+			continue
+		}
+		top := stack.Branches[len(stack.Branches)-1]
+		if included[top] && !seen[top] {
+			tops = append(tops, top)
+			seen[top] = true
+		}
+	}
+	return tops
 }
 
 func syncSelectionForBase(state State, current string) (syncSelection, bool) {
@@ -1518,6 +1549,9 @@ func (a *App) sync(args []string) error {
 		rewritten = append(rewritten, stack.Branches[first:topIndex+1]...)
 		if topIndex == len(stack.Branches)-1 {
 			skipTops[top] = true
+		}
+		for _, skipTop := range path.SkipTops {
+			skipTops[skipTop] = true
 		}
 	}
 
