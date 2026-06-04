@@ -1561,6 +1561,11 @@ func (a *App) sync(args []string) error {
 		}
 	}
 
+	deletedUpstreams, err := a.deletedSyncUpstreamBranches(selection)
+	if err != nil {
+		return err
+	}
+
 	var branches []string
 	firstRemaining := map[int]int{}
 	for _, path := range selection.Paths {
@@ -1568,8 +1573,15 @@ func (a *App) sync(args []string) error {
 		if err != nil {
 			return err
 		}
-		firstRemaining[path.StackIndex] = len(applied)
-		branches = append(branches, applied...)
+		removed := append([]string(nil), applied...)
+		for _, branch := range path.Stack.Branches[len(applied):path.BranchLimit] {
+			if !deletedUpstreams[branch] {
+				break
+			}
+			removed = append(removed, branch)
+		}
+		firstRemaining[path.StackIndex] = len(removed)
+		branches = append(branches, removed...)
 	}
 
 	nextState := RemoveBranchesWithBase(state, branches, selection.Base)
@@ -2241,7 +2253,7 @@ func (a *App) fetchBaseUpdate(base string) (fetchedBase, error) {
 	if err != nil {
 		return fetchedBase{}, err
 	}
-	if err := a.git.Run("fetch", remote); err != nil {
+	if err := a.git.Run("fetch", "--prune", remote); err != nil {
 		return fetchedBase{}, err
 	}
 
@@ -2258,6 +2270,55 @@ func (a *App) fetchBaseUpdate(base string) (fetchedBase, error) {
 		return fetchedBase{}, fmt.Errorf("cannot fast-forward %q to %q; resolve the base branch before updating the stack", base, upstream)
 	}
 	return fetchedBase{Old: oldBase, Updated: updatedBase}, nil
+}
+
+func (a *App) deletedSyncUpstreamBranches(selection syncSelection) (map[string]bool, error) {
+	deleted := map[string]bool{}
+	seen := map[string]bool{}
+	exists := map[string]bool{}
+
+	for _, path := range selection.Paths {
+		for _, branch := range path.Stack.Branches[:path.BranchLimit] {
+			if seen[branch] {
+				continue
+			}
+			seen[branch] = true
+
+			remote, merge, err := a.git.Upstream(branch)
+			if err != nil {
+				return nil, err
+			}
+			if remote == "" || merge == "" {
+				continue
+			}
+
+			key := remote + "\x00" + merge
+			remoteHasRef, ok := exists[key]
+			if !ok {
+				remoteHasRef, err = a.remoteRefExists(remote, merge)
+				if err != nil {
+					return nil, err
+				}
+				exists[key] = remoteHasRef
+			}
+			if !remoteHasRef {
+				deleted[branch] = true
+			}
+		}
+	}
+
+	return deleted, nil
+}
+
+func (a *App) remoteRefExists(remote, ref string) (bool, error) {
+	_, err := a.git.Output("ls-remote", "--exit-code", remote, ref)
+	if err == nil {
+		return true, nil
+	}
+	if isGitExit(err, 2) {
+		return false, nil
+	}
+	return false, err
 }
 
 func (a *App) fetchCurrentBase(base string) (string, error) {
