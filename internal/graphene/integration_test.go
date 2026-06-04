@@ -112,6 +112,62 @@ func TestVersionFlag(t *testing.T) {
 	}
 }
 
+func TestUnknownCommandFallsThroughToGit(t *testing.T) {
+	t.Parallel()
+	repo := newTestRepo(t)
+
+	writeFile(t, repo.dir, "file.txt", "changed\n")
+	writeFile(t, repo.dir, "untracked.txt", "untracked\n")
+
+	// Regression for https://github.com/alexghr/graphene/issues/1.
+	code, stdout, stderr := repo.runGraphene(t, "status", "--porcelain")
+	wantCode, wantStdout, wantStderr := runGitResult(t, repo.dir, "status", "--porcelain")
+	if code != wantCode || stdout != wantStdout || stderr != wantStderr {
+		t.Fatalf("graphene status --porcelain = (%d, %q, %q), want git result (%d, %q, %q)", code, stdout, stderr, wantCode, wantStdout, wantStderr)
+	}
+}
+
+func TestUnknownCommandReturnsGitFailure(t *testing.T) {
+	t.Parallel()
+	repo := newTestRepo(t)
+
+	code, stdout, stderr := repo.runGraphene(t, "graphene-not-a-git-command")
+	wantCode, wantStdout, wantStderr := runGitResult(t, repo.dir, "graphene-not-a-git-command")
+	if code != wantCode || stdout != wantStdout || stderr != wantStderr {
+		t.Fatalf("unknown git command result = (%d, %q, %q), want git result (%d, %q, %q)", code, stdout, stderr, wantCode, wantStdout, wantStderr)
+	}
+}
+
+func TestAliasTakesPrecedenceOverGitFallback(t *testing.T) {
+	t.Parallel()
+	repo := newTestRepo(t)
+	runGit(t, repo.dir, "config", "graphene.alias.status", "graph")
+
+	code, stdout, stderr := repo.runGraphene(t, "status")
+	if code != 0 {
+		t.Fatalf("graphene status alias exited %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if stdout != "no graphene stacks\n" || stderr != "" {
+		t.Fatalf("unexpected alias output\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
+	}
+}
+
+func TestKnownCommandParseErrorDoesNotFallThroughToGit(t *testing.T) {
+	t.Parallel()
+	repo := newTestRepo(t)
+
+	code, stdout, stderr := repo.runGraphene(t, "new", "--amend")
+	if code == 0 {
+		t.Fatal("graphene new --amend unexpectedly succeeded")
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q", stdout)
+	}
+	if !strings.Contains(stderr, "graphene new cannot use --amend; use graphene amend") {
+		t.Fatalf("stderr = %q", stderr)
+	}
+}
+
 func TestSkillWritesStdoutAndOutFile(t *testing.T) {
 	t.Parallel()
 	repo := newTestRepo(t)

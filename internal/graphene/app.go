@@ -188,7 +188,8 @@ func (a *App) Run(args []string) int {
 			a.usage(a.stdout)
 			return 0
 		default:
-			err = fmt.Errorf("unknown command %q", command)
+			gitArgs := append([]string{command}, args[2:]...)
+			err = a.git.Run(gitArgs...)
 		}
 	}
 
