@@ -18,7 +18,7 @@ in
     scripts = {};
 
     scripts = {
-      graphene-test.exec = "go test ./...";
+      graphene-test.exec = "go test -parallel 8 ./...";
       graphene-build.exec = "go build -o bin/graphene ./cmd/graphene";
     };
 
@@ -35,7 +35,7 @@ in
         subPackages = [ "cmd/graphene" ];
         checkPhase = ''
           runHook preCheck
-          go test ./...
+          go test -parallel 8 ./...
           runHook postCheck
         '';
       };

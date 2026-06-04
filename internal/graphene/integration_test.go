@@ -54,6 +54,7 @@ func (r testRepo) runGraphene(t *testing.T, args ...string) (int, string, string
 }
 
 func TestCommitRecordsAppendAndFork(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 
 	writeFile(t, repo.dir, "one.txt", "one\n")
@@ -83,6 +84,7 @@ func TestCommitRecordsAppendAndFork(t *testing.T) {
 }
 
 func TestVersionFlag(t *testing.T) {
+	t.Parallel()
 	var stdout, stderr bytes.Buffer
 	app := NewApp("", nil, &stdout, &stderr, os.Getenv)
 
@@ -111,6 +113,7 @@ func TestVersionFlag(t *testing.T) {
 }
 
 func TestSkillWritesStdoutAndOutFile(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 
 	code, stdout, stderr := repo.runGraphene(t, "skill")
@@ -163,6 +166,7 @@ func TestSkillWritesStdoutAndOutFile(t *testing.T) {
 }
 
 func TestSkillShortcutsWriteCommonAgentPaths(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	home := filepath.Dir(repo.configDir)
 
@@ -200,6 +204,7 @@ func TestSkillShortcutsWriteCommonAgentPaths(t *testing.T) {
 }
 
 func TestCommitExactBranch(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 
 	writeFile(t, repo.dir, "exact.txt", "exact\n")
@@ -217,6 +222,7 @@ func TestCommitExactBranch(t *testing.T) {
 }
 
 func TestCommitNoVerifyBypassesHook(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	hook := filepath.Join(repo.dir, ".git", "hooks", "pre-commit")
 	if err := os.WriteFile(hook, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
@@ -233,6 +239,7 @@ func TestCommitNoVerifyBypassesHook(t *testing.T) {
 }
 
 func TestCommitNoEditIsPassedToGitCommit(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 
 	writeFile(t, repo.dir, "one.txt", "one\n")
@@ -248,6 +255,7 @@ func TestCommitNoEditIsPassedToGitCommit(t *testing.T) {
 }
 
 func TestCommitRecordsExplicitBaseBranch(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	createStackBranch(t, repo, "one.txt", "one\n", "One")
 	runGit(t, repo.dir, "checkout", "-b", "alias/one")
@@ -267,6 +275,7 @@ func TestCommitRecordsExplicitBaseBranch(t *testing.T) {
 }
 
 func TestCommitReusesCurrentBranchWithExplicitBase(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	baseHead := runGit(t, repo.dir, "rev-parse", "HEAD")
 	runGit(t, repo.dir, "checkout", "-b", "merge-train/spartan")
@@ -294,6 +303,7 @@ func TestCommitReusesCurrentBranchWithExplicitBase(t *testing.T) {
 }
 
 func TestTrackCurrentBranchExtendsExistingStack(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	runGit(t, repo.dir, "checkout", "-b", "z")
 	runGit(t, repo.dir, "checkout", "-b", "a")
@@ -329,6 +339,7 @@ func TestTrackCurrentBranchExtendsExistingStack(t *testing.T) {
 }
 
 func TestTrackRejectsMultiCommitBranch(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	runGit(t, repo.dir, "checkout", "-b", "z")
 	runGit(t, repo.dir, "checkout", "-b", "a")
@@ -353,6 +364,7 @@ func TestTrackRejectsMultiCommitBranch(t *testing.T) {
 }
 
 func TestCreateAliasStagesAll(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	runGit(t, repo.dir, "config", "graphene.alias.create", "new")
 
@@ -373,6 +385,7 @@ func TestCreateAliasStagesAll(t *testing.T) {
 }
 
 func TestModifyAliasStagesAllAndRestacksDescendants(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	runGit(t, repo.dir, "config", "graphene.alias.modify", "amend")
 	createStackBranch(t, repo, "one.txt", "one\n", "One")
@@ -393,6 +406,7 @@ func TestModifyAliasStagesAllAndRestacksDescendants(t *testing.T) {
 }
 
 func TestNavigationAndLogAliases(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	runGit(t, repo.dir, "config", "graphene.alias.down", "go down")
 	runGit(t, repo.dir, "config", "graphene.alias.up", "go up")
@@ -433,6 +447,7 @@ func TestNavigationAndLogAliases(t *testing.T) {
 }
 
 func TestTrackShortAlias(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	runGit(t, repo.dir, "config", "graphene.alias.tr", "track")
 	runGit(t, repo.dir, "checkout", "-b", "z")
@@ -451,6 +466,7 @@ func TestTrackShortAlias(t *testing.T) {
 }
 
 func TestConfigAliasExpandsBeforeDispatch(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	runGit(t, repo.dir, "config", "graphene.alias.makeone", `new -m "Alias One"`)
 
@@ -464,6 +480,7 @@ func TestConfigAliasExpandsBeforeDispatch(t *testing.T) {
 }
 
 func TestShellAliasRunsWithArguments(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	runGit(t, repo.dir, "config", "graphene.alias.echo-one", `!printf '%s\n'`)
 
@@ -477,6 +494,7 @@ func TestShellAliasRunsWithArguments(t *testing.T) {
 }
 
 func TestAliasLoopFails(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	runGit(t, repo.dir, "config", "graphene.alias.one", "two")
 	runGit(t, repo.dir, "config", "graphene.alias.two", "one")
@@ -491,6 +509,7 @@ func TestAliasLoopFails(t *testing.T) {
 }
 
 func TestConfigSetGetUnsetAndBranchPrefix(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 
 	expectGrapheneOK(t, repo, "config", "set", "alias.up", "go", "up")
@@ -520,6 +539,7 @@ func TestConfigSetGetUnsetAndBranchPrefix(t *testing.T) {
 }
 
 func TestCommitReuseCurrentRequiresBase(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	runGit(t, repo.dir, "checkout", "-b", "foo")
 	oldHead := runGit(t, repo.dir, "rev-parse", "HEAD")
@@ -546,6 +566,7 @@ func TestCommitReuseCurrentRequiresBase(t *testing.T) {
 }
 
 func TestCommitReuseCurrentRejectsRecordedBranchBeforeCommit(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	createStackBranch(t, repo, "one.txt", "one\n", "One")
 	runGit(t, repo.dir, "branch", "alias/one")
@@ -575,6 +596,7 @@ func TestCommitReuseCurrentRejectsRecordedBranchBeforeCommit(t *testing.T) {
 }
 
 func TestCommitRejectsExplicitBaseAtDifferentCommit(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	createStackBranch(t, repo, "one.txt", "one\n", "One")
 	runGit(t, repo.dir, "checkout", "main")
@@ -597,6 +619,7 @@ func TestCommitRejectsExplicitBaseAtDifferentCommit(t *testing.T) {
 }
 
 func TestCommitDoesNotLeaveTemporaryBranch(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 
 	writeFile(t, repo.dir, "one.txt", "one\n")
@@ -610,6 +633,7 @@ func TestCommitDoesNotLeaveTemporaryBranch(t *testing.T) {
 }
 
 func TestCommitDeletesTemporaryBranchAfterFailedCommit(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 
 	code, _, _ := repo.runGraphene(t, "new", "-m", "No changes")
@@ -623,6 +647,7 @@ func TestCommitDeletesTemporaryBranchAfterFailedCommit(t *testing.T) {
 }
 
 func TestSplitCurrentBranchWithNewRestacksDescendants(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 
 	writeFile(t, repo.dir, "one.txt", "one\n")
@@ -693,6 +718,7 @@ func TestSplitCurrentBranchWithNewRestacksDescendants(t *testing.T) {
 }
 
 func TestSplitFirstCommitRequiresReuseCurrent(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 
 	writeFile(t, repo.dir, "one.txt", "one\n")
@@ -712,6 +738,7 @@ func TestSplitFirstCommitRequiresReuseCurrent(t *testing.T) {
 }
 
 func TestSplitAbortRestoresOriginalBranchAndState(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 
 	writeFile(t, repo.dir, "one.txt", "one\n")
@@ -750,6 +777,7 @@ func TestSplitAbortRestoresOriginalBranchAndState(t *testing.T) {
 }
 
 func TestSquashDefaultIntoParentRestacksDescendants(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	createStackBranch(t, repo, "one.txt", "one\n", "One")
 	createStackBranch(t, repo, "two.txt", "two\n", "Two")
@@ -801,6 +829,7 @@ func TestSquashDefaultIntoParentRestacksDescendants(t *testing.T) {
 }
 
 func TestSquashCountThree(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	createStackBranch(t, repo, "one.txt", "one\n", "One")
 	createStackBranch(t, repo, "two.txt", "two\n", "Two")
@@ -841,6 +870,7 @@ func TestSquashCountThree(t *testing.T) {
 }
 
 func TestSquashRejectsCountPastBottom(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	createStackBranch(t, repo, "one.txt", "one\n", "One")
 
@@ -857,6 +887,7 @@ func TestSquashRejectsCountPastBottom(t *testing.T) {
 }
 
 func TestAmendRestacksSuffix(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	createStackBranch(t, repo, "one.txt", "one\n", "One")
 	createStackBranch(t, repo, "two.txt", "two\n", "Two")
@@ -881,6 +912,7 @@ func TestAmendRestacksSuffix(t *testing.T) {
 }
 
 func TestAmendRestacksForkedDescendants(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	createStackBranch(t, repo, "one.txt", "one\n", "One")
 	createStackBranch(t, repo, "two.txt", "two\n", "Two")
@@ -903,6 +935,7 @@ func TestAmendRestacksForkedDescendants(t *testing.T) {
 }
 
 func TestAmendRestacksBaseBranch(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	createStackBranch(t, repo, "one.txt", "one\n", "One")
 
@@ -919,6 +952,7 @@ func TestAmendRestacksBaseBranch(t *testing.T) {
 }
 
 func TestAmendNoEditPreservesCommitMessage(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	createStackBranch(t, repo, "one.txt", "one\n", "One")
 
@@ -935,6 +969,7 @@ func TestAmendNoEditPreservesCommitMessage(t *testing.T) {
 }
 
 func TestRestackMovesBranchAndDescendants(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	createStackBranch(t, repo, "one.txt", "one\n", "One")
 	createStackBranch(t, repo, "two.txt", "two\n", "Two")
@@ -973,6 +1008,7 @@ func TestRestackMovesBranchAndDescendants(t *testing.T) {
 }
 
 func TestRestackOntoBranchAtSameCommitUpdatesStateOnly(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	createStackBranch(t, repo, "one.txt", "one\n", "One")
 	createStackBranch(t, repo, "two.txt", "two\n", "Two")
@@ -996,6 +1032,7 @@ func TestRestackOntoBranchAtSameCommitUpdatesStateOnly(t *testing.T) {
 }
 
 func TestRestackRejectsRemoteTrackingBase(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 
 	remote := filepath.Join(t.TempDir(), "remote.git")
@@ -1020,6 +1057,7 @@ func TestRestackRejectsRemoteTrackingBase(t *testing.T) {
 }
 
 func TestSyncRebasesCurrentBranchAndDeletesAppliedIntermediateBranches(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 
 	remote := filepath.Join(t.TempDir(), "remote.git")
@@ -1082,6 +1120,7 @@ func TestSyncRebasesCurrentBranchAndDeletesAppliedIntermediateBranches(t *testin
 }
 
 func TestSyncFromBaseRebasesDescendantStack(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 
 	remote := filepath.Join(t.TempDir(), "remote.git")
@@ -1130,6 +1169,7 @@ func TestSyncFromBaseRebasesDescendantStack(t *testing.T) {
 }
 
 func TestSyncAllFromBaseRebasesSiblingAndNestedStacks(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 
 	remote := filepath.Join(t.TempDir(), "remote.git")
@@ -1193,6 +1233,7 @@ func TestSyncAllFromBaseRebasesSiblingAndNestedStacks(t *testing.T) {
 }
 
 func TestSyncDryRunPrintsPlanWithoutChangingRefsOrState(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 
 	remote := filepath.Join(t.TempDir(), "remote.git")
@@ -1260,6 +1301,7 @@ func TestSyncDryRunPrintsPlanWithoutChangingRefsOrState(t *testing.T) {
 }
 
 func TestSyncFromBaseDeletesAppliedIntermediateBranches(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 
 	remote := filepath.Join(t.TempDir(), "remote.git")
@@ -1319,6 +1361,7 @@ func TestSyncFromBaseDeletesAppliedIntermediateBranches(t *testing.T) {
 }
 
 func TestSyncRejectsTrackedBranchWithExtraCommit(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 
 	remote := filepath.Join(t.TempDir(), "remote.git")
@@ -1360,6 +1403,7 @@ func TestSyncRejectsTrackedBranchWithExtraCommit(t *testing.T) {
 }
 
 func TestSyncRepairsDependentsAfterDeletingMergedAncestor(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 
 	remote := filepath.Join(t.TempDir(), "remote.git")
@@ -1406,6 +1450,7 @@ func TestSyncRepairsDependentsAfterDeletingMergedAncestor(t *testing.T) {
 }
 
 func TestSyncKeepsUnappliedBranches(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 
 	remote := filepath.Join(t.TempDir(), "remote.git")
@@ -1447,6 +1492,7 @@ func TestSyncKeepsUnappliedBranches(t *testing.T) {
 }
 
 func TestSyncUsesFetchedBaseWhenBaseCheckedOutInAnotherWorktree(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 
 	remote := filepath.Join(t.TempDir(), "remote.git")
@@ -1489,6 +1535,7 @@ func TestSyncUsesFetchedBaseWhenBaseCheckedOutInAnotherWorktree(t *testing.T) {
 }
 
 func TestSyncRejectsCheckedOutDescendantBeforeMovingAncestor(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 
 	remote := filepath.Join(t.TempDir(), "remote.git")
@@ -1532,6 +1579,7 @@ func TestSyncRejectsCheckedOutDescendantBeforeMovingAncestor(t *testing.T) {
 }
 
 func TestSyncDeletesAppliedStackWhenBaseCheckedOutInAnotherWorktree(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 
 	remote := filepath.Join(t.TempDir(), "remote.git")
@@ -1576,6 +1624,7 @@ func TestSyncDeletesAppliedStackWhenBaseCheckedOutInAnotherWorktree(t *testing.T
 }
 
 func TestSyncLastAppliedBranchDeletesStack(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 
 	remote := filepath.Join(t.TempDir(), "remote.git")
@@ -1622,6 +1671,7 @@ func TestSyncLastAppliedBranchDeletesStack(t *testing.T) {
 }
 
 func TestContinueClearsPendingAfterConflict(t *testing.T) {
+	t.Parallel()
 	repo := createConflictDuringAmend(t)
 
 	writeFile(t, repo.dir, "file.txt", "two\n")
@@ -1640,6 +1690,7 @@ func TestContinueClearsPendingAfterConflict(t *testing.T) {
 }
 
 func TestContinueRestoresRebaseStateAfterCommitCreationFailure(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 
 	writeFile(t, repo.dir, "file.txt", "one\n")
@@ -1693,6 +1744,7 @@ func TestContinueRestoresRebaseStateAfterCommitCreationFailure(t *testing.T) {
 }
 
 func TestContinueWithoutRebaseIsFriendly(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 
 	code, _, stderr := repo.runGraphene(t, "continue")
@@ -1705,6 +1757,7 @@ func TestContinueWithoutRebaseIsFriendly(t *testing.T) {
 }
 
 func TestAbortClearsPendingAfterConflict(t *testing.T) {
+	t.Parallel()
 	repo := createConflictDuringAmend(t)
 
 	expectGrapheneOK(t, repo, "abort")
@@ -1715,6 +1768,7 @@ func TestAbortClearsPendingAfterConflict(t *testing.T) {
 }
 
 func TestAbortWithoutRebaseIsFriendly(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 
 	code, _, stderr := repo.runGraphene(t, "abort")
@@ -1727,6 +1781,7 @@ func TestAbortWithoutRebaseIsFriendly(t *testing.T) {
 }
 
 func TestCommitRejectsAmendMode(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 
 	writeFile(t, repo.dir, "one.txt", "one\n")
@@ -1744,6 +1799,7 @@ func TestCommitRejectsAmendMode(t *testing.T) {
 }
 
 func TestCommitRejectsUnsupportedGitFlags(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 
 	writeFile(t, repo.dir, "one.txt", "one\n")
@@ -1761,6 +1817,7 @@ func TestCommitRejectsUnsupportedGitFlags(t *testing.T) {
 }
 
 func TestCommitPrefixConflictFailsBeforeCommit(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	runGit(t, repo.dir, "branch", "stack")
 
@@ -1782,6 +1839,7 @@ func TestCommitPrefixConflictFailsBeforeCommit(t *testing.T) {
 }
 
 func TestCommitSkipsBranchNamesRecordedInStaleState(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	createStackBranch(t, repo, "one.txt", "one\n", "One")
 
@@ -1797,6 +1855,7 @@ func TestCommitSkipsBranchNamesRecordedInStaleState(t *testing.T) {
 }
 
 func TestForgetRemovesStackThroughCurrentBranchWithoutDeletingBranches(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	createStackBranch(t, repo, "one.txt", "one\n", "One")
 	createStackBranch(t, repo, "two.txt", "two\n", "Two")
@@ -1821,6 +1880,7 @@ func TestForgetRemovesStackThroughCurrentBranchWithoutDeletingBranches(t *testin
 }
 
 func TestForgetTipRemovesStackWithoutDeletingBranches(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	createStackBranch(t, repo, "one.txt", "one\n", "One")
 	createStackBranch(t, repo, "two.txt", "two\n", "Two")
@@ -1842,6 +1902,7 @@ func TestForgetTipRemovesStackWithoutDeletingBranches(t *testing.T) {
 }
 
 func TestForgetForceClearsPendingState(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	createStackBranch(t, repo, "one.txt", "one\n", "One")
 	createStackBranch(t, repo, "two.txt", "two\n", "Two")
@@ -1879,6 +1940,7 @@ func TestForgetForceClearsPendingState(t *testing.T) {
 }
 
 func TestPushPushesStackAndSetsUpstreams(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	createStackBranch(t, repo, "one.txt", "one\n", "One")
 	createStackBranch(t, repo, "two.txt", "two\n", "Two")
@@ -1935,6 +1997,7 @@ func TestPushPushesStackAndSetsUpstreams(t *testing.T) {
 }
 
 func TestSendAllowsUnrelatedPendingRebaseInAnotherWorktree(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	remote := filepath.Join(t.TempDir(), "remote.git")
 	runGit(t, "", "init", "--bare", remote)
@@ -1964,6 +2027,7 @@ func TestSendAllowsUnrelatedPendingRebaseInAnotherWorktree(t *testing.T) {
 }
 
 func TestSendRejectsBranchPendingInAnotherWorktree(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	remote := filepath.Join(t.TempDir(), "remote.git")
 	runGit(t, "", "init", "--bare", remote)
@@ -1994,6 +2058,7 @@ func TestSendRejectsBranchPendingInAnotherWorktree(t *testing.T) {
 }
 
 func TestSendRejectsGitPushFlags(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	createStackBranch(t, repo, "one.txt", "one\n", "One")
 
@@ -2007,6 +2072,7 @@ func TestSendRejectsGitPushFlags(t *testing.T) {
 }
 
 func TestSendfUsesSameBranchSetAsSendAndStackFlagPushesDescendants(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	createStackBranch(t, repo, "one.txt", "one\n", "One")
 	createStackBranch(t, repo, "two.txt", "two\n", "Two")
@@ -2052,6 +2118,7 @@ func TestSendfUsesSameBranchSetAsSendAndStackFlagPushesDescendants(t *testing.T)
 }
 
 func TestSendStackDoesNotPushSiblingBranches(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	createStackBranch(t, repo, "one.txt", "one\n", "One")
 	createStackBranch(t, repo, "two.txt", "two\n", "Two")
@@ -2077,6 +2144,7 @@ func TestSendStackDoesNotPushSiblingBranches(t *testing.T) {
 }
 
 func TestSendPrintsCurrentBranchAndDependencyLinks(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	remote := filepath.Join(t.TempDir(), "remote.git")
 	runGit(t, "", "init", "--bare", remote)
@@ -2101,6 +2169,7 @@ func TestSendPrintsCurrentBranchAndDependencyLinks(t *testing.T) {
 }
 
 func TestPrintPullRequestURLs(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	runGit(t, repo.dir, "remote", "add", "origin", "/tmp/fetch.git")
 	runGit(t, repo.dir, "remote", "set-url", "--push", "origin", "git@github.com:AztecProtocol/aztec-packages.git")
@@ -2127,6 +2196,7 @@ func TestPrintPullRequestURLs(t *testing.T) {
 }
 
 func TestPrintPullRequestURLsFromRepoTemplate(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	runGit(t, repo.dir, "config", "--local", "graphene.prUrlTemplate", "https://example.com/pr/${baseBranch}/${targetBranch}")
 
@@ -2151,6 +2221,7 @@ func TestPrintPullRequestURLsFromRepoTemplate(t *testing.T) {
 }
 
 func TestGraphDisplaysForkedStack(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	createStackBranch(t, repo, "one.txt", "one\n", "One")
 	createStackBranch(t, repo, "two.txt", "two\n", "Two")
@@ -2173,6 +2244,7 @@ func TestGraphDisplaysForkedStack(t *testing.T) {
 }
 
 func TestGoWalksForkedStack(t *testing.T) {
+	t.Parallel()
 	repo := newTestRepo(t)
 	createStackBranch(t, repo, "one.txt", "one\n", "One")
 	createStackBranch(t, repo, "two.txt", "two\n", "Two")

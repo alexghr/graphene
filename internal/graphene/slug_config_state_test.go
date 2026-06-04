@@ -6,6 +6,7 @@ import (
 )
 
 func TestSlugSubject(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		in   string
 		want string
@@ -24,6 +25,7 @@ func TestSlugSubject(t *testing.T) {
 }
 
 func TestBranchNameAndCandidate(t *testing.T) {
+	t.Parallel()
 	if got := BranchName("stack", "fix"); got != "stack/fix" {
 		t.Fatalf("BranchName default = %q", got)
 	}
@@ -39,6 +41,7 @@ func TestBranchNameAndCandidate(t *testing.T) {
 }
 
 func TestStateAddCommit(t *testing.T) {
+	t.Parallel()
 	var state State
 	if err := state.AddCommit("main", "stack/one"); err != nil {
 		t.Fatal(err)
@@ -60,6 +63,7 @@ func TestStateAddCommit(t *testing.T) {
 }
 
 func TestTrackBranchFoldsExistingChildPath(t *testing.T) {
+	t.Parallel()
 	state := State{Stacks: []Stack{
 		{Base: "a", Branches: []string{"b"}},
 	}}
@@ -77,6 +81,7 @@ func TestTrackBranchFoldsExistingChildPath(t *testing.T) {
 }
 
 func TestTrackBranchAppendsToTrackedTip(t *testing.T) {
+	t.Parallel()
 	state := State{Stacks: []Stack{
 		{Base: "z", Branches: []string{"x"}},
 		{Base: "a", Branches: []string{"b"}},
@@ -95,6 +100,7 @@ func TestTrackBranchAppendsToTrackedTip(t *testing.T) {
 }
 
 func TestTrackBranchKeepsSiblingChildStacks(t *testing.T) {
+	t.Parallel()
 	state := State{Stacks: []Stack{
 		{Base: "a", Branches: []string{"b"}},
 		{Base: "a", Branches: []string{"c"}},
@@ -114,6 +120,7 @@ func TestTrackBranchKeepsSiblingChildStacks(t *testing.T) {
 }
 
 func TestTrackBranchRejectsCycles(t *testing.T) {
+	t.Parallel()
 	state := State{Stacks: []Stack{
 		{Base: "a", Branches: []string{"b"}},
 	}}
@@ -124,6 +131,7 @@ func TestTrackBranchRejectsCycles(t *testing.T) {
 }
 
 func TestBranchesThroughCurrent(t *testing.T) {
+	t.Parallel()
 	state := State{Stacks: []Stack{
 		{Base: "main", Branches: []string{"a", "b", "c"}},
 		{Base: "b", Branches: []string{"d", "e"}},
@@ -148,6 +156,7 @@ func TestBranchesThroughCurrent(t *testing.T) {
 }
 
 func TestBranchesThroughCurrentAndDescendants(t *testing.T) {
+	t.Parallel()
 	state := State{Stacks: []Stack{
 		{Base: "main", Branches: []string{"a", "b", "c"}},
 		{Base: "main", Branches: []string{"d", "e"}},
@@ -178,6 +187,7 @@ func TestBranchesThroughCurrentAndDescendants(t *testing.T) {
 }
 
 func TestRemoveStackThroughCurrent(t *testing.T) {
+	t.Parallel()
 	state := State{Stacks: []Stack{
 		{Base: "main", Branches: []string{"a", "b", "c"}},
 		{Base: "a", Branches: []string{"d"}},
@@ -208,6 +218,7 @@ func TestRemoveStackThroughCurrent(t *testing.T) {
 }
 
 func TestReparentBranch(t *testing.T) {
+	t.Parallel()
 	state := State{Stacks: []Stack{
 		{Base: "main", Branches: []string{"a", "b", "c"}},
 		{Base: "a", Branches: []string{"d"}},
@@ -234,6 +245,7 @@ func TestReparentBranch(t *testing.T) {
 }
 
 func TestBaseBranch(t *testing.T) {
+	t.Parallel()
 	state := State{Stacks: []Stack{
 		{Base: "main", Branches: []string{"a", "b", "c"}},
 		{Base: "b", Branches: []string{"d", "e"}},
@@ -260,6 +272,7 @@ func TestBaseBranch(t *testing.T) {
 }
 
 func TestStackGraphCandidates(t *testing.T) {
+	t.Parallel()
 	state := State{Stacks: []Stack{
 		{Base: "main", Branches: []string{"one", "two", "three"}},
 		{Base: "one", Branches: []string{"fork", "fork-top"}},
@@ -311,6 +324,7 @@ func TestStackGraphCandidates(t *testing.T) {
 }
 
 func TestParseArgs(t *testing.T) {
+	t.Parallel()
 	newOpts, err := parseNewArgs([]string{"--branch=feature/exact", "--base=stack/parent", "--message=hi", "--no-edit", "--no-verify", "--gpg-sign=key", "--no-gpg-sign"})
 	if err != nil {
 		t.Fatal(err)
@@ -552,6 +566,7 @@ func TestParseArgs(t *testing.T) {
 }
 
 func TestParseGitVersion(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		in   string
 		want gitVersion
@@ -578,6 +593,7 @@ func TestParseGitVersion(t *testing.T) {
 }
 
 func TestRestackOpsAfterRewrite(t *testing.T) {
+	t.Parallel()
 	state := State{Stacks: []Stack{
 		{Base: "main", Branches: []string{"a", "b"}},
 		{Base: "a", Branches: []string{"c"}},
@@ -606,6 +622,7 @@ func TestRestackOpsAfterRewrite(t *testing.T) {
 }
 
 func TestRenderGraphWithPending(t *testing.T) {
+	t.Parallel()
 	state := State{
 		Stacks: []Stack{
 			{Base: "main", Branches: []string{"a", "b"}},
@@ -637,6 +654,7 @@ func TestRenderGraphWithPending(t *testing.T) {
 }
 
 func TestPullRequestURLs(t *testing.T) {
+	t.Parallel()
 	state := State{Stacks: []Stack{
 		{Base: "main", Branches: []string{"ag/base-change", "ag/head-change"}},
 	}}
@@ -673,6 +691,7 @@ func TestPullRequestURLs(t *testing.T) {
 }
 
 func TestPullRequestURLsFromTemplate(t *testing.T) {
+	t.Parallel()
 	state := State{Stacks: []Stack{
 		{Base: "main", Branches: []string{"ag/base-change", "ag/head-change"}},
 	}}
