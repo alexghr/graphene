@@ -1432,6 +1432,76 @@ func (a *App) forget(args []string) error {
 	return a.git.WriteState(state)
 }
 
+func (a *App) deleteBranch(args []string) error {
+	branch, err := parseDeleteArgs(args)
+	if err != nil {
+		return err
+	}
+
+	current, err := a.git.CurrentBranch()
+	if err != nil {
+		return err
+	}
+	if branch == "" {
+		branch = current
+	}
+
+	state, err := a.git.ReadState()
+	if err != nil {
+		return err
+	}
+	if state.Pending != nil {
+		return fmt.Errorf("pending rebase exists; use graphene continue or graphene abort")
+	}
+	if !state.ContainsBranch(branch) {
+		return fmt.Errorf("branch %q is not in a graphene stack", branch)
+	}
+
+	children := newStackGraph(state).children[branch]
+	if len(children) > 0 {
+		return fmt.Errorf("branch %q has tracked descendants; delete or restack them before graphene delete", branch)
+	}
+
+	exists, err := a.git.BranchExists(branch)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return fmt.Errorf("branch %q does not exist", branch)
+	}
+
+	base, ok := BaseBranch(state, branch)
+	if !ok {
+		return fmt.Errorf("branch %q is not in a graphene stack", branch)
+	}
+	if current == branch {
+		baseExists, err := a.git.BranchExists(base)
+		if err != nil {
+			return err
+		}
+		if !baseExists {
+			return fmt.Errorf("base branch %q does not exist; switch away from %q before graphene delete", base, branch)
+		}
+		if err := a.git.Run("switch", base); err != nil {
+			return err
+		}
+	} else {
+		checkedOut, err := a.git.BranchCheckedOut(branch)
+		if err != nil {
+			return err
+		}
+		if checkedOut {
+			return fmt.Errorf("branch %q is checked out in another worktree; switch that worktree away from the branch before graphene delete", branch)
+		}
+	}
+
+	if err := a.git.Run("branch", "-D", branch); err != nil {
+		return err
+	}
+	nextState := RemoveBranches(State{Stacks: cloneStacks(state.Stacks)}, []string{branch})
+	return a.git.WriteState(nextState)
+}
+
 func (a *App) trackBranch(base, branch string) error {
 	if branch == "" {
 		var err error
@@ -3183,6 +3253,19 @@ func parseForgetArgs(args []string) (forgetOptions, error) {
 		}
 	}
 	return opts, nil
+}
+
+func parseDeleteArgs(args []string) (string, error) {
+	if len(args) > 1 {
+		return "", fmt.Errorf("graphene delete accepts at most one branch")
+	}
+	if len(args) == 0 {
+		return "", nil
+	}
+	if strings.HasPrefix(args[0], "-") {
+		return "", fmt.Errorf("unsupported argument %q; usage: graphene delete [branch]", args[0])
+	}
+	return args[0], nil
 }
 
 func parseTrackArgs(args []string) (string, string, error) {

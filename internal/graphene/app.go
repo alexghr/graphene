@@ -116,6 +116,12 @@ func (a *App) Run(args []string) int {
 				return 0
 			}
 			err = a.forget(args[2:])
+		case "delete":
+			if helpArgs(args[2:]) {
+				a.commandUsage("delete", a.stdout)
+				return 0
+			}
+			err = a.deleteBranch(args[2:])
 		case "track":
 			if helpArgs(args[2:]) {
 				a.commandUsage("track", a.stdout)
@@ -208,6 +214,7 @@ func (a *App) usage(w io.Writer) {
   graphene abort
   graphene config <get|set|unset> [--global|--local] <key> [value]
   graphene forget [--force] [branch]
+  graphene delete [branch]
   graphene track --parent <base> [branch]
   graphene sync [-a|--all] [--dry-run]
   graphene send [--remote <remote>] [--stack] [--dry-run]
@@ -295,6 +302,11 @@ Remove Graphene tracking through the current or named branch without deleting Gi
 
 options:
       --force  clear pending Graphene rebase state while forgetting`,
+		"delete": `usage: graphene delete [branch]
+
+Delete the current or named tracked branch locally and remove it from Graphene tracking.
+
+Branches with tracked descendants must be deleted from the tip down, or restacked first.`,
 		"track": `usage: graphene track --parent <base> [branch]
 
 Record an existing one-commit branch in the Graphene stack graph.

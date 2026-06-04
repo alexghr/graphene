@@ -464,6 +464,26 @@ func TestParseArgs(t *testing.T) {
 	if _, err := parseForgetArgs([]string{"stack/two", "stack/three"}); err == nil {
 		t.Fatal("parseForgetArgs accepted multiple branches")
 	}
+	deleteBranch, err := parseDeleteArgs([]string{"stack/two"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleteBranch != "stack/two" {
+		t.Fatalf("parseDeleteArgs branch = %q", deleteBranch)
+	}
+	deleteBranch, err = parseDeleteArgs(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleteBranch != "" {
+		t.Fatalf("parseDeleteArgs no args = %q", deleteBranch)
+	}
+	if _, err := parseDeleteArgs([]string{"--bad"}); err == nil {
+		t.Fatal("parseDeleteArgs accepted --bad")
+	}
+	if _, err := parseDeleteArgs([]string{"stack/two", "stack/three"}); err == nil {
+		t.Fatal("parseDeleteArgs accepted multiple branches")
+	}
 	aliasNew, err := parseNewArgs([]string{"-am", "One", "--branch", "feature/one"})
 	if err != nil {
 		t.Fatal(err)

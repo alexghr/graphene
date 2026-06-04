@@ -2088,6 +2088,82 @@ func TestForgetForceClearsPendingState(t *testing.T) {
 	}
 }
 
+// Feature for https://github.com/alexghr/graphene/issues/3.
+func TestDeleteCurrentTrackedTipSwitchesToParentAndDeletesBranch(t *testing.T) {
+	t.Parallel()
+	repo := newTestRepo(t)
+	createStackBranch(t, repo, "one.txt", "one\n", "One")
+	createStackBranch(t, repo, "two.txt", "two\n", "Two")
+
+	expectGrapheneOK(t, repo, "delete")
+
+	if got := currentBranch(t, repo.dir); got != "stack/one" {
+		t.Fatalf("branch = %q, want stack/one", got)
+	}
+	if refExists(t, repo.dir, "refs/heads/stack/two") {
+		t.Fatal("stack/two still exists")
+	}
+	if !refExists(t, repo.dir, "refs/heads/stack/one") {
+		t.Fatal("stack/one was deleted")
+	}
+	state := readState(t, repo.dir)
+	want := []Stack{{Base: "main", Branches: []string{"stack/one"}}}
+	if !reflect.DeepEqual(state.Stacks, want) {
+		t.Fatalf("stacks = %#v, want %#v", state.Stacks, want)
+	}
+}
+
+func TestDeleteNamedTrackedTipDeletesBranchWithoutCheckout(t *testing.T) {
+	t.Parallel()
+	repo := newTestRepo(t)
+	createStackBranch(t, repo, "one.txt", "one\n", "One")
+	createStackBranch(t, repo, "two.txt", "two\n", "Two")
+
+	runGit(t, repo.dir, "checkout", "main")
+	expectGrapheneOK(t, repo, "delete", "stack/two")
+
+	if got := currentBranch(t, repo.dir); got != "main" {
+		t.Fatalf("branch = %q, want main", got)
+	}
+	if refExists(t, repo.dir, "refs/heads/stack/two") {
+		t.Fatal("stack/two still exists")
+	}
+	state := readState(t, repo.dir)
+	want := []Stack{{Base: "main", Branches: []string{"stack/one"}}}
+	if !reflect.DeepEqual(state.Stacks, want) {
+		t.Fatalf("stacks = %#v, want %#v", state.Stacks, want)
+	}
+}
+
+func TestDeleteRejectsTrackedDescendants(t *testing.T) {
+	t.Parallel()
+	repo := newTestRepo(t)
+	createStackBranch(t, repo, "one.txt", "one\n", "One")
+	createStackBranch(t, repo, "two.txt", "two\n", "Two")
+
+	runGit(t, repo.dir, "checkout", "stack/one")
+	code, _, stderr := repo.runGraphene(t, "delete")
+	if code == 0 {
+		t.Fatal("graphene delete unexpectedly deleted a branch with descendants")
+	}
+	if !strings.Contains(stderr, `branch "stack/one" has tracked descendants`) {
+		t.Fatalf("stderr = %q", stderr)
+	}
+	if got := currentBranch(t, repo.dir); got != "stack/one" {
+		t.Fatalf("branch = %q, want stack/one", got)
+	}
+	for _, branch := range []string{"stack/one", "stack/two"} {
+		if !refExists(t, repo.dir, "refs/heads/"+branch) {
+			t.Fatalf("%s was deleted", branch)
+		}
+	}
+	state := readState(t, repo.dir)
+	want := []Stack{{Base: "main", Branches: []string{"stack/one", "stack/two"}}}
+	if !reflect.DeepEqual(state.Stacks, want) {
+		t.Fatalf("stacks = %#v, want %#v", state.Stacks, want)
+	}
+}
+
 func TestPushPushesStackAndSetsUpstreams(t *testing.T) {
 	t.Parallel()
 	repo := newTestRepo(t)
