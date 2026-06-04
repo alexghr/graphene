@@ -119,6 +119,17 @@ func (g Git) LocalBranches() ([]string, error) {
 	return strings.Split(out, "\n"), nil
 }
 
+func (g Git) LocalBranchesPointingAt(rev string) ([]string, error) {
+	out, err := g.Output("branch", "--format=%(refname:strip=2)", "--points-at", rev)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(out) == "" {
+		return nil, nil
+	}
+	return strings.Split(out, "\n"), nil
+}
+
 func (g Git) BranchCreateStatus(branch string) (string, error) {
 	if strings.TrimSpace(branch) == "" || strings.HasPrefix(branch, "-") {
 		return "", fmt.Errorf("invalid branch name %q", branch)

@@ -39,7 +39,11 @@ func (a *App) newBranch(args []string) error {
 			return fmt.Errorf("graphene new --reuse-current cannot use --branch")
 		}
 		if opts.base == "" {
-			return fmt.Errorf("graphene new --reuse-current requires --base")
+			base, err := a.inferReuseCurrentBase(current)
+			if err != nil {
+				return err
+			}
+			opts.base = base
 		}
 		if opts.base == current {
 			return fmt.Errorf("graphene new --reuse-current cannot use current branch %q as base", current)
@@ -110,6 +114,24 @@ func (a *App) newBranch(args []string) error {
 		return err
 	}
 	return a.git.WriteState(state)
+}
+
+func (a *App) inferReuseCurrentBase(current string) (string, error) {
+	branches, err := a.git.LocalBranchesPointingAt("HEAD")
+	if err != nil {
+		return "", err
+	}
+
+	var candidates []string
+	for _, branch := range branches {
+		if branch != current {
+			candidates = append(candidates, branch)
+		}
+	}
+	if len(candidates) != 1 {
+		return "", fmt.Errorf("graphene new --reuse-current requires --base")
+	}
+	return candidates[0], nil
 }
 
 func (a *App) split(args []string) error {

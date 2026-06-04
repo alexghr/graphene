@@ -302,6 +302,37 @@ func TestCommitReusesCurrentBranchWithExplicitBase(t *testing.T) {
 	}
 }
 
+func TestCommitReuseCurrentInfersUniqueBaseAtHead(t *testing.T) {
+	t.Parallel()
+	repo := newTestRepo(t)
+	runGit(t, repo.dir, "checkout", "-b", "viem-err")
+	writeFile(t, repo.dir, "shared.txt", "shared\n")
+	runGit(t, repo.dir, "add", ".")
+	runGit(t, repo.dir, "commit", "-m", "Shared")
+	baseHead := runGit(t, repo.dir, "rev-parse", "HEAD")
+	runGit(t, repo.dir, "checkout", "-b", "ag/more-packing")
+
+	writeFile(t, repo.dir, "pods.txt", "pods\n")
+	runGit(t, repo.dir, "add", ".")
+	expectGrapheneOK(t, repo, "new", "--reuse-current", "-m", "chore: improve pod scheduling")
+
+	if got := currentBranch(t, repo.dir); got != "ag/more-packing" {
+		t.Fatalf("branch = %q", got)
+	}
+	if got := runGit(t, repo.dir, "rev-parse", "viem-err"); got != baseHead {
+		t.Fatalf("base ref = %q, want %q", got, baseHead)
+	}
+	if got := runGit(t, repo.dir, "rev-list", "--count", "viem-err..ag/more-packing"); got != "1" {
+		t.Fatalf("commit count = %q, want 1", got)
+	}
+
+	state := readState(t, repo.dir)
+	want := []Stack{{Base: "viem-err", Branches: []string{"ag/more-packing"}}}
+	if !reflect.DeepEqual(state.Stacks, want) {
+		t.Fatalf("stacks = %#v, want %#v", state.Stacks, want)
+	}
+}
+
 func TestTrackCurrentBranchExtendsExistingStack(t *testing.T) {
 	t.Parallel()
 	repo := newTestRepo(t)
@@ -582,9 +613,10 @@ func TestConfigSetGetUnsetAndBranchPrefix(t *testing.T) {
 	}
 }
 
-func TestCommitReuseCurrentRequiresBase(t *testing.T) {
+func TestCommitReuseCurrentRequiresBaseWhenBaseAmbiguous(t *testing.T) {
 	t.Parallel()
 	repo := newTestRepo(t)
+	runGit(t, repo.dir, "branch", "alias/main")
 	runGit(t, repo.dir, "checkout", "-b", "foo")
 	oldHead := runGit(t, repo.dir, "rev-parse", "HEAD")
 
