@@ -8,6 +8,7 @@ in
       [
         git
         pkgs-unstable.codex
+        pkgs-unstable.gh
       ];
 
     languages.go = {
