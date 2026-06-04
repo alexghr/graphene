@@ -335,6 +335,22 @@ func TestParseArgs(t *testing.T) {
 		t.Fatalf("parseNewArgs = %#v", newOpts)
 	}
 
+	// Regression for https://github.com/alexghr/graphene/issues/11.
+	newParentOpts, err := parseNewArgs([]string{"--parent", "stack/parent", "-m", "hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if newParentOpts.base != "stack/parent" || !reflect.DeepEqual(newParentOpts.commitArgs, []string{"-m", "hi"}) {
+		t.Fatalf("parseNewArgs --parent = %#v", newParentOpts)
+	}
+	newMatchingBaseOpts, err := parseNewArgs([]string{"--base=main", "--parent=main", "-m", "hi"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if newMatchingBaseOpts.base != "main" {
+		t.Fatalf("parseNewArgs matching base aliases = %#v", newMatchingBaseOpts)
+	}
+
 	positionalNewOpts, err := parseNewArgs([]string{"feature/positional", "--message=hi"})
 	if err != nil {
 		t.Fatal(err)
@@ -517,6 +533,21 @@ func TestParseArgs(t *testing.T) {
 	if base != "main" || branch != "feature/one" {
 		t.Fatalf("parseTrackArgs = base %q branch %q", base, branch)
 	}
+	// Regression for https://github.com/alexghr/graphene/issues/11.
+	base, branch, err = parseTrackArgs([]string{"--base=main", "feature/one"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if base != "main" || branch != "feature/one" {
+		t.Fatalf("parseTrackArgs --base = base %q branch %q", base, branch)
+	}
+	base, branch, err = parseTrackArgs([]string{"-p", "main", "--base", "main", "feature/one"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if base != "main" || branch != "feature/one" {
+		t.Fatalf("parseTrackArgs matching parent aliases = base %q branch %q", base, branch)
+	}
 	aliasWords, err := splitAlias(`new --branch "feature one" -m hi`)
 	if err != nil {
 		t.Fatal(err)
@@ -611,6 +642,12 @@ func TestParseArgs(t *testing.T) {
 	}
 	if _, err := parseNewArgs([]string{"feature/one", "--branch", "feature/two", "-m", "bad"}); err == nil || !strings.Contains(err.Error(), "either positional branch or -b/--branch") {
 		t.Fatalf("parseNewArgs positional and flag error = %v", err)
+	}
+	if _, err := parseNewArgs([]string{"--base", "main", "--parent", "other", "-m", "bad"}); err == nil || !strings.Contains(err.Error(), "different branches") {
+		t.Fatalf("parseNewArgs conflicting base aliases error = %v", err)
+	}
+	if _, _, err := parseTrackArgs([]string{"--parent", "main", "--base", "other"}); err == nil || !strings.Contains(err.Error(), "different branches") {
+		t.Fatalf("parseTrackArgs conflicting base aliases error = %v", err)
 	}
 }
 

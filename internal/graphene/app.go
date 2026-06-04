@@ -215,7 +215,7 @@ func (a *App) usage(w io.Writer) {
   graphene config <get|set|unset> [--global|--local] <key> [value]
   graphene forget [--force] [branch]
   graphene delete [branch]
-  graphene track --parent <base> [branch]
+  graphene track (--parent|--base) <base> [branch]
   graphene sync [-a|--all] [--dry-run]
   graphene send [--remote <remote>] [--stack] [--dry-run]
   graphene sendf [--remote <remote>] [--stack] [--dry-run]
@@ -239,6 +239,7 @@ options:
   -u, --update               stage tracked-file updates before committing
   -b, --branch <branch>      use an explicit branch name
       --base <branch>        record the new branch as a child of this branch
+      --parent <branch>      alias for --base
       --reuse-current        commit on the current branch instead of creating one
   -m, --message <message>    use the given commit message
       --no-edit              use the selected commit message without opening an editor
@@ -307,11 +308,15 @@ options:
 Delete the current or named tracked branch locally and remove it from Graphene tracking.
 
 Branches with tracked descendants must be deleted from the tip down, or restacked first.`,
-		"track": `usage: graphene track --parent <base> [branch]
+		"track": `usage: graphene track (--parent|--base) <base> [branch]
 
 Record an existing one-commit branch in the Graphene stack graph.
 
-When branch is omitted, Graphene tracks the current branch. If the branch is already the base of child stacks, the first child path is folded into the new stack path.`,
+When branch is omitted, Graphene tracks the current branch. If the branch is already the base of child stacks, the first child path is folded into the new stack path.
+
+options:
+  -p, --parent <base>  record the branch as a child of this branch
+      --base <base>    alias for --parent`,
 		"sync": `usage: graphene sync [-a|--all] [--dry-run]
 
 Fetch the stack base, drop already-applied branches on the current path, and restack affected children.

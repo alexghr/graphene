@@ -3083,6 +3083,7 @@ func parseCommitOptions(args []string, allowBranch bool) (commitOptions, error) 
 	var opts commitOptions
 	branchFromFlag := false
 	branchFromPosition := false
+	baseFlag := ""
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 
@@ -3134,28 +3135,27 @@ func parseCommitOptions(args []string, allowBranch bool) (commitOptions, error) 
 				return opts, fmt.Errorf("missing branch after --branch")
 			}
 			branchFromFlag = true
-		case arg == "--base":
+		case arg == "--base" || arg == "--parent":
 			if !allowBranch {
-				return opts, fmt.Errorf("graphene amend does not support --base")
-			}
-			if opts.base != "" {
-				return opts, fmt.Errorf("base branch specified more than once")
+				return opts, fmt.Errorf("graphene amend does not support %s", arg)
 			}
 			if i+1 >= len(args) || args[i+1] == "" || strings.HasPrefix(args[i+1], "-") {
-				return opts, fmt.Errorf("missing base after --base")
+				return opts, missingNewBase(arg)
 			}
-			opts.base = args[i+1]
+			if err := setNewBase(&opts, &baseFlag, arg, args[i+1]); err != nil {
+				return opts, err
+			}
 			i++
-		case strings.HasPrefix(arg, "--base="):
+		case strings.HasPrefix(arg, "--base=") || strings.HasPrefix(arg, "--parent="):
+			flag, value, _ := strings.Cut(arg, "=")
 			if !allowBranch {
-				return opts, fmt.Errorf("graphene amend does not support --base")
+				return opts, fmt.Errorf("graphene amend does not support %s", flag)
 			}
-			if opts.base != "" {
-				return opts, fmt.Errorf("base branch specified more than once")
+			if value == "" {
+				return opts, missingNewBase(flag)
 			}
-			opts.base = strings.TrimPrefix(arg, "--base=")
-			if opts.base == "" {
-				return opts, fmt.Errorf("missing base after --base")
+			if err := setNewBase(&opts, &baseFlag, flag, value); err != nil {
+				return opts, err
 			}
 		case arg == "--reuse-current":
 			if !allowBranch {
@@ -3200,6 +3200,28 @@ func parseCommitOptions(args []string, allowBranch bool) (commitOptions, error) 
 		}
 	}
 	return opts, nil
+}
+
+func missingNewBase(flag string) error {
+	if flag == "--base" {
+		return fmt.Errorf("missing base after --base")
+	}
+	return fmt.Errorf("missing branch after --parent")
+}
+
+func setNewBase(opts *commitOptions, baseFlag *string, flag, value string) error {
+	if opts.base == "" {
+		opts.base = value
+		*baseFlag = flag
+		return nil
+	}
+	if *baseFlag != flag && opts.base == value {
+		return nil
+	}
+	if *baseFlag != flag {
+		return fmt.Errorf("graphene new %s and %s specify different branches: %q and %q", *baseFlag, flag, opts.base, value)
+	}
+	return fmt.Errorf("base branch specified more than once")
 }
 
 func shortCommitFlags(arg string) bool {
@@ -3250,7 +3272,7 @@ func (a *App) stageRequestedChanges(opts commitOptions) error {
 func unsupportedCommitArg(arg string, allowBranch bool) error {
 	supported := "-m/--message, --no-edit, --no-verify, --gpg-sign, and --no-gpg-sign"
 	if allowBranch {
-		supported = "-a/--all, -u/--update, -b/--branch, --base, --reuse-current, " + supported
+		supported = "-a/--all, -u/--update, -b/--branch, --base/--parent, --reuse-current, " + supported
 	} else {
 		supported = "-a/--all, -u/--update, " + supported
 	}
@@ -3291,29 +3313,30 @@ func parseDeleteArgs(args []string) (string, error) {
 
 func parseTrackArgs(args []string) (string, string, error) {
 	base := ""
+	baseFlag := ""
 	branch := ""
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		switch {
-		case arg == "-p" || arg == "--parent":
-			if base != "" {
-				return "", "", fmt.Errorf("graphene track accepts one --parent branch")
-			}
+		case arg == "-p" || arg == "--parent" || arg == "--base":
+			flag := canonicalTrackBaseFlag(arg)
 			if i+1 >= len(args) || args[i+1] == "" || strings.HasPrefix(args[i+1], "-") {
 				return "", "", fmt.Errorf("missing branch after %s", arg)
 			}
-			base = args[i+1]
-			i++
-		case strings.HasPrefix(arg, "--parent="):
-			if base != "" {
-				return "", "", fmt.Errorf("graphene track accepts one --parent branch")
+			if err := setTrackBase(&base, &baseFlag, flag, args[i+1]); err != nil {
+				return "", "", err
 			}
-			base = strings.TrimPrefix(arg, "--parent=")
-			if base == "" {
-				return "", "", fmt.Errorf("missing branch after --parent")
+			i++
+		case strings.HasPrefix(arg, "--parent=") || strings.HasPrefix(arg, "--base="):
+			flag, value, _ := strings.Cut(arg, "=")
+			if value == "" {
+				return "", "", fmt.Errorf("missing branch after %s", flag)
+			}
+			if err := setTrackBase(&base, &baseFlag, flag, value); err != nil {
+				return "", "", err
 			}
 		case strings.HasPrefix(arg, "-"):
-			return "", "", fmt.Errorf("unsupported argument %q; supported track option is --parent", arg)
+			return "", "", fmt.Errorf("unsupported argument %q; supported track options are -p/--parent and --base", arg)
 		default:
 			if branch != "" {
 				return "", "", fmt.Errorf("graphene track accepts one branch")
@@ -3322,9 +3345,31 @@ func parseTrackArgs(args []string) (string, string, error) {
 		}
 	}
 	if base == "" {
-		return "", "", fmt.Errorf("usage: graphene track --parent <base> [branch]")
+		return "", "", fmt.Errorf("usage: graphene track (--parent|--base) <base> [branch]")
 	}
 	return base, branch, nil
+}
+
+func canonicalTrackBaseFlag(flag string) string {
+	if flag == "-p" {
+		return "--parent"
+	}
+	return flag
+}
+
+func setTrackBase(base, baseFlag *string, flag, value string) error {
+	if *base == "" {
+		*base = value
+		*baseFlag = flag
+		return nil
+	}
+	if *baseFlag != flag && *base == value {
+		return nil
+	}
+	if *baseFlag != flag {
+		return fmt.Errorf("graphene track %s and %s specify different branches: %q and %q", *baseFlag, flag, *base, value)
+	}
+	return fmt.Errorf("graphene track accepts one %s branch", flag)
 }
 
 func parseSkillArgs(args []string) (skillOptions, error) {

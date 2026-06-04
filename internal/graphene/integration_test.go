@@ -293,6 +293,27 @@ func TestCommitRecordsExplicitBaseBranch(t *testing.T) {
 	}
 }
 
+func TestCommitRecordsExplicitParentAlias(t *testing.T) {
+	t.Parallel()
+	repo := newTestRepo(t)
+	createStackBranch(t, repo, "one.txt", "one\n", "One")
+	runGit(t, repo.dir, "checkout", "-b", "alias/one")
+
+	writeFile(t, repo.dir, "two.txt", "two\n")
+	runGit(t, repo.dir, "add", ".")
+	// Regression for https://github.com/alexghr/graphene/issues/11.
+	expectGrapheneOK(t, repo, "new", "--parent", "stack/one", "-m", "Two")
+
+	if got := currentBranch(t, repo.dir); got != "stack/two" {
+		t.Fatalf("branch = %q", got)
+	}
+	state := readState(t, repo.dir)
+	want := []Stack{{Base: "main", Branches: []string{"stack/one", "stack/two"}}}
+	if !reflect.DeepEqual(state.Stacks, want) {
+		t.Fatalf("stacks = %#v, want %#v", state.Stacks, want)
+	}
+}
+
 func TestCommitReusesCurrentBranchWithExplicitBase(t *testing.T) {
 	t.Parallel()
 	repo := newTestRepo(t)
@@ -385,6 +406,25 @@ func TestTrackCurrentBranchExtendsExistingStack(t *testing.T) {
 		"     `- b *\n"
 	if stdout != graph {
 		t.Fatalf("stdout = %q, want %q", stdout, graph)
+	}
+}
+
+func TestTrackAcceptsBaseAlias(t *testing.T) {
+	t.Parallel()
+	repo := newTestRepo(t)
+	runGit(t, repo.dir, "checkout", "-b", "z")
+	runGit(t, repo.dir, "checkout", "-b", "a")
+	writeFile(t, repo.dir, "a.txt", "a\n")
+	runGit(t, repo.dir, "add", ".")
+	runGit(t, repo.dir, "commit", "-m", "A")
+
+	// Regression for https://github.com/alexghr/graphene/issues/11.
+	expectGrapheneOK(t, repo, "track", "--base", "z")
+
+	state := readState(t, repo.dir)
+	want := []Stack{{Base: "z", Branches: []string{"a"}}}
+	if !reflect.DeepEqual(state.Stacks, want) {
+		t.Fatalf("stacks = %#v, want %#v", state.Stacks, want)
 	}
 }
 
