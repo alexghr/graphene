@@ -410,6 +410,7 @@ func TestCommitReuseCurrentInfersUniqueBaseAtHead(t *testing.T) {
 
 	writeFile(t, repo.dir, "pods.txt", "pods\n")
 	runGit(t, repo.dir, "add", ".")
+	// Regression for https://github.com/alexghr/graphene/issues/5.
 	expectGrapheneOK(t, repo, "new", "--reuse-current", "-m", "chore: improve pod scheduling")
 
 	if got := currentBranch(t, repo.dir); got != "ag/more-packing" {
@@ -540,6 +541,7 @@ func TestTrackFastForwardsParentFromUpstream(t *testing.T) {
 		t.Fatalf("feature parent = %s, want %s", featureParent, originParent)
 	}
 
+	// Regression for https://github.com/alexghr/graphene/issues/14.
 	expectGrapheneOK(t, repo, "track", "--parent", "merge-train/spartan", "ag/fix-partial-epoch-job")
 
 	localParent := runGit(t, repo.dir, "rev-parse", "merge-train/spartan")
@@ -1192,6 +1194,7 @@ func TestRestackMovesWholeStackFromAnyBranch(t *testing.T) {
 			runGit(t, repo.dir, "commit", "-m", "Target")
 
 			runGit(t, repo.dir, "checkout", current)
+			// Regression for https://github.com/alexghr/graphene/issues/9.
 			expectGrapheneOK(t, repo, "restack", "target")
 
 			assertBranchParent(t, repo.dir, "stack/one", "target")
@@ -2126,6 +2129,7 @@ func TestForgetNamedBranchWithoutCheckoutDoesNotDeleteBranches(t *testing.T) {
 	createStackBranch(t, repo, "three.txt", "three\n", "Three")
 
 	runGit(t, repo.dir, "checkout", "main")
+	// Regression for https://github.com/alexghr/graphene/issues/6.
 	expectGrapheneOK(t, repo, "forget", "stack/two")
 
 	if got := currentBranch(t, repo.dir); got != "main" {
