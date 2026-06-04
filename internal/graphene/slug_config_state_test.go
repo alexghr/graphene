@@ -186,16 +186,16 @@ func TestBranchesThroughCurrentAndDescendants(t *testing.T) {
 	}
 }
 
-func TestRemoveStackThroughCurrent(t *testing.T) {
+func TestRemoveStackThroughBranch(t *testing.T) {
 	t.Parallel()
 	state := State{Stacks: []Stack{
 		{Base: "main", Branches: []string{"a", "b", "c"}},
 		{Base: "a", Branches: []string{"d"}},
 	}}
 
-	got, ok := RemoveStackThroughCurrent(state, "b")
+	got, ok := RemoveStackThroughBranch(state, "b")
 	if !ok {
-		t.Fatal("RemoveStackThroughCurrent did not find b")
+		t.Fatal("RemoveStackThroughBranch did not find b")
 	}
 	want := State{Stacks: []Stack{
 		{Base: "b", Branches: []string{"c"}},
@@ -205,9 +205,9 @@ func TestRemoveStackThroughCurrent(t *testing.T) {
 		t.Fatalf("state = %#v, want %#v", got, want)
 	}
 
-	got, ok = RemoveStackThroughCurrent(got, "c")
+	got, ok = RemoveStackThroughBranch(got, "c")
 	if !ok {
-		t.Fatal("RemoveStackThroughCurrent did not find c")
+		t.Fatal("RemoveStackThroughBranch did not find c")
 	}
 	want = State{Stacks: []Stack{
 		{Base: "a", Branches: []string{"d"}},
@@ -430,22 +430,39 @@ func TestParseArgs(t *testing.T) {
 	if goOpts.direction != goUp || goOpts.selector != 2 {
 		t.Fatalf("parseGoArgs -u2 = %#v", goOpts)
 	}
-	force, err := parseForgetArgs([]string{"--force"})
+	forgetOpts, err := parseForgetArgs([]string{"--force"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !force {
+	if !forgetOpts.force || forgetOpts.branch != "" {
 		t.Fatal("parseForgetArgs did not detect --force")
 	}
-	force, err = parseForgetArgs(nil)
+	forgetOpts, err = parseForgetArgs([]string{"stack/two"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if force {
-		t.Fatal("parseForgetArgs force = true for no args")
+	if forgetOpts.force || forgetOpts.branch != "stack/two" {
+		t.Fatalf("parseForgetArgs branch = %#v", forgetOpts)
+	}
+	forgetOpts, err = parseForgetArgs([]string{"--force", "stack/two"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !forgetOpts.force || forgetOpts.branch != "stack/two" {
+		t.Fatalf("parseForgetArgs --force branch = %#v", forgetOpts)
+	}
+	forgetOpts, err = parseForgetArgs(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if forgetOpts.force || forgetOpts.branch != "" {
+		t.Fatalf("parseForgetArgs no args = %#v", forgetOpts)
 	}
 	if _, err := parseForgetArgs([]string{"--bad"}); err == nil {
 		t.Fatal("parseForgetArgs accepted --bad")
+	}
+	if _, err := parseForgetArgs([]string{"stack/two", "stack/three"}); err == nil {
+		t.Fatal("parseForgetArgs accepted multiple branches")
 	}
 	aliasNew, err := parseNewArgs([]string{"-am", "One", "--branch", "feature/one"})
 	if err != nil {

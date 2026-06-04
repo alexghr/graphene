@@ -207,7 +207,7 @@ func (a *App) usage(w io.Writer) {
   graphene continue
   graphene abort
   graphene config <get|set|unset> [--global|--local] <key> [value]
-  graphene forget [--force]
+  graphene forget [--force] [branch]
   graphene track --parent <base> [branch]
   graphene sync [-a|--all] [--dry-run]
   graphene send [--remote <remote>] [--stack] [--dry-run]
@@ -289,9 +289,9 @@ examples:
   graphene config get branchPrefix
   graphene config set branchPrefix stack
   graphene config unset alias.up`,
-		"forget": `usage: graphene forget [--force]
+		"forget": `usage: graphene forget [--force] [branch]
 
-Remove Graphene tracking through the current branch without deleting Git branches.
+Remove Graphene tracking through the current or named branch without deleting Git branches.
 
 options:
       --force  clear pending Graphene rebase state while forgetting`,

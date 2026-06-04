@@ -2003,6 +2003,31 @@ func TestForgetRemovesStackThroughCurrentBranchWithoutDeletingBranches(t *testin
 	}
 }
 
+func TestForgetNamedBranchWithoutCheckoutDoesNotDeleteBranches(t *testing.T) {
+	t.Parallel()
+	repo := newTestRepo(t)
+	createStackBranch(t, repo, "one.txt", "one\n", "One")
+	createStackBranch(t, repo, "two.txt", "two\n", "Two")
+	createStackBranch(t, repo, "three.txt", "three\n", "Three")
+
+	runGit(t, repo.dir, "checkout", "main")
+	expectGrapheneOK(t, repo, "forget", "stack/two")
+
+	if got := currentBranch(t, repo.dir); got != "main" {
+		t.Fatalf("branch = %q, want main", got)
+	}
+	for _, branch := range []string{"stack/one", "stack/two", "stack/three"} {
+		if !refExists(t, repo.dir, "refs/heads/"+branch) {
+			t.Fatalf("%s was deleted", branch)
+		}
+	}
+	state := readState(t, repo.dir)
+	want := []Stack{{Base: "stack/two", Branches: []string{"stack/three"}}}
+	if !reflect.DeepEqual(state.Stacks, want) {
+		t.Fatalf("stacks = %#v, want %#v", state.Stacks, want)
+	}
+}
+
 func TestForgetTipRemovesStackWithoutDeletingBranches(t *testing.T) {
 	t.Parallel()
 	repo := newTestRepo(t)

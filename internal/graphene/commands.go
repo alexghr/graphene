@@ -1400,28 +1400,33 @@ func (a *App) abortSquash(state State, rebaseInProgress bool) error {
 }
 
 func (a *App) forget(args []string) error {
-	force, err := parseForgetArgs(args)
+	opts, err := parseForgetArgs(args)
 	if err != nil {
 		return err
 	}
 
-	current, err := a.git.CurrentBranch()
-	if err != nil {
-		return err
+	branch := opts.branch
+	if branch == "" {
+		current, err := a.git.CurrentBranch()
+		if err != nil {
+			return err
+		}
+		branch = current
 	}
+
 	state, err := a.git.ReadState()
 	if err != nil {
 		return err
 	}
-	if state.Pending != nil && !force {
+	if state.Pending != nil && !opts.force {
 		return fmt.Errorf("pending rebase exists; use graphene continue or graphene abort")
 	}
 
-	state, ok := RemoveStackThroughCurrent(state, current)
+	state, ok := RemoveStackThroughBranch(state, branch)
 	if !ok {
-		return fmt.Errorf("branch %q is not in a graphene stack", current)
+		return fmt.Errorf("branch %q is not in a graphene stack", branch)
 	}
-	if force {
+	if opts.force {
 		state.Pending = nil
 	}
 	return a.git.WriteState(state)
@@ -2886,6 +2891,11 @@ type skillOptions struct {
 	target string
 }
 
+type forgetOptions struct {
+	force  bool
+	branch string
+}
+
 type syncOptions struct {
 	all    bool
 	dryRun bool
@@ -3156,17 +3166,23 @@ func unsupportedCommitArg(arg string, allowBranch bool) error {
 	return fmt.Errorf("unsupported argument %q; supported commit options are %s", arg, supported)
 }
 
-func parseForgetArgs(args []string) (bool, error) {
-	var force bool
+func parseForgetArgs(args []string) (forgetOptions, error) {
+	var opts forgetOptions
 	for _, arg := range args {
 		switch arg {
 		case "-f", "--force":
-			force = true
+			opts.force = true
 		default:
-			return false, fmt.Errorf("graphene forget does not support %s", arg)
+			if strings.HasPrefix(arg, "-") {
+				return opts, fmt.Errorf("unsupported argument %q; usage: graphene forget [--force] [branch]", arg)
+			}
+			if opts.branch != "" {
+				return opts, fmt.Errorf("graphene forget accepts at most one branch")
+			}
+			opts.branch = arg
 		}
 	}
-	return force, nil
+	return opts, nil
 }
 
 func parseTrackArgs(args []string) (string, string, error) {
