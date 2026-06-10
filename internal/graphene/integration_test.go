@@ -1474,6 +1474,24 @@ func TestSyncAllFromBaseRebasesSiblingAndNestedStacks(t *testing.T) {
 	}
 }
 
+func TestSyncAllFromUntrackedNonBaseNamesValidBases(t *testing.T) {
+	t.Parallel()
+	repo := newTestRepo(t)
+
+	createStackBranch(t, repo, "one.txt", "one\n", "One")
+	runGit(t, repo.dir, "checkout", "main")
+	runGit(t, repo.dir, "checkout", "-b", "unrelated")
+
+	code, _, stderr := repo.runGraphene(t, "sync", "--all")
+	if code == 0 {
+		t.Fatal("graphene sync --all unexpectedly succeeded")
+	}
+	want := `graphene sync --all must be run from a stack base; "unrelated" is not a stack base (available bases: main)`
+	if !strings.Contains(stderr, want) {
+		t.Fatalf("stderr = %q, want message containing %q", stderr, want)
+	}
+}
+
 func TestSyncDryRunPrintsPlanWithoutChangingRefsOrState(t *testing.T) {
 	t.Parallel()
 	repo := newTestRepo(t)
@@ -2280,6 +2298,30 @@ func TestDeleteRejectsTrackedDescendants(t *testing.T) {
 	want := []Stack{{Base: "main", Branches: []string{"stack/one", "stack/two"}}}
 	if !reflect.DeepEqual(state.Stacks, want) {
 		t.Fatalf("stacks = %#v, want %#v", state.Stacks, want)
+	}
+}
+
+func TestDeleteStackDeletesBranchAndTrackedDescendants(t *testing.T) {
+	t.Parallel()
+	repo := newTestRepo(t)
+	createStackBranch(t, repo, "one.txt", "one\n", "One")
+	createStackBranch(t, repo, "two.txt", "two\n", "Two")
+	runGit(t, repo.dir, "checkout", "stack/one")
+	createStackBranch(t, repo, "fork.txt", "fork\n", "Fork")
+
+	expectGrapheneOK(t, repo, "delete", "--stack", "stack/one")
+
+	if got := currentBranch(t, repo.dir); got != "main" {
+		t.Fatalf("branch = %q, want main", got)
+	}
+	for _, branch := range []string{"stack/one", "stack/two", "stack/fork"} {
+		if refExists(t, repo.dir, "refs/heads/"+branch) {
+			t.Fatalf("%s still exists", branch)
+		}
+	}
+	state := readState(t, repo.dir)
+	if len(state.Stacks) != 0 {
+		t.Fatalf("stacks = %#v, want empty", state.Stacks)
 	}
 }
 

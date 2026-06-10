@@ -489,19 +489,33 @@ func TestParseArgs(t *testing.T) {
 	if _, err := parseForgetArgs([]string{"stack/two", "stack/three"}); err == nil {
 		t.Fatal("parseForgetArgs accepted multiple branches")
 	}
-	deleteBranch, err := parseDeleteArgs([]string{"stack/two"})
+	deleteOpts, err := parseDeleteArgs([]string{"stack/two"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if deleteBranch != "stack/two" {
-		t.Fatalf("parseDeleteArgs branch = %q", deleteBranch)
+	if deleteOpts.stack || deleteOpts.branch != "stack/two" {
+		t.Fatalf("parseDeleteArgs branch = %#v", deleteOpts)
 	}
-	deleteBranch, err = parseDeleteArgs(nil)
+	deleteOpts, err = parseDeleteArgs([]string{"--stack", "stack/two"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if deleteBranch != "" {
-		t.Fatalf("parseDeleteArgs no args = %q", deleteBranch)
+	if !deleteOpts.stack || deleteOpts.branch != "stack/two" {
+		t.Fatalf("parseDeleteArgs --stack branch = %#v", deleteOpts)
+	}
+	deleteOpts, err = parseDeleteArgs([]string{"-s"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !deleteOpts.stack || deleteOpts.branch != "" {
+		t.Fatalf("parseDeleteArgs -s = %#v", deleteOpts)
+	}
+	deleteOpts, err = parseDeleteArgs(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleteOpts.stack || deleteOpts.branch != "" {
+		t.Fatalf("parseDeleteArgs no args = %#v", deleteOpts)
 	}
 	if _, err := parseDeleteArgs([]string{"--bad"}); err == nil {
 		t.Fatal("parseDeleteArgs accepted --bad")

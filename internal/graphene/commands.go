@@ -1433,7 +1433,7 @@ func (a *App) forget(args []string) error {
 }
 
 func (a *App) deleteBranch(args []string) error {
-	branch, err := parseDeleteArgs(args)
+	opts, err := parseDeleteArgs(args)
 	if err != nil {
 		return err
 	}
@@ -1442,8 +1442,8 @@ func (a *App) deleteBranch(args []string) error {
 	if err != nil {
 		return err
 	}
-	if branch == "" {
-		branch = current
+	if opts.branch == "" {
+		opts.branch = current
 	}
 
 	state, err := a.git.ReadState()
@@ -1453,6 +1453,11 @@ func (a *App) deleteBranch(args []string) error {
 	if state.Pending != nil {
 		return fmt.Errorf("pending rebase exists; use graphene continue or graphene abort")
 	}
+	if opts.stack {
+		return a.deleteBranchStack(opts.branch, current, state)
+	}
+
+	branch := opts.branch
 	if !state.ContainsBranch(branch) {
 		return fmt.Errorf("branch %q is not in a graphene stack", branch)
 	}
@@ -1500,6 +1505,89 @@ func (a *App) deleteBranch(args []string) error {
 	}
 	nextState := RemoveBranches(State{Stacks: cloneStacks(state.Stacks)}, []string{branch})
 	return a.git.WriteState(nextState)
+}
+
+func (a *App) deleteBranchStack(branch, current string, state State) error {
+	if !state.ContainsBranch(branch) {
+		return fmt.Errorf("branch %q is not in a graphene stack", branch)
+	}
+
+	branches := stackSubtreeBranches(state, branch)
+	if len(branches) == 0 {
+		return fmt.Errorf("branch %q is not in a graphene stack", branch)
+	}
+
+	deleting := map[string]bool{}
+	for _, branch := range branches {
+		deleting[branch] = true
+		exists, err := a.git.BranchExists(branch)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return fmt.Errorf("branch %q does not exist", branch)
+		}
+	}
+
+	if deleting[current] {
+		base, ok := BaseBranch(state, branch)
+		if !ok {
+			return fmt.Errorf("branch %q is not in a graphene stack", branch)
+		}
+		baseExists, err := a.git.BranchExists(base)
+		if err != nil {
+			return err
+		}
+		if !baseExists {
+			return fmt.Errorf("base branch %q does not exist; switch away from %q before graphene delete --stack", base, current)
+		}
+		if err := a.git.Run("switch", base); err != nil {
+			return err
+		}
+	}
+
+	for _, branch := range branches {
+		checkedOut, err := a.git.BranchCheckedOut(branch)
+		if err != nil {
+			return err
+		}
+		if checkedOut {
+			return fmt.Errorf("branch %q is checked out in another worktree; switch that worktree away from the branch before graphene delete --stack", branch)
+		}
+	}
+
+	for _, branch := range branches {
+		if err := a.git.Run("branch", "-D", branch); err != nil {
+			return err
+		}
+	}
+	nextState := RemoveBranches(State{Stacks: cloneStacks(state.Stacks)}, branches)
+	return a.git.WriteState(nextState)
+}
+
+func stackSubtreeBranches(state State, root string) []string {
+	graph := newStackGraph(state)
+	if !graph.nodes[root] || !state.ContainsBranch(root) {
+		return nil
+	}
+
+	var branches []string
+	seen := map[string]bool{}
+	var add func(string)
+	add = func(branch string) {
+		if branch == "" || seen[branch] {
+			return
+		}
+		seen[branch] = true
+		for _, child := range graph.children[branch] {
+			add(child)
+		}
+		if state.ContainsBranch(branch) {
+			branches = append(branches, branch)
+		}
+	}
+	add(root)
+	return branches
 }
 
 func (a *App) trackBranch(base, branch string) error {
@@ -1643,6 +1731,27 @@ func syncSelectionForBase(state State, current string) (syncSelection, bool) {
 	}, true
 }
 
+func availableStackBases(state State) []string {
+	seen := map[string]bool{}
+	var bases []string
+	for _, stack := range state.Stacks {
+		if stack.Base == "" || len(stack.Branches) == 0 || seen[stack.Base] {
+			continue
+		}
+		bases = append(bases, stack.Base)
+		seen[stack.Base] = true
+	}
+	return bases
+}
+
+func formatAvailableStackBases(state State) string {
+	bases := availableStackBases(state)
+	if len(bases) == 0 {
+		return ""
+	}
+	return " (available bases: " + strings.Join(bases, ", ") + ")"
+}
+
 func (s syncSelection) ContainsStack(index int) bool {
 	for _, path := range s.Paths {
 		if path.StackIndex == index {
@@ -1694,7 +1803,7 @@ func (a *App) sync(args []string) error {
 		}
 		selection, ok = syncSelectionForBase(state, current)
 		if !ok {
-			return fmt.Errorf("branch %q has no graphene stack descendants", current)
+			return fmt.Errorf("graphene sync --all must be run from a stack base; %q is not a stack base%s", current, formatAvailableStackBases(state))
 		}
 	} else {
 		selection, ok = syncSelectionForCurrent(state, current)
@@ -2966,6 +3075,11 @@ type forgetOptions struct {
 	branch string
 }
 
+type deleteOptions struct {
+	stack  bool
+	branch string
+}
+
 type syncOptions struct {
 	all    bool
 	dryRun bool
@@ -3298,17 +3412,23 @@ func parseForgetArgs(args []string) (forgetOptions, error) {
 	return opts, nil
 }
 
-func parseDeleteArgs(args []string) (string, error) {
-	if len(args) > 1 {
-		return "", fmt.Errorf("graphene delete accepts at most one branch")
+func parseDeleteArgs(args []string) (deleteOptions, error) {
+	var opts deleteOptions
+	for _, arg := range args {
+		switch arg {
+		case "-s", "--stack":
+			opts.stack = true
+		default:
+			if strings.HasPrefix(arg, "-") {
+				return opts, fmt.Errorf("unsupported argument %q; usage: graphene delete [--stack] [branch]", arg)
+			}
+			if opts.branch != "" {
+				return opts, fmt.Errorf("graphene delete accepts at most one branch")
+			}
+			opts.branch = arg
+		}
 	}
-	if len(args) == 0 {
-		return "", nil
-	}
-	if strings.HasPrefix(args[0], "-") {
-		return "", fmt.Errorf("unsupported argument %q; usage: graphene delete [branch]", args[0])
-	}
-	return args[0], nil
+	return opts, nil
 }
 
 func parseTrackArgs(args []string) (string, string, error) {
