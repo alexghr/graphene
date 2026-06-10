@@ -128,6 +128,12 @@ func (a *App) Run(args []string) int {
 				return 0
 			}
 			err = a.track(args[2:])
+		case "import":
+			if helpArgs(args[2:]) {
+				a.commandUsage("import", a.stdout)
+				return 0
+			}
+			err = a.importStack(args[2:])
 		case "sync":
 			if helpArgs(args[2:]) {
 				a.commandUsage("sync", a.stdout)
@@ -217,6 +223,7 @@ func (a *App) usage(w io.Writer) {
   graphene forget [--force] [branch]
   graphene delete [--stack] [branch]
   graphene track (--parent|--base) <base> [branch]
+  graphene import <base>
   graphene sync [-a|--all] [--dry-run]
   graphene send [--remote <remote>] [--stack] [--dry-run]
   graphene sendf [--remote <remote>] [--stack] [--dry-run]
@@ -322,6 +329,11 @@ When branch is omitted, Graphene tracks the current branch. If the branch is alr
 options:
   -p, --parent <base>  record the branch as a child of this branch
       --base <base>    alias for --parent`,
+		"import": `usage: graphene import <base>
+
+Create or reuse one branch per commit from the local base branch to HEAD, then record the path as a Graphene stack.
+
+Graphene reuses the current branch for HEAD. Intermediate commits reuse a single existing local branch when one points at that commit; otherwise Graphene creates a branch from the commit subject using branchPrefix.`,
 		"sync": `usage: graphene sync [-a|--all] [--dry-run]
 
 Fetch the stack base, drop already-applied branches on the current path, and restack affected children.

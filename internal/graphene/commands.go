@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -1631,6 +1632,233 @@ func (a *App) track(args []string) error {
 	return a.trackBranch(base, branch)
 }
 
+type importBranch struct {
+	Commit string
+	Branch string
+	Create bool
+}
+
+func (a *App) importStack(args []string) error {
+	base, err := parseImportArgs(args)
+	if err != nil {
+		return err
+	}
+
+	current, err := a.git.CurrentBranch()
+	if err != nil {
+		return err
+	}
+
+	state, err := a.git.ReadState()
+	if err != nil {
+		return err
+	}
+	if state.Pending != nil {
+		return fmt.Errorf("pending rebase exists; use graphene continue or graphene abort")
+	}
+
+	inProgress, err := a.git.RebaseInProgress()
+	if err != nil {
+		return err
+	}
+	if inProgress {
+		return fmt.Errorf("rebase in progress; use graphene continue or graphene abort before graphene import")
+	}
+
+	dirty, err := a.git.HasTrackedChanges()
+	if err != nil {
+		return err
+	}
+	if dirty {
+		return fmt.Errorf("tracked changes would prevent import; stash or commit them before graphene import")
+	}
+
+	baseExists, err := a.git.BranchExists(base)
+	if err != nil {
+		return err
+	}
+	if !baseExists {
+		return fmt.Errorf("base branch %q does not exist", base)
+	}
+
+	baseRef := "refs/heads/" + base
+	ancestor, err := a.isAncestor(baseRef, "HEAD")
+	if err != nil {
+		return err
+	}
+	if !ancestor {
+		return fmt.Errorf("base branch %q is not an ancestor of HEAD", base)
+	}
+
+	commits, err := a.importCommits(base)
+	if err != nil {
+		return err
+	}
+	if len(commits) == 0 {
+		return fmt.Errorf("base branch %q already points to HEAD", base)
+	}
+	if err := a.validateImportHistory(baseRef, commits); err != nil {
+		return err
+	}
+
+	cfg, err := a.loadConfig()
+	if err != nil {
+		return err
+	}
+	branches, err := a.planImportBranches(state, current, cfg, commits)
+	if err != nil {
+		return err
+	}
+
+	nextState := state
+	parent := base
+	for _, branch := range branches {
+		nextState, err = TrackBranch(nextState, parent, branch.Branch)
+		if err != nil {
+			return err
+		}
+		parent = branch.Branch
+	}
+
+	var created []string
+	for _, branch := range branches {
+		if !branch.Create {
+			continue
+		}
+		if err := a.git.OutputErr("branch", branch.Branch, branch.Commit); err != nil {
+			a.cleanupCreatedBranches(created)
+			return err
+		}
+		created = append(created, branch.Branch)
+	}
+
+	if err := a.validateImportedBranches(base, branches); err != nil {
+		a.cleanupCreatedBranches(created)
+		return err
+	}
+	return a.git.WriteState(nextState)
+}
+
+func (a *App) importCommits(base string) ([]string, error) {
+	out, err := a.git.Output("rev-list", "--reverse", "--first-parent", "refs/heads/"+base+"..HEAD")
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(out) == "" {
+		return nil, nil
+	}
+	return strings.Split(out, "\n"), nil
+}
+
+func (a *App) validateImportHistory(base string, commits []string) error {
+	parent := base
+	for _, commit := range commits {
+		ancestor, err := a.isAncestor(parent, commit)
+		if err != nil {
+			return err
+		}
+		if !ancestor {
+			return fmt.Errorf("history from %s to HEAD is not linear; commit %s is not descended from %s", shortImportRef(base), shortSyncRef(commit), shortImportRef(parent))
+		}
+
+		count, err := a.commitCount(parent, commit)
+		if err != nil {
+			return err
+		}
+		if count != 1 {
+			return fmt.Errorf("commit %s contains %d commits on top of %s; Graphene can only import linear one-commit steps", shortSyncRef(commit), count, shortImportRef(parent))
+		}
+		parent = commit
+	}
+	return nil
+}
+
+func (a *App) planImportBranches(state State, current string, cfg Config, commits []string) ([]importBranch, error) {
+	reserved := map[string]bool{}
+	branches := make([]importBranch, 0, len(commits))
+	for i, commit := range commits {
+		branch, create, err := a.importBranchName(state, current, cfg, commit, i == len(commits)-1, reserved)
+		if err != nil {
+			return nil, err
+		}
+		reserved[branch] = true
+		branches = append(branches, importBranch{
+			Commit: commit,
+			Branch: branch,
+			Create: create,
+		})
+	}
+	return branches, nil
+}
+
+func (a *App) importBranchName(state State, current string, cfg Config, commit string, head bool, reserved map[string]bool) (string, bool, error) {
+	branches, err := a.git.LocalBranchesPointingAt(commit)
+	if err != nil {
+		return "", false, err
+	}
+	sort.Strings(branches)
+
+	if head {
+		for _, branch := range branches {
+			if branch != current {
+				continue
+			}
+			if StateContainsName(state, current) {
+				return "", false, fmt.Errorf("current branch %q is already recorded in graphene state", current)
+			}
+			return current, false, nil
+		}
+	}
+
+	var reusable []string
+	for _, branch := range branches {
+		if branch == "" || reserved[branch] || StateContainsName(state, branch) {
+			continue
+		}
+		reusable = append(reusable, branch)
+	}
+	if len(reusable) == 1 {
+		return reusable[0], false, nil
+	}
+
+	if err := a.ensureBranchPrefixAvailable(cfg.BranchPrefix); err != nil {
+		return "", false, err
+	}
+	subject, err := a.git.Output("log", "-1", "--format=%s", commit)
+	if err != nil {
+		return "", false, err
+	}
+	branch, err := a.derivedBranchNameWithState(cfg, state, subject, reserved)
+	if err != nil {
+		return "", false, err
+	}
+	return branch, true, nil
+}
+
+func (a *App) validateImportedBranches(base string, branches []importBranch) error {
+	parent := base
+	for _, branch := range branches {
+		if err := a.validateTrackBranch(parent, branch.Branch); err != nil {
+			return err
+		}
+		parent = branch.Branch
+	}
+	return nil
+}
+
+func (a *App) cleanupCreatedBranches(branches []string) {
+	for i := len(branches) - 1; i >= 0; i-- {
+		_ = a.git.OutputErr("branch", "-D", branches[i])
+	}
+}
+
+func shortImportRef(ref string) string {
+	if strings.HasPrefix(ref, "refs/heads/") {
+		return strings.TrimPrefix(ref, "refs/heads/")
+	}
+	return shortSyncRef(ref)
+}
+
 func (a *App) pendingForCurrentWorktree(pending Pending) (*Pending, error) {
 	worktree, err := a.git.WorktreeID()
 	if err != nil {
@@ -2292,6 +2520,10 @@ func (a *App) derivedBranchName(cfg Config, subject string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return a.derivedBranchNameWithState(cfg, state, subject, nil)
+}
+
+func (a *App) derivedBranchNameWithState(cfg Config, state State, subject string, reserved map[string]bool) (string, error) {
 	base := BranchName(cfg.BranchPrefix, SlugSubject(subject))
 	for n := 1; ; n++ {
 		candidate := CandidateName(base, n)
@@ -2299,7 +2531,7 @@ func (a *App) derivedBranchName(cfg Config, subject string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if status == "available" && !StateContainsName(state, candidate) {
+		if status == "available" && !StateContainsName(state, candidate) && !reserved[candidate] {
 			return candidate, nil
 		}
 	}
@@ -3468,6 +3700,13 @@ func parseTrackArgs(args []string) (string, string, error) {
 		return "", "", fmt.Errorf("usage: graphene track (--parent|--base) <base> [branch]")
 	}
 	return base, branch, nil
+}
+
+func parseImportArgs(args []string) (string, error) {
+	if len(args) != 1 || args[0] == "" || strings.HasPrefix(args[0], "-") {
+		return "", fmt.Errorf("usage: graphene import <base>")
+	}
+	return args[0], nil
 }
 
 func canonicalTrackBaseFlag(flag string) string {

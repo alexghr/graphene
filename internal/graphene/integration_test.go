@@ -555,6 +555,118 @@ func TestTrackFastForwardsParentFromUpstream(t *testing.T) {
 	}
 }
 
+func TestImportCreatesBranchesToHead(t *testing.T) {
+	t.Parallel()
+	repo := newTestRepo(t)
+	runGit(t, repo.dir, "checkout", "-b", "feature/imported")
+
+	one := commitFile(t, repo.dir, "one.txt", "one\n", "Change")
+	two := commitFile(t, repo.dir, "two.txt", "two\n", "Change")
+	three := commitFile(t, repo.dir, "three.txt", "three\n", "Change")
+
+	expectGrapheneOK(t, repo, "import", "main")
+
+	if got := currentBranch(t, repo.dir); got != "feature/imported" {
+		t.Fatalf("branch = %q, want feature/imported", got)
+	}
+	if got := runGit(t, repo.dir, "rev-parse", "stack/change"); got != one {
+		t.Fatalf("stack/change = %s, want %s", got, one)
+	}
+	if got := runGit(t, repo.dir, "rev-parse", "stack/change-2"); got != two {
+		t.Fatalf("stack/change-2 = %s, want %s", got, two)
+	}
+	if got := runGit(t, repo.dir, "rev-parse", "feature/imported"); got != three {
+		t.Fatalf("feature/imported = %s, want %s", got, three)
+	}
+
+	state := readState(t, repo.dir)
+	want := []Stack{{Base: "main", Branches: []string{"stack/change", "stack/change-2", "feature/imported"}}}
+	if !reflect.DeepEqual(state.Stacks, want) {
+		t.Fatalf("stacks = %#v, want %#v", state.Stacks, want)
+	}
+}
+
+func TestImportReusesExistingBranches(t *testing.T) {
+	t.Parallel()
+	repo := newTestRepo(t)
+	runGit(t, repo.dir, "checkout", "-b", "feature/imported")
+
+	one := commitFile(t, repo.dir, "one.txt", "one\n", "One")
+	runGit(t, repo.dir, "branch", "existing/one")
+	two := commitFile(t, repo.dir, "two.txt", "two\n", "Two")
+
+	expectGrapheneOK(t, repo, "import", "main")
+
+	if got := runGit(t, repo.dir, "rev-parse", "existing/one"); got != one {
+		t.Fatalf("existing/one = %s, want %s", got, one)
+	}
+	if got := runGit(t, repo.dir, "rev-parse", "feature/imported"); got != two {
+		t.Fatalf("feature/imported = %s, want %s", got, two)
+	}
+	if refExists(t, repo.dir, "refs/heads/stack/one") {
+		t.Fatal("import created stack/one instead of reusing existing/one")
+	}
+
+	state := readState(t, repo.dir)
+	want := []Stack{{Base: "main", Branches: []string{"existing/one", "feature/imported"}}}
+	if !reflect.DeepEqual(state.Stacks, want) {
+		t.Fatalf("stacks = %#v, want %#v", state.Stacks, want)
+	}
+}
+
+func TestImportRejectsDirtyWorktree(t *testing.T) {
+	t.Parallel()
+	repo := newTestRepo(t)
+	runGit(t, repo.dir, "checkout", "-b", "feature/imported")
+	commitFile(t, repo.dir, "one.txt", "one\n", "One")
+	writeFile(t, repo.dir, "file.txt", "dirty\n")
+
+	code, _, stderr := repo.runGraphene(t, "import", "main")
+	if code == 0 {
+		t.Fatal("graphene import unexpectedly succeeded")
+	}
+	if !strings.Contains(stderr, "tracked changes would prevent import") {
+		t.Fatalf("stderr = %q", stderr)
+	}
+	if refExists(t, repo.dir, "refs/heads/stack/one") {
+		t.Fatal("import created a branch despite dirty worktree")
+	}
+	state := readState(t, repo.dir)
+	if len(state.Stacks) != 0 {
+		t.Fatalf("stacks = %#v, want none", state.Stacks)
+	}
+}
+
+func TestImportRejectsMergeHistoryBeforeCreatingBranches(t *testing.T) {
+	t.Parallel()
+	repo := newTestRepo(t)
+	runGit(t, repo.dir, "checkout", "-b", "feature/imported")
+
+	commitFile(t, repo.dir, "one.txt", "one\n", "One")
+	runGit(t, repo.dir, "checkout", "-b", "side")
+	commitFile(t, repo.dir, "side.txt", "side\n", "Side")
+	runGit(t, repo.dir, "checkout", "feature/imported")
+	commitFile(t, repo.dir, "two.txt", "two\n", "Two")
+	runGit(t, repo.dir, "merge", "--no-ff", "side", "-m", "Merge side")
+
+	code, _, stderr := repo.runGraphene(t, "import", "main")
+	if code == 0 {
+		t.Fatal("graphene import unexpectedly succeeded")
+	}
+	if !strings.Contains(stderr, "Graphene can only import linear one-commit steps") {
+		t.Fatalf("stderr = %q", stderr)
+	}
+	for _, branch := range []string{"stack/one", "stack/two", "stack/merge-side"} {
+		if refExists(t, repo.dir, "refs/heads/"+branch) {
+			t.Fatalf("import created branch %s before rejecting merge history", branch)
+		}
+	}
+	state := readState(t, repo.dir)
+	if len(state.Stacks) != 0 {
+		t.Fatalf("stacks = %#v, want none", state.Stacks)
+	}
+}
+
 func TestCreateAliasStagesAll(t *testing.T) {
 	t.Parallel()
 	repo := newTestRepo(t)
@@ -2698,6 +2810,14 @@ func createStackBranch(t *testing.T, repo testRepo, path, content, message strin
 	writeFile(t, repo.dir, path, content)
 	runGit(t, repo.dir, "add", ".")
 	expectGrapheneOK(t, repo, "new", "-m", message)
+}
+
+func commitFile(t *testing.T, dir, path, content, message string) string {
+	t.Helper()
+	writeFile(t, dir, path, content)
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "commit", "-m", message)
+	return runGit(t, dir, "rev-parse", "HEAD")
 }
 
 func createConflictDuringAmend(t *testing.T) testRepo {

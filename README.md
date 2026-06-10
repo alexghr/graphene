@@ -110,6 +110,13 @@ gn track --parent main
 gn track --parent main feature/already-created
 ```
 
+Import a linear local commit series as a stack:
+
+```
+git checkout feature/multi-commit
+gn import main
+```
+
 Run `gn help` or `gn help <command>` for full command details.
 
 ## Aliases
