@@ -224,7 +224,7 @@ func (a *App) usage(w io.Writer) {
   graphene delete [--stack] [branch]
   graphene track (--parent|--base) <base> [branch]
   graphene import <base>
-  graphene sync [-a|--all] [--dry-run]
+  graphene sync [-a|--all] [--dry-run] [--force]
   graphene send [--remote <remote>] [--stack] [--dry-run]
   graphene sendf [--remote <remote>] [--stack] [--dry-run]
   graphene restack <base>
@@ -334,7 +334,7 @@ options:
 Create or reuse one branch per commit from the local base branch to HEAD, then record the path as a Graphene stack.
 
 Graphene reuses the current branch for HEAD. Intermediate commits reuse a single existing local branch when one points at that commit; otherwise Graphene creates a branch from the commit subject using branchPrefix.`,
-		"sync": `usage: graphene sync [-a|--all] [--dry-run]
+		"sync": `usage: graphene sync [-a|--all] [--dry-run] [--force]
 
 Fetch the stack base, drop already-applied branches on the current path, and restack affected children.
 
@@ -344,7 +344,8 @@ Branches detected as already applied upstream are removed from Graphene state an
 
 options:
   -a, --all             sync every stack descendant from the current base branch
-  -n, --dry-run        show the planned fetch, deletions, retargets, and rebases without changing refs or state`,
+  -n, --dry-run        show the planned fetch, deletions, retargets, and rebases without changing refs or state
+  -f, --force          sync safe stacks even when skipped stacks checked out elsewhere would become stale`,
 		"send": `usage: graphene send [options] [remote]
 
 Push the current branch and its dependency path, then print pull request URLs.

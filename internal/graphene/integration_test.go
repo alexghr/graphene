@@ -1906,7 +1906,7 @@ func TestSyncUsesFetchedBaseWhenBaseCheckedOutInAnotherWorktree(t *testing.T) {
 	}
 }
 
-func TestSyncRejectsCheckedOutDescendantBeforeMovingAncestor(t *testing.T) {
+func TestSyncSkipsCheckedOutDescendantBeforeMovingAncestor(t *testing.T) {
 	t.Parallel()
 	repo := newTestRepo(t)
 
@@ -1934,12 +1934,16 @@ func TestSyncRejectsCheckedOutDescendantBeforeMovingAncestor(t *testing.T) {
 	runGit(t, repo.dir, "switch", "stack/one")
 
 	beforeOne := runGit(t, repo.dir, "rev-parse", "stack/one")
-	code, _, stderr := repo.runGraphene(t, "sync")
-	if code == 0 {
-		t.Fatal("graphene sync unexpectedly succeeded")
+	code, stdout, stderr := repo.runGraphene(t, "sync")
+	if code != 0 {
+		t.Fatalf("graphene sync exited %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
-	if !strings.Contains(stderr, `branch "stack/two" is checked out in another worktree`) {
+	if stderr != "" {
 		t.Fatalf("stderr = %q", stderr)
+	}
+	if !strings.Contains(stdout, "Skipping stacks checked out in another worktree:") ||
+		!strings.Contains(stdout, "stack/one: stack/two") {
+		t.Fatalf("stdout = %q", stdout)
 	}
 	afterOne := runGit(t, repo.dir, "rev-parse", "stack/one")
 	if afterOne != beforeOne {
@@ -1947,6 +1951,96 @@ func TestSyncRejectsCheckedOutDescendantBeforeMovingAncestor(t *testing.T) {
 	}
 	if got := runGit(t, descendantWorktree, "status", "--porcelain"); got != "" {
 		t.Fatalf("descendant worktree status = %q, want clean", got)
+	}
+}
+
+func TestSyncAllRejectsCheckedOutStackUnlessForced(t *testing.T) {
+	t.Parallel()
+	repo := newTestRepo(t)
+
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	runGit(t, "", "init", "--bare", remote)
+	runGit(t, repo.dir, "remote", "add", "origin", remote)
+	runGit(t, repo.dir, "push", "-u", "origin", "main")
+	oldMain := runGit(t, repo.dir, "rev-parse", "main")
+
+	createStackBranch(t, repo, "one.txt", "one\n", "One")
+	runGit(t, repo.dir, "checkout", "main")
+	createStackBranch(t, repo, "two.txt", "two\n", "Two")
+
+	other := filepath.Join(t.TempDir(), "other")
+	runGit(t, "", "clone", "--branch", "main", remote, other)
+	runGit(t, other, "config", "user.name", "Graphene Test")
+	runGit(t, other, "config", "user.email", "graphene@example.test")
+	runGit(t, other, "config", "commit.gpgsign", "false")
+	writeFile(t, other, "base.txt", "base update\n")
+	runGit(t, other, "add", ".")
+	runGit(t, other, "commit", "-m", "Base update")
+	runGit(t, other, "push", "origin", "main")
+
+	checkedOutWorktree := filepath.Join(t.TempDir(), "checked-out-worktree")
+	runGit(t, repo.dir, "worktree", "add", checkedOutWorktree, "stack/one")
+	runGit(t, repo.dir, "checkout", "main")
+
+	beforeTwoParent := runGit(t, repo.dir, "rev-parse", "stack/two^")
+	stateBefore := readState(t, repo.dir)
+
+	code, stdout, stderr := repo.runGraphene(t, "sync", "--all")
+	if code == 0 {
+		t.Fatal("graphene sync --all unexpectedly succeeded")
+	}
+	if !strings.Contains(stdout, "Skipping stacks checked out in another worktree:") ||
+		!strings.Contains(stdout, "stack/one: stack/one") {
+		t.Fatalf("stdout = %q", stdout)
+	}
+	if !strings.Contains(stderr, "sync would leave skipped stacks stale") {
+		t.Fatalf("stderr = %q", stderr)
+	}
+	if got := runGit(t, repo.dir, "rev-parse", "main"); got != oldMain {
+		t.Fatalf("main changed from %s to %s", oldMain, got)
+	}
+	if got := runGit(t, repo.dir, "rev-parse", "origin/main"); got != oldMain {
+		t.Fatalf("origin/main changed from %s to %s", oldMain, got)
+	}
+	if got := runGit(t, repo.dir, "rev-parse", "stack/two^"); got != beforeTwoParent {
+		t.Fatalf("stack/two parent changed from %s to %s", beforeTwoParent, got)
+	}
+	if state := readState(t, repo.dir); !reflect.DeepEqual(state, stateBefore) {
+		t.Fatalf("state = %#v, want %#v", state, stateBefore)
+	}
+
+	code, stdout, stderr = repo.runGraphene(t, "sync", "--all", "--force")
+	if code != 0 {
+		t.Fatalf("graphene sync --all --force exited %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "Skipping stacks checked out in another worktree:") ||
+		!strings.Contains(stdout, "stack/one: stack/one") {
+		t.Fatalf("stdout = %q", stdout)
+	}
+
+	main := runGit(t, repo.dir, "rev-parse", "main")
+	originMain := runGit(t, repo.dir, "rev-parse", "origin/main")
+	if main != originMain {
+		t.Fatalf("main = %s, want origin/main %s", main, originMain)
+	}
+	parentOne := runGit(t, repo.dir, "rev-parse", "stack/one^")
+	if parentOne != oldMain {
+		t.Fatalf("stack/one parent = %s, want old main %s", parentOne, oldMain)
+	}
+	parentTwo := runGit(t, repo.dir, "rev-parse", "stack/two^")
+	if parentTwo != main {
+		t.Fatalf("stack/two parent = %s, want main %s", parentTwo, main)
+	}
+	if status := runGit(t, checkedOutWorktree, "status", "--porcelain"); status != "" {
+		t.Fatalf("checked-out worktree status = %q, want clean", status)
+	}
+	state := readState(t, repo.dir)
+	want := []Stack{
+		{Base: "main", Branches: []string{"stack/one"}},
+		{Base: "main", Branches: []string{"stack/two"}},
+	}
+	if !reflect.DeepEqual(state.Stacks, want) {
+		t.Fatalf("stacks = %#v, want %#v", state.Stacks, want)
 	}
 }
 

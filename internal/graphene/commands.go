@@ -2047,6 +2047,17 @@ func (a *App) sync(args []string) error {
 	if dirty {
 		return fmt.Errorf("tracked changes would prevent sync; stash or commit them before graphene sync")
 	}
+
+	var skipped []syncSkippedPath
+	selection, skipped, err = a.filterSyncSelectionForCheckedOutBranches(selection, state, current)
+	if err != nil {
+		return err
+	}
+	a.printSkippedSyncPaths(skipped)
+	if len(selection.Paths) == 0 {
+		return nil
+	}
+
 	for _, path := range selection.Paths {
 		if err := a.validateStackShape(path.Stack); err != nil {
 			return err
@@ -2056,12 +2067,16 @@ func (a *App) sync(args []string) error {
 	oldRefs := a.stateRefs(state)
 	var baseRef string
 	var basePlan syncBaseDryRun
-	if opts.dryRun {
+	if opts.dryRun || len(skipped) > 0 && !opts.force {
 		baseRef, basePlan, err = a.fetchSyncBaseDryRun(selection.Base)
 		if err != nil {
 			return err
 		}
-	} else {
+		if len(skipped) > 0 && !opts.force && basePlan.Old != basePlan.Updated {
+			return fmt.Errorf("sync would leave skipped stacks stale because base %q would advance from %s to %s; switch other worktrees away from skipped branches or rerun with --force", selection.Base, shortSyncRef(basePlan.Old), shortSyncRef(basePlan.Updated))
+		}
+	}
+	if !opts.dryRun {
 		baseRef, err = a.fetchSyncBase(selection.Base, current)
 		if err != nil {
 			return err
@@ -2210,6 +2225,96 @@ func (a *App) sync(args []string) error {
 		return err
 	}
 	return a.runPendingRebases(state)
+}
+
+type syncSkippedPath struct {
+	Path   syncPath
+	Branch string
+}
+
+func (a *App) filterSyncSelectionForCheckedOutBranches(selection syncSelection, state State, current string) (syncSelection, []syncSkippedPath, error) {
+	graph := newStackGraph(state)
+	checkedOut := map[string]bool{}
+
+	next := selection
+	next.Paths = nil
+	var skipped []syncSkippedPath
+	for _, path := range selection.Paths {
+		branch, err := a.firstCheckedOutSyncBranch(path, graph, current, checkedOut)
+		if err != nil {
+			return selection, nil, err
+		}
+		if branch != "" {
+			skipped = append(skipped, syncSkippedPath{Path: path, Branch: branch})
+			continue
+		}
+		next.Paths = append(next.Paths, path)
+	}
+	return next, skipped, nil
+}
+
+func (a *App) firstCheckedOutSyncBranch(path syncPath, graph stackGraph, current string, checkedOut map[string]bool) (string, error) {
+	for _, branch := range syncPathAffectedBranches(path, graph) {
+		if branch == current {
+			continue
+		}
+		isCheckedOut, ok := checkedOut[branch]
+		if !ok {
+			var err error
+			isCheckedOut, err = a.git.BranchCheckedOut(branch)
+			if err != nil {
+				return "", err
+			}
+			checkedOut[branch] = isCheckedOut
+		}
+		if isCheckedOut {
+			return branch, nil
+		}
+	}
+	return "", nil
+}
+
+func syncPathAffectedBranches(path syncPath, graph stackGraph) []string {
+	seen := map[string]bool{}
+	var branches []string
+	var add func(string)
+	add = func(branch string) {
+		if branch == "" || seen[branch] {
+			return
+		}
+		seen[branch] = true
+		branches = append(branches, branch)
+		for _, child := range graph.children[branch] {
+			add(child)
+		}
+	}
+
+	for _, branch := range path.Stack.Branches {
+		add(branch)
+	}
+	return branches
+}
+
+func (a *App) printSkippedSyncPaths(skipped []syncSkippedPath) {
+	if len(skipped) == 0 {
+		return
+	}
+	fmt.Fprintln(a.stdout, "Skipping stacks checked out in another worktree:")
+	for _, skippedPath := range skipped {
+		fmt.Fprintf(a.stdout, "  %s: %s\n", syncPathName(skippedPath.Path), skippedPath.Branch)
+	}
+}
+
+func syncPathName(path syncPath) string {
+	if len(path.Stack.Branches) == 0 {
+		return path.Stack.Base
+	}
+	first := path.Stack.Branches[0]
+	last := path.Stack.Branches[len(path.Stack.Branches)-1]
+	if first == last {
+		return first
+	}
+	return first + ".." + last
 }
 
 func (a *App) send(args []string) error {
@@ -3315,6 +3420,7 @@ type deleteOptions struct {
 type syncOptions struct {
 	all    bool
 	dryRun bool
+	force  bool
 }
 
 func parseNewArgs(args []string) (commitOptions, error) {
@@ -3346,8 +3452,10 @@ func parseSyncArgs(args []string) (syncOptions, error) {
 			opts.all = true
 		case "-n", "--dry-run":
 			opts.dryRun = true
+		case "-f", "--force":
+			opts.force = true
 		default:
-			return opts, fmt.Errorf("unsupported argument %q; supported sync options are -a/--all and -n/--dry-run", arg)
+			return opts, fmt.Errorf("unsupported argument %q; supported sync options are -a/--all, -n/--dry-run, and -f/--force", arg)
 		}
 	}
 	return opts, nil
