@@ -185,6 +185,44 @@ func TestRegressionSyncDeletesBranchWhoseUpstreamWasDeleted(t *testing.T) {
 	}
 }
 
+func TestRegressionSyncAllowsStackAlreadyBasedOnFetchedBase(t *testing.T) {
+	t.Parallel()
+	repo, remote := newTestRepoWithOrigin(t)
+	oldMain := runGit(t, repo.dir, "rev-parse", "main")
+
+	actor := cloneConfiguredRepo(t, remote, "main")
+	writeFile(t, actor, "base-update.txt", "base update\n")
+	runGit(t, actor, "add", ".")
+	runGit(t, actor, "commit", "-m", "Base update")
+	runGit(t, actor, "push", "origin", "main")
+
+	runGit(t, repo.dir, "fetch", "origin")
+	runGit(t, repo.dir, "merge", "--ff-only", "origin/main")
+	createStackBranch(t, repo, "one.txt", "one\n", "One")
+	createStackBranch(t, repo, "two.txt", "two\n", "Two")
+	oneBefore := runGit(t, repo.dir, "rev-parse", "stack/one")
+	twoBefore := runGit(t, repo.dir, "rev-parse", "stack/two")
+
+	runGit(t, repo.dir, "update-ref", "refs/heads/main", oldMain)
+	if got := runGit(t, repo.dir, "rev-list", "--count", "main..stack/one"); got != "2" {
+		t.Fatalf("test setup commit count = %q, want 2", got)
+	}
+
+	code, stdout, stderr := repo.runGraphene(t, "sync")
+	if code != 0 {
+		t.Fatalf("graphene sync exited %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if got := runGit(t, repo.dir, "rev-parse", "main"); got != runGit(t, repo.dir, "rev-parse", "origin/main") {
+		t.Fatalf("main = %s, want origin/main", got)
+	}
+	if got := runGit(t, repo.dir, "rev-parse", "stack/one"); got != oneBefore {
+		t.Fatalf("stack/one changed from %s to %s", oneBefore, got)
+	}
+	if got := runGit(t, repo.dir, "rev-parse", "stack/two"); got != twoBefore {
+		t.Fatalf("stack/two changed from %s to %s", twoBefore, got)
+	}
+}
+
 func newTestRepoWithOrigin(t *testing.T) (testRepo, string) {
 	t.Helper()
 

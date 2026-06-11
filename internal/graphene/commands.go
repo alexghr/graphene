@@ -2058,16 +2058,11 @@ func (a *App) sync(args []string) error {
 		return nil
 	}
 
-	for _, path := range selection.Paths {
-		if err := a.validateStackShape(path.Stack); err != nil {
-			return err
-		}
-	}
-
-	oldRefs := a.stateRefs(state)
 	var baseRef string
 	var basePlan syncBaseDryRun
-	if opts.dryRun || len(skipped) > 0 && !opts.force {
+	var fetched fetchedBase
+	dryRunFetch := opts.dryRun || len(skipped) > 0 && !opts.force
+	if dryRunFetch {
 		baseRef, basePlan, err = a.fetchSyncBaseDryRun(selection.Base)
 		if err != nil {
 			return err
@@ -2075,11 +2070,32 @@ func (a *App) sync(args []string) error {
 		if len(skipped) > 0 && !opts.force && basePlan.Old != basePlan.Updated {
 			return fmt.Errorf("sync would leave skipped stacks stale because base %q would advance from %s to %s; switch other worktrees away from skipped branches or rerun with --force", selection.Base, shortSyncRef(basePlan.Old), shortSyncRef(basePlan.Updated))
 		}
-	}
-	if !opts.dryRun {
-		baseRef, err = a.fetchSyncBase(selection.Base, current)
+	} else {
+		fetched, err = a.fetchBaseUpdate(selection.Base)
 		if err != nil {
 			return err
+		}
+		baseRef = syncBaseRef(selection.Base, fetched)
+	}
+
+	for _, path := range selection.Paths {
+		if err := a.validateStackShapeFromBase(path.Stack, baseRef, path.Stack.Base); err != nil {
+			return err
+		}
+	}
+
+	oldRefs := a.stateRefs(state)
+	if !opts.dryRun {
+		if dryRunFetch {
+			baseRef, err = a.fetchSyncBase(selection.Base, current)
+			if err != nil {
+				return err
+			}
+		} else {
+			baseRef, err = a.advanceSyncBase(selection.Base, current, fetched)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -2131,6 +2147,15 @@ func (a *App) sync(args []string) error {
 		upstream := oldRefs[predecessor]
 		if upstream == "" {
 			return fmt.Errorf("missing old ref for %q", predecessor)
+		}
+		if first == 0 && predecessor == stack.Base {
+			upstream, err = a.syncBaseUpstream(baseRef, stack, oldRefs)
+			if err != nil {
+				return err
+			}
+			if upstream == baseRef {
+				continue
+			}
 		}
 
 		topIndex := path.BranchLimit - 1
@@ -2915,6 +2940,13 @@ type fetchedBase struct {
 	Updated string
 }
 
+func syncBaseRef(base string, fetched fetchedBase) string {
+	if fetched.Old == fetched.Updated {
+		return base
+	}
+	return fetched.Updated
+}
+
 func (a *App) fetchBaseUpdate(base string) (fetchedBase, error) {
 	remote, merge, err := a.git.Upstream(base)
 	if err != nil {
@@ -3001,13 +3033,7 @@ func (a *App) fetchCurrentBase(base string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if fetched.Old == fetched.Updated {
-		return base, nil
-	}
-	if err := a.git.Run("merge", "--ff-only", fetched.Updated); err != nil {
-		return "", err
-	}
-	return base, nil
+	return a.advanceSyncBase(base, base, fetched)
 }
 
 func (a *App) fetchBase(base string) (string, error) {
@@ -3015,7 +3041,18 @@ func (a *App) fetchBase(base string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return a.advanceSyncBase(base, "", fetched)
+}
+
+func (a *App) advanceSyncBase(base, current string, fetched fetchedBase) (string, error) {
 	if fetched.Old == fetched.Updated {
+		return base, nil
+	}
+
+	if base == current {
+		if err := a.git.Run("merge", "--ff-only", fetched.Updated); err != nil {
+			return "", err
+		}
 		return base, nil
 	}
 
@@ -3104,18 +3141,38 @@ func (a *App) deleteBranches(branches []string) error {
 }
 
 func (a *App) validateStackShape(stack Stack) error {
-	parent := stack.Base
+	return a.validateStackShapeFromBase(stack, stack.Base, stack.Base)
+}
+
+func (a *App) validateStackShapeFromBase(stack Stack, baseRef, baseName string) error {
+	parentRef := baseRef
+	parentName := baseName
 	for _, branch := range stack.Branches {
-		count, err := a.commitCount(parent, branch)
+		count, err := a.commitCount(parentRef, branch)
 		if err != nil {
 			return err
 		}
 		if count > 1 {
-			return fmt.Errorf("branch %q contains %d commits on top of %q; Graphene expects one commit per stack branch. squash or drop the extra commits before graphene sync", branch, count, parent)
+			return fmt.Errorf("branch %q contains %d commits on top of %q; Graphene expects one commit per stack branch. squash or drop the extra commits before graphene sync", branch, count, parentName)
 		}
-		parent = branch
+		parentRef = branch
+		parentName = branch
 	}
 	return nil
+}
+
+func (a *App) syncBaseUpstream(baseRef string, stack Stack, oldRefs map[string]string) (string, error) {
+	if len(stack.Branches) == 0 {
+		return oldRefs[stack.Base], nil
+	}
+	ancestor, err := a.isAncestor(baseRef, stack.Branches[0])
+	if err != nil {
+		return "", err
+	}
+	if ancestor {
+		return baseRef, nil
+	}
+	return oldRefs[stack.Base], nil
 }
 
 func (a *App) validateRebaseOpsUpdateable(operation, current string, state State, oldRefs map[string]string, ops []RebaseOp) error {
