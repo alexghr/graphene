@@ -1,0 +1,17 @@
+# Common Graphite CLI aliases for Graphene.
+#
+# Import once with:
+#   graphene aliases import --global /path/to/graphene/aliases/graphite.gitconfig
+#   graphene aliases import --global https://raw.githubusercontent.com/alexghr/graphene/main/aliases/graphite.gitconfig
+
+[graphene "alias"]
+	create = new
+	modify = amend
+	submit = sendf
+	ss = sendf --stack
+	up = go up
+	down = go down
+	top = go top
+	bottom = go bottom
+	log = graph
+	tr = track

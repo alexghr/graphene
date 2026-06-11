@@ -3,6 +3,8 @@ package graphene
 import (
 	"bytes"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -780,6 +782,108 @@ func TestConfigAliasExpandsBeforeDispatch(t *testing.T) {
 
 	if got := currentBranch(t, repo.dir); got != "stack/alias-one" {
 		t.Fatalf("branch = %q, want stack/alias-one", got)
+	}
+}
+
+func TestGraphiteAliasFileExpandsBeforeDispatch(t *testing.T) {
+	t.Parallel()
+	repo := newTestRepo(t)
+	writeFile(t, repo.dir, "aliases/graphite.gitconfig", `[graphene "alias"]
+	create = new
+	down = go down
+`)
+	runGit(t, repo.dir, "config", "graphene.aliasFile", "aliases/graphite.gitconfig")
+
+	writeFile(t, repo.dir, "one.txt", "one\n")
+	runGit(t, repo.dir, "add", ".")
+	expectGrapheneOK(t, repo, "create", "-m", "Alias File One")
+	if got := currentBranch(t, repo.dir); got != "stack/alias-file-one" {
+		t.Fatalf("branch = %q, want stack/alias-file-one", got)
+	}
+
+	expectGrapheneOK(t, repo, "down")
+	if got := currentBranch(t, repo.dir); got != "main" {
+		t.Fatalf("branch after down = %q, want main", got)
+	}
+}
+
+func TestRemoteAliasFileExpandsBeforeDispatch(t *testing.T) {
+	t.Parallel()
+	repo := newTestRepo(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `[graphene "alias"]
+	create = new
+`)
+	}))
+	t.Cleanup(server.Close)
+	runGit(t, repo.dir, "config", "graphene.aliasFile", server.URL)
+
+	writeFile(t, repo.dir, "one.txt", "one\n")
+	runGit(t, repo.dir, "add", ".")
+	expectGrapheneOK(t, repo, "create", "-m", "Remote Alias")
+	if got := currentBranch(t, repo.dir); got != "stack/remote-alias" {
+		t.Fatalf("branch = %q, want stack/remote-alias", got)
+	}
+}
+
+func TestAliasesImportStoresRemoteAliases(t *testing.T) {
+	t.Parallel()
+	repo := newTestRepo(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `[graphene "alias"]
+	create = new
+`)
+	}))
+
+	code, stdout, stderr := repo.runGraphene(t, "aliases", "import", "--local", server.URL)
+	if code != 0 {
+		t.Fatalf("graphene aliases import exited %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if stdout != "imported 1 aliases\n" || stderr != "" {
+		t.Fatalf("unexpected aliases import output\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
+	}
+	server.Close()
+
+	if got := runGit(t, repo.dir, "config", "--get", "graphene.alias.create"); got != "new" {
+		t.Fatalf("imported alias = %q, want new", got)
+	}
+	writeFile(t, repo.dir, "one.txt", "one\n")
+	runGit(t, repo.dir, "add", ".")
+	expectGrapheneOK(t, repo, "create", "-m", "Imported Alias")
+	if got := currentBranch(t, repo.dir); got != "stack/imported-alias" {
+		t.Fatalf("branch = %q, want stack/imported-alias", got)
+	}
+}
+
+func TestAliasesImportRefusesOverwriteWithoutForce(t *testing.T) {
+	t.Parallel()
+	repo := newTestRepo(t)
+	writeFile(t, repo.dir, "aliases/graphite.gitconfig", `[graphene "alias"]
+	create = new
+	up = go up
+`)
+	runGit(t, repo.dir, "config", "graphene.alias.create", "graph")
+
+	code, _, stderr := repo.runGraphene(t, "aliases", "import", "--local", "aliases/graphite.gitconfig")
+	if code == 0 {
+		t.Fatal("aliases import unexpectedly overwrote existing alias")
+	}
+	if !strings.Contains(stderr, "refusing to overwrite existing aliases: create") {
+		t.Fatalf("stderr = %q", stderr)
+	}
+	if got := runGit(t, repo.dir, "config", "--get", "graphene.alias.create"); got != "graph" {
+		t.Fatalf("alias after failed import = %q, want graph", got)
+	}
+	if code, _, _ := runGitResult(t, repo.dir, "config", "--get", "graphene.alias.up"); code == 0 {
+		t.Fatal("non-conflicting alias was imported despite conflict")
+	}
+
+	expectGrapheneOK(t, repo, "aliases", "import", "--local", "--force", "aliases/graphite.gitconfig")
+	if got := runGit(t, repo.dir, "config", "--get", "graphene.alias.create"); got != "new" {
+		t.Fatalf("forced alias import = %q, want new", got)
+	}
+	if got := runGit(t, repo.dir, "config", "--get", "graphene.alias.up"); got != "go up" {
+		t.Fatalf("forced alias import up = %q, want go up", got)
 	}
 }
 

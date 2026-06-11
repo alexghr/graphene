@@ -33,6 +33,9 @@ in
         ];
         nativeCheckInputs = [ pkgs.git ];
         subPackages = [ "cmd/graphene" ];
+        postInstall = ''
+          install -Dm644 aliases/graphite.gitconfig $out/share/graphene/aliases/graphite.gitconfig
+        '';
         checkPhase = ''
           runHook preCheck
           go test -parallel 8 ./...

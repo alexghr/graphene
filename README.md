@@ -136,6 +136,17 @@ graphene config set --global alias.log graph
 graphene config set --global alias.tr track
 ```
 
+Graphene can import aliases from a Git config-format file. The repository includes a Graphite-compatibility file with common top-level command aliases:
+
+```
+graphene aliases import --global https://raw.githubusercontent.com/alexghr/graphene/main/aliases/graphite.gitconfig
+graphene aliases import --global /path/to/graphene/aliases/graphite.gitconfig
+```
+
+Imported aliases are stored as normal `alias.<name>` config entries, so they work offline after import. For temporary use, set `GRAPHENE_ALIAS_FILE` to a local path list or a single HTTP(S) URL, or set `aliasFile` to a local path or HTTP(S) URL. Explicit `alias.<name>` config entries take precedence over alias files. Only import or load alias files from trusted URLs; they can define shell aliases.
+
+Alias import refuses to overwrite existing aliases by default and lists the conflicting names. Rerun with `--force` to replace those aliases.
+
 Non-shell aliases are split like shell words and receive any extra arguments after the alias expansion. Shell aliases start with `!` and run through `sh`, with extra arguments appended the same way Git does:
 
 ```

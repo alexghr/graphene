@@ -110,6 +110,12 @@ func (a *App) Run(args []string) int {
 				return 0
 			}
 			err = a.config(args[2:])
+		case "aliases":
+			if helpArgs(args[2:]) || (len(args) >= 3 && args[2] == "import" && helpArgs(args[3:])) {
+				a.commandUsage("aliases", a.stdout)
+				return 0
+			}
+			err = a.aliases(args[2:])
 		case "forget":
 			if helpArgs(args[2:]) {
 				a.commandUsage("forget", a.stdout)
@@ -220,6 +226,7 @@ func (a *App) usage(w io.Writer) {
   graphene continue
   graphene abort
   graphene config <get|set|unset> [--global|--local] <key> [value]
+  graphene aliases import [--global|--local] [--force] <path-or-url>
   graphene forget [-f|--force] [branch]
   graphene delete [-s|--stack] [branch]
   graphene track (--parent|--base) <base> [branch]
@@ -305,6 +312,17 @@ examples:
   graphene config get branchPrefix
   graphene config set branchPrefix stack
   graphene config unset alias.up`,
+		"aliases": `usage: graphene aliases import [--global|--local] [--force] <path-or-url>
+
+Import aliases from a local file or HTTP(S) URL into Graphene's Git config.
+
+The source must be a Git config-format file with entries under [graphene "alias"].
+Imported aliases are stored as graphene.alias.<name>, so they work offline after import.
+By default, import refuses to overwrite existing aliases. Use --force to overwrite.
+
+examples:
+  graphene aliases import --global https://raw.githubusercontent.com/alexghr/graphene/main/aliases/graphite.gitconfig
+  graphene aliases import aliases/graphite.gitconfig`,
 		"forget": `usage: graphene forget [-f|--force] [branch]
 
 Remove Graphene tracking through the current or named branch without deleting Git branches.
