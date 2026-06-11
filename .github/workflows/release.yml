@@ -161,6 +161,11 @@ jobs:
           asset_name="graphene-$(uname -s)-$(uname -m)"
           cp "${{ steps.build.outputs.out_dir }}/bin/graphene" "dist/$asset_name"
           chmod +x "dist/$asset_name"
+          file "dist/$asset_name"
+          if [[ "$(uname -s)" == "Linux" ]] && file "dist/$asset_name" | grep -q "dynamically linked"; then
+            echo "Linux release asset is dynamically linked; rebuild with CGO_ENABLED=0." >&2
+            exit 1
+          fi
           shasum -a 256 "dist/$asset_name" > "dist/$asset_name.sha256"
 
       - name: Upload release assets

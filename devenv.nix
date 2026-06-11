@@ -28,6 +28,7 @@ in
         inherit version;
         src = lib.cleanSource ./.;
         vendorHash = null;
+        env.CGO_ENABLED = "0";
         ldflags = [
           "-X github.com/alexghr/graphene/internal/graphene.Version=${version}"
         ];

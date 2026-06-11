@@ -28,6 +28,15 @@ jobs:
           out_dir="$(nix eval --impure --raw --expr '(builtins.fromJSON (builtins.readFile ./out.json))."outputs.graphene"')"
           echo "out_dir=$out_dir" >> "$GITHUB_OUTPUT"
 
+      - name: Verify Linux binary portability
+        run: |
+          binary="${{ steps.build.outputs.out_dir }}/bin/graphene"
+          file "$binary"
+          if file "$binary" | grep -q "dynamically linked"; then
+            echo "Linux binary is dynamically linked; rebuild with CGO_ENABLED=0." >&2
+            exit 1
+          fi
+
       - name: Upload artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
