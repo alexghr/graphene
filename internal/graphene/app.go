@@ -229,7 +229,7 @@ func (a *App) usage(w io.Writer) {
   graphene sendf [--remote <remote>] [--stack] [--dry-run]
   graphene restack <base>
   graphene go <up|down|top|bottom> [number]
-  graphene graph
+  graphene graph [--stack]
   graphene skill [--codex|--claude|--out <path>]
   graphene version
 
@@ -372,7 +372,7 @@ options:
   -b, --bottom [number]  switch to the bottom branch in the current stack path
   -u, --up [number]      switch to a direct child branch
   -d, --down [number]    switch to the direct parent branch`,
-		"graph":   "usage: graphene graph\n\nPrint the tracked stack graph.",
+		"graph":   "usage: graphene graph [--stack]\n\nPrint the tracked stack graph.\n\noptions:\n  -s, --stack  print only the current stack path",
 		"version": "usage: graphene version\n\nPrint the Graphene version and Git version.",
 	}
 	text, ok := usages[command]

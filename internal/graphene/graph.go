@@ -7,8 +7,9 @@ import (
 )
 
 func (a *App) graph(args []string) error {
-	if len(args) > 1 || (len(args) == 1 && args[0] != "short" && args[0] != "long") {
-		return fmt.Errorf("graphene graph accepts only optional alias format short or long")
+	opts, err := parseGraphArgs(args)
+	if err != nil {
+		return err
 	}
 
 	state, err := a.git.ReadState()
@@ -19,7 +20,28 @@ func (a *App) graph(args []string) error {
 	if err != nil {
 		return err
 	}
+	if opts.stack {
+		return WriteCurrentStackGraph(a.stdout, state, current)
+	}
 	return WriteGraph(a.stdout, state, current)
+}
+
+type graphOptions struct {
+	stack bool
+}
+
+func parseGraphArgs(args []string) (graphOptions, error) {
+	var opts graphOptions
+	for _, arg := range args {
+		switch arg {
+		case "short", "long":
+		case "-s", "--stack":
+			opts.stack = true
+		default:
+			return opts, fmt.Errorf("unsupported argument %q; usage: graphene graph [--stack]", arg)
+		}
+	}
+	return opts, nil
 }
 
 func WriteGraph(w io.Writer, state State, current string) error {
@@ -28,6 +50,18 @@ func WriteGraph(w io.Writer, state State, current string) error {
 		out = "no graphene stacks\n"
 	}
 	_, err := io.WriteString(w, out)
+	return err
+}
+
+func WriteCurrentStackGraph(w io.Writer, state State, current string) error {
+	out, err := RenderCurrentStackGraph(state, current)
+	if err != nil {
+		return err
+	}
+	if out == "" {
+		out = "no graphene stacks\n"
+	}
+	_, err = io.WriteString(w, out)
 	return err
 }
 
@@ -49,6 +83,31 @@ func RenderGraph(state State, current string) string {
 		writePending(&b, state.Pending)
 	}
 	return b.String()
+}
+
+func RenderCurrentStackGraph(state State, current string) (string, error) {
+	if len(state.Stacks) == 0 && state.Pending == nil {
+		return "", nil
+	}
+
+	path, ok := VisibleStackPath(state, current)
+	if !ok {
+		return "", fmt.Errorf("branch %q is not in a graphene stack", current)
+	}
+	if len(path) == 0 {
+		return "", nil
+	}
+
+	base, ok := BaseBranch(state, path[0])
+	if !ok {
+		return "", fmt.Errorf("branch %q is not in a graphene stack", current)
+	}
+
+	stackState := State{
+		Stacks:  []Stack{{Base: base, Branches: path}},
+		Pending: state.Pending,
+	}
+	return RenderGraph(stackState, current), nil
 }
 
 func writeGraphNode(b *strings.Builder, graph stackGraph, name, current, prefix string) {

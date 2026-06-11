@@ -427,6 +427,16 @@ func TestParseArgs(t *testing.T) {
 	if syncOpts.all || !syncOpts.dryRun {
 		t.Fatalf("parseSyncArgs --dry-run = %#v", syncOpts)
 	}
+	graphOpts, err := parseGraphArgs([]string{"--stack", "short"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !graphOpts.stack {
+		t.Fatalf("parseGraphArgs --stack short = %#v", graphOpts)
+	}
+	if _, err := parseGraphArgs([]string{"--bad"}); err == nil {
+		t.Fatal("parseGraphArgs accepted unsupported argument")
+	}
 	goOpts, err := parseGoArgs([]string{"up", "2"})
 	if err != nil {
 		t.Fatal(err)

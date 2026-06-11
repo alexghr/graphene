@@ -2835,6 +2835,41 @@ func TestGraphDisplaysForkedStack(t *testing.T) {
 	}
 }
 
+func TestGraphStackDisplaysCurrentStackOnly(t *testing.T) {
+	t.Parallel()
+	repo := newTestRepo(t)
+	createStackBranch(t, repo, "one.txt", "one\n", "One")
+	createStackBranch(t, repo, "two.txt", "two\n", "Two")
+
+	runGit(t, repo.dir, "checkout", "stack/one")
+	createStackBranch(t, repo, "fork.txt", "fork\n", "Fork")
+
+	code, stdout, stderr := repo.runGraphene(t, "graph", "--stack")
+	if code != 0 {
+		t.Fatalf("graphene graph --stack exited %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	want := "" +
+		"main\n" +
+		"  `- stack/one\n" +
+		"     `- stack/fork *\n"
+	if stdout != want {
+		t.Fatalf("stdout = %q, want %q", stdout, want)
+	}
+
+	runGit(t, repo.dir, "checkout", "stack/two")
+	code, stdout, stderr = repo.runGraphene(t, "graph", "--stack")
+	if code != 0 {
+		t.Fatalf("graphene graph --stack exited %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	want = "" +
+		"main\n" +
+		"  `- stack/one\n" +
+		"     `- stack/two *\n"
+	if stdout != want {
+		t.Fatalf("stdout = %q, want %q", stdout, want)
+	}
+}
+
 func TestGoWalksForkedStack(t *testing.T) {
 	t.Parallel()
 	repo := newTestRepo(t)
