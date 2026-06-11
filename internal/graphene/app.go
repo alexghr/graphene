@@ -227,7 +227,7 @@ func (a *App) usage(w io.Writer) {
   graphene sync [-a|--all] [--dry-run] [--force]
   graphene send [--remote <remote>] [--stack] [--dry-run]
   graphene sendf [--remote <remote>] [--stack] [--dry-run]
-  graphene restack <base>
+  graphene restack [--force] <base>
   graphene go <up|down|top|bottom> [number]
   graphene graph [--stack]
   graphene skill [--codex|--claude|--out <path>]
@@ -362,7 +362,14 @@ options:
       --remote <remote>  push to this remote
   -s, --stack            push the current dependency path and descendants
   -n, --dry-run          show what would be pushed without updating refs or upstreams`,
-		"restack": "usage: graphene restack <base>\n\nMove the current branch onto another local branch, then restack dependent branches.",
+		"restack": `usage: graphene restack [--force] <base>
+
+Move the current branch onto another local branch, then restack dependent branches.
+
+By default, Graphene fetches the current branch's upstream and fast-forwards the current branch when possible before restacking.
+
+options:
+  -f, --force  restack using local refs only; do not fetch or fast-forward the current branch`,
 		"go": `usage: graphene go <up|down|top|bottom> [number]
 
 Switch to another branch in the tracked stack graph.

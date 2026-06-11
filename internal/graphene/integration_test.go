@@ -1385,6 +1385,89 @@ func TestRestackOntoBranchAtSameCommitUpdatesStateOnly(t *testing.T) {
 	}
 }
 
+func TestRestackReportsDivergedCurrentUpstream(t *testing.T) {
+	t.Parallel()
+	repo, remote := newTestRepoWithOrigin(t)
+	createStackBranch(t, repo, "one.txt", "one\n", "One")
+	expectGrapheneOK(t, repo, "send", "origin")
+
+	other := cloneConfiguredRepo(t, remote, "main")
+	runGit(t, other, "switch", "-c", "stack/one", "--track", "origin/stack/one")
+	writeFile(t, other, "remote-one.txt", "remote one\n")
+	runGit(t, other, "add", ".")
+	runGit(t, other, "commit", "--amend", "-m", "One remote")
+	runGit(t, other, "push", "--force-with-lease", "origin", "stack/one")
+
+	writeFile(t, repo.dir, "local-one.txt", "local one\n")
+	runGit(t, repo.dir, "add", ".")
+	runGit(t, repo.dir, "commit", "--amend", "-m", "One local")
+	localHead := runGit(t, repo.dir, "rev-parse", "stack/one")
+	stateBefore := readState(t, repo.dir)
+
+	runGit(t, repo.dir, "switch", "-c", "target", "main")
+	writeFile(t, repo.dir, "target.txt", "target\n")
+	runGit(t, repo.dir, "add", ".")
+	runGit(t, repo.dir, "commit", "-m", "Target")
+	runGit(t, repo.dir, "switch", "stack/one")
+
+	code, _, stderr := repo.runGraphene(t, "restack", "target")
+	if code == 0 {
+		t.Fatal("graphene restack unexpectedly succeeded")
+	}
+	for _, want := range []string{
+		`current branch "stack/one" diverged from upstream "stack/one@{upstream}"`,
+		"rerun with --force",
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Fatalf("stderr = %q, want it to contain %q", stderr, want)
+		}
+	}
+	if got := runGit(t, repo.dir, "rev-parse", "stack/one"); got != localHead {
+		t.Fatalf("stack/one changed from %s to %s", localHead, got)
+	}
+	if state := readState(t, repo.dir); !reflect.DeepEqual(state, stateBefore) {
+		t.Fatalf("state = %#v, want %#v", state, stateBefore)
+	}
+}
+
+func TestRestackLocalSkipsCurrentUpstreamFetch(t *testing.T) {
+	t.Parallel()
+	repo, remote := newTestRepoWithOrigin(t)
+	createStackBranch(t, repo, "one.txt", "one\n", "One")
+	expectGrapheneOK(t, repo, "send", "origin")
+	originOneBefore := runGit(t, repo.dir, "rev-parse", "origin/stack/one")
+
+	other := cloneConfiguredRepo(t, remote, "main")
+	runGit(t, other, "switch", "-c", "stack/one", "--track", "origin/stack/one")
+	writeFile(t, other, "remote-one.txt", "remote one\n")
+	runGit(t, other, "add", ".")
+	runGit(t, other, "commit", "--amend", "-m", "One remote")
+	runGit(t, other, "push", "--force-with-lease", "origin", "stack/one")
+
+	writeFile(t, repo.dir, "local-one.txt", "local one\n")
+	runGit(t, repo.dir, "add", ".")
+	runGit(t, repo.dir, "commit", "--amend", "-m", "One local")
+
+	runGit(t, repo.dir, "switch", "-c", "target", "main")
+	writeFile(t, repo.dir, "target.txt", "target\n")
+	runGit(t, repo.dir, "add", ".")
+	runGit(t, repo.dir, "commit", "-m", "Target")
+	runGit(t, repo.dir, "switch", "stack/one")
+
+	expectGrapheneOK(t, repo, "restack", "--force", "target")
+
+	assertBranchParent(t, repo.dir, "stack/one", "target")
+	if got := runGit(t, repo.dir, "rev-parse", "origin/stack/one"); got != originOneBefore {
+		t.Fatalf("origin/stack/one changed from %s to %s", originOneBefore, got)
+	}
+	if refFileExists(t, repo.dir, "stack/one:remote-one.txt") {
+		t.Fatal("local restack unexpectedly incorporated remote-only content")
+	}
+	if !refFileExists(t, repo.dir, "stack/one:local-one.txt") {
+		t.Fatal("local restack lost local-only content")
+	}
+}
+
 func TestRestackRejectsRemoteTrackingBase(t *testing.T) {
 	t.Parallel()
 	repo := newTestRepo(t)

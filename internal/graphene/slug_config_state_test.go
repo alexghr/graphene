@@ -427,6 +427,20 @@ func TestParseArgs(t *testing.T) {
 	if syncOpts.all || !syncOpts.dryRun {
 		t.Fatalf("parseSyncArgs --dry-run = %#v", syncOpts)
 	}
+	restackOpts, err := parseRestackArgs([]string{"--force", "target"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restackOpts.base != "target" || !restackOpts.local {
+		t.Fatalf("parseRestackArgs --force = %#v", restackOpts)
+	}
+	restackOpts, err = parseRestackArgs([]string{"-f", "target"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restackOpts.base != "target" || !restackOpts.local {
+		t.Fatalf("parseRestackArgs -f = %#v", restackOpts)
+	}
 	graphOpts, err := parseGraphArgs([]string{"--stack", "short"})
 	if err != nil {
 		t.Fatal(err)
@@ -627,6 +641,15 @@ func TestParseArgs(t *testing.T) {
 	}
 	if _, err := parseSyncArgs([]string{"--global"}); err == nil {
 		t.Fatal("parseSyncArgs accepted --global")
+	}
+	if _, err := parseRestackArgs([]string{"--bad", "target"}); err == nil {
+		t.Fatal("parseRestackArgs accepted --bad")
+	}
+	if _, err := parseRestackArgs([]string{"one", "two"}); err == nil {
+		t.Fatal("parseRestackArgs accepted multiple bases")
+	}
+	if _, err := parseRestackArgs(nil); err == nil {
+		t.Fatal("parseRestackArgs accepted no base")
 	}
 	if _, err := parseGoArgs(nil); err == nil {
 		t.Fatal("parseGoArgs accepted no direction")

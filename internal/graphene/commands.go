@@ -928,10 +928,11 @@ func (a *App) amend(args []string) error {
 }
 
 func (a *App) restack(args []string) error {
-	if len(args) != 1 || args[0] == "" {
-		return fmt.Errorf("usage: graphene restack <base>")
+	opts, err := parseRestackArgs(args)
+	if err != nil {
+		return err
 	}
-	base := args[0]
+	base := opts.base
 
 	current, err := a.git.CurrentBranch()
 	if err != nil {
@@ -1002,9 +1003,12 @@ func (a *App) restack(args []string) error {
 		}
 	}
 
-	headUpdated, err := a.updateCurrentBranchFromUpstream(current, oldHead)
-	if err != nil {
-		return err
+	headUpdated := false
+	if !opts.local {
+		headUpdated, err = a.updateCurrentBranchFromUpstream(current, oldHead)
+		if err != nil {
+			return err
+		}
 	}
 	oldBaseRef := oldRefs[oldBase]
 	if oldBaseRef == "" {
@@ -2912,7 +2916,7 @@ func (a *App) updateCurrentBranchFromUpstream(branch, oldHead string) (bool, err
 		return false, err
 	}
 	if !ancestor {
-		return false, fmt.Errorf("cannot fast-forward %q to %q; resolve the branch before restacking", branch, upstream)
+		return false, fmt.Errorf("current branch %q diverged from upstream %q (local %s, upstream %s); reconcile the branch or rerun with --force to restack using local refs only", branch, upstream, shortSyncRef(oldHead), shortSyncRef(updatedHead))
 	}
 	if err := a.git.Run("merge", "--ff-only", updatedHead); err != nil {
 		return false, err
@@ -3474,6 +3478,11 @@ type deleteOptions struct {
 	branch string
 }
 
+type restackOptions struct {
+	base  string
+	local bool
+}
+
 type syncOptions struct {
 	all    bool
 	dryRun bool
@@ -3499,6 +3508,28 @@ func parseSplitArgs(args []string) (string, error) {
 		return "", fmt.Errorf("unsupported argument %q; usage: graphene split [branch]", args[0])
 	}
 	return args[0], nil
+}
+
+func parseRestackArgs(args []string) (restackOptions, error) {
+	var opts restackOptions
+	for _, arg := range args {
+		switch arg {
+		case "-f", "--force":
+			opts.local = true
+		default:
+			if strings.HasPrefix(arg, "-") {
+				return opts, fmt.Errorf("unsupported argument %q; usage: graphene restack [--force] <base>", arg)
+			}
+			if opts.base != "" {
+				return opts, fmt.Errorf("usage: graphene restack [--force] <base>")
+			}
+			opts.base = arg
+		}
+	}
+	if opts.base == "" {
+		return opts, fmt.Errorf("usage: graphene restack [--force] <base>")
+	}
+	return opts, nil
 }
 
 func parseSyncArgs(args []string) (syncOptions, error) {
