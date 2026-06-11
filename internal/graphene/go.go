@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/alexghr/graphene/internal/flagparse"
 )
 
 type goDirection string
@@ -47,8 +49,8 @@ func (a *App) goBranch(args []string) error {
 
 func parseGoArgs(args []string) (goOptions, error) {
 	var opts goOptions
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
+	cursor := flagparse.New(args)
+	for arg, ok := cursor.Next(); ok; arg, ok = cursor.Next() {
 		var (
 			direction      goDirection
 			selector       string
@@ -57,40 +59,20 @@ func parseGoArgs(args []string) (goOptions, error) {
 		)
 
 		switch {
-		case arg == "top":
+		case arg.Positional() && arg.Raw() == "top":
 			direction, ok = goTop, true
-		case arg == "bottom":
+		case arg.Positional() && arg.Raw() == "bottom":
 			direction, ok = goBottom, true
-		case arg == "up":
+		case arg.Positional() && arg.Raw() == "up":
 			direction, ok = goUp, true
-		case arg == "down":
+		case arg.Positional() && arg.Raw() == "down":
 			direction, ok = goDown, true
-		case arg == "--top" || arg == "-t":
-			direction, ok = goTop, true
-		case strings.HasPrefix(arg, "--top="):
-			direction, selector, inlineSelector, ok = goTop, strings.TrimPrefix(arg, "--top="), true, true
-		case shortGoSelector(arg, "t"):
-			direction, selector, ok = goTop, strings.TrimPrefix(arg, "-t"), true
-		case arg == "--bottom" || arg == "-b":
-			direction, ok = goBottom, true
-		case strings.HasPrefix(arg, "--bottom="):
-			direction, selector, inlineSelector, ok = goBottom, strings.TrimPrefix(arg, "--bottom="), true, true
-		case shortGoSelector(arg, "b"):
-			direction, selector, ok = goBottom, strings.TrimPrefix(arg, "-b"), true
-		case arg == "--up" || arg == "-u":
-			direction, ok = goUp, true
-		case strings.HasPrefix(arg, "--up="):
-			direction, selector, inlineSelector, ok = goUp, strings.TrimPrefix(arg, "--up="), true, true
-		case shortGoSelector(arg, "u"):
-			direction, selector, ok = goUp, strings.TrimPrefix(arg, "-u"), true
-		case arg == "--down" || arg == "-d":
-			direction, ok = goDown, true
-		case strings.HasPrefix(arg, "--down="):
-			direction, selector, inlineSelector, ok = goDown, strings.TrimPrefix(arg, "--down="), true, true
-		case shortGoSelector(arg, "d"):
-			direction, selector, ok = goDown, strings.TrimPrefix(arg, "-d"), true
 		default:
-			return opts, fmt.Errorf("unsupported argument %q; supported go directions are up, down, top, and bottom", arg)
+			if flag, matched := goFlag(arg); matched {
+				direction, selector, inlineSelector, ok = flag.direction, flag.selector, flag.inlineSelector, true
+			} else {
+				return opts, fmt.Errorf("unsupported argument %q; supported go directions are up, down, top, and bottom", arg.Raw())
+			}
 		}
 
 		if ok {
@@ -101,9 +83,8 @@ func parseGoArgs(args []string) (goOptions, error) {
 			if inlineSelector && selector == "" {
 				return opts, fmt.Errorf("invalid selector %q; use 1, 2, ...", selector)
 			}
-			if selector == "" && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
-				selector = args[i+1]
-				i++
+			if selector == "" {
+				selector, _ = cursor.OptionalPositionalValue()
 			}
 			if selector != "" {
 				n, err := parseGoSelector(selector)
@@ -120,17 +101,49 @@ func parseGoArgs(args []string) (goOptions, error) {
 	return opts, nil
 }
 
-func shortGoSelector(arg, flag string) bool {
-	prefix := "-" + flag
-	if !strings.HasPrefix(arg, prefix) || len(arg) == len(prefix) {
-		return false
-	}
-	for _, r := range strings.TrimPrefix(arg, prefix) {
-		if r < '0' || r > '9' {
-			return false
+type parsedGoFlag struct {
+	direction      goDirection
+	selector       string
+	inlineSelector bool
+}
+
+func goFlag(arg flagparse.Arg) (parsedGoFlag, bool) {
+	if flag, ok := arg.Long(); ok {
+		switch flag.Name() {
+		case "top":
+			return parsedGoFlag{direction: goTop, selector: flag.Value(), inlineSelector: flag.HasValue()}, true
+		case "bottom":
+			return parsedGoFlag{direction: goBottom, selector: flag.Value(), inlineSelector: flag.HasValue()}, true
+		case "up":
+			return parsedGoFlag{direction: goUp, selector: flag.Value(), inlineSelector: flag.HasValue()}, true
+		case "down":
+			return parsedGoFlag{direction: goDown, selector: flag.Value(), inlineSelector: flag.HasValue()}, true
 		}
+		return parsedGoFlag{}, false
 	}
-	return true
+	switch arg.Raw() {
+	case "-t":
+		return parsedGoFlag{direction: goTop}, true
+	case "-b":
+		return parsedGoFlag{direction: goBottom}, true
+	case "-u":
+		return parsedGoFlag{direction: goUp}, true
+	case "-d":
+		return parsedGoFlag{direction: goDown}, true
+	}
+	if selector, ok := arg.AttachedShortValue('t', flagparse.AcceptDigits); ok {
+		return parsedGoFlag{direction: goTop, selector: selector}, true
+	}
+	if selector, ok := arg.AttachedShortValue('b', flagparse.AcceptDigits); ok {
+		return parsedGoFlag{direction: goBottom, selector: selector}, true
+	}
+	if selector, ok := arg.AttachedShortValue('u', flagparse.AcceptDigits); ok {
+		return parsedGoFlag{direction: goUp, selector: selector}, true
+	}
+	if selector, ok := arg.AttachedShortValue('d', flagparse.AcceptDigits); ok {
+		return parsedGoFlag{direction: goDown, selector: selector}, true
+	}
+	return parsedGoFlag{}, false
 }
 
 func parseGoSelector(raw string) (int, error) {

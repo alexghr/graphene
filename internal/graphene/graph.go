@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"io"
 	"strings"
+
+	"github.com/alexghr/graphene/internal/flagparse"
 )
 
 func (a *App) graph(args []string) error {
@@ -32,14 +34,24 @@ type graphOptions struct {
 
 func parseGraphArgs(args []string) (graphOptions, error) {
 	var opts graphOptions
-	for _, arg := range args {
-		switch arg {
-		case "short", "long":
-		case "-s", "--stack":
-			opts.stack = true
-		default:
-			return opts, fmt.Errorf("unsupported argument %q; usage: graphene graph [--stack]", arg)
+	cursor := flagparse.New(args)
+	for arg, ok := cursor.Next(); ok; arg, ok = cursor.Next() {
+		if arg.Positional() {
+			return opts, fmt.Errorf("unsupported argument %q; usage: graphene graph [--stack]", arg.Raw())
 		}
+		if flag, ok := arg.Long(); ok {
+			if value, matched, err := flag.Bool("stack"); matched {
+				if err != nil {
+					return opts, err
+				}
+				opts.stack = value
+				continue
+			}
+		}
+		if arg.ShortBoolCluster("s", func(flag byte) { opts.stack = true }) {
+			continue
+		}
+		return opts, fmt.Errorf("unsupported argument %q; usage: graphene graph [--stack]", arg.Raw())
 	}
 	return opts, nil
 }

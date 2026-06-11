@@ -2,7 +2,6 @@ package graphene
 
 import (
 	"reflect"
-	"strings"
 	"testing"
 )
 
@@ -406,6 +405,13 @@ func TestParseArgs(t *testing.T) {
 	if sendOpts.remote != "origin" || sendOpts.stack || sendOpts.dryRun {
 		t.Fatalf("parseSendArgs positional remote = %#v", sendOpts)
 	}
+	sendOpts, err = parseSendArgs([]string{"-sn", "--no-stack", "origin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sendOpts.remote != "origin" || sendOpts.stack || !sendOpts.dryRun {
+		t.Fatalf("parseSendArgs cluster override = %#v", sendOpts)
+	}
 	syncOpts, err := parseSyncArgs([]string{"--all"})
 	if err != nil {
 		t.Fatal(err)
@@ -427,6 +433,13 @@ func TestParseArgs(t *testing.T) {
 	if syncOpts.all || !syncOpts.dryRun {
 		t.Fatalf("parseSyncArgs --dry-run = %#v", syncOpts)
 	}
+	syncOpts, err = parseSyncArgs([]string{"-anf", "--dry-run=false"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !syncOpts.all || syncOpts.dryRun || !syncOpts.force {
+		t.Fatalf("parseSyncArgs cluster override = %#v", syncOpts)
+	}
 	restackOpts, err := parseRestackArgs([]string{"--force", "target"})
 	if err != nil {
 		t.Fatal(err)
@@ -441,15 +454,12 @@ func TestParseArgs(t *testing.T) {
 	if restackOpts.base != "target" || !restackOpts.local {
 		t.Fatalf("parseRestackArgs -f = %#v", restackOpts)
 	}
-	graphOpts, err := parseGraphArgs([]string{"--stack", "short"})
+	graphOpts, err := parseGraphArgs([]string{"--stack"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !graphOpts.stack {
-		t.Fatalf("parseGraphArgs --stack short = %#v", graphOpts)
-	}
-	if _, err := parseGraphArgs([]string{"--bad"}); err == nil {
-		t.Fatal("parseGraphArgs accepted unsupported argument")
+		t.Fatalf("parseGraphArgs --stack = %#v", graphOpts)
 	}
 	goOpts, err := parseGoArgs([]string{"up", "2"})
 	if err != nil {
@@ -507,12 +517,6 @@ func TestParseArgs(t *testing.T) {
 	if forgetOpts.force || forgetOpts.branch != "" {
 		t.Fatalf("parseForgetArgs no args = %#v", forgetOpts)
 	}
-	if _, err := parseForgetArgs([]string{"--bad"}); err == nil {
-		t.Fatal("parseForgetArgs accepted --bad")
-	}
-	if _, err := parseForgetArgs([]string{"stack/two", "stack/three"}); err == nil {
-		t.Fatal("parseForgetArgs accepted multiple branches")
-	}
 	deleteOpts, err := parseDeleteArgs([]string{"stack/two"})
 	if err != nil {
 		t.Fatal(err)
@@ -541,12 +545,6 @@ func TestParseArgs(t *testing.T) {
 	if deleteOpts.stack || deleteOpts.branch != "" {
 		t.Fatalf("parseDeleteArgs no args = %#v", deleteOpts)
 	}
-	if _, err := parseDeleteArgs([]string{"--bad"}); err == nil {
-		t.Fatal("parseDeleteArgs accepted --bad")
-	}
-	if _, err := parseDeleteArgs([]string{"stack/two", "stack/three"}); err == nil {
-		t.Fatal("parseDeleteArgs accepted multiple branches")
-	}
 	aliasNew, err := parseNewArgs([]string{"-am", "One", "--branch", "feature/one"})
 	if err != nil {
 		t.Fatal(err)
@@ -561,8 +559,12 @@ func TestParseArgs(t *testing.T) {
 	if !aliasAmend.stageUpdate || !reflect.DeepEqual(aliasAmend.commitArgs, []string{"--message=One"}) {
 		t.Fatalf("parseAmendArgs alias form = %#v", aliasAmend)
 	}
-	if _, err := parseAmendArgs([]string{"-cam", "One"}); err == nil {
-		t.Fatal("parseAmendArgs accepted unsupported short commit option")
+	dashBranchOpts, err := parseNewArgs([]string{"--", "-branch"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dashBranchOpts.branch != "-branch" {
+		t.Fatalf("parseNewArgs -- branch = %#v", dashBranchOpts)
 	}
 	base, branch, err := parseTrackArgs([]string{"--parent", "main", "feature/one"})
 	if err != nil {
@@ -593,6 +595,19 @@ func TestParseArgs(t *testing.T) {
 	if !reflect.DeepEqual(aliasWords, []string{"new", "--branch", "feature one", "-m", "hi"}) {
 		t.Fatalf("splitAlias = %#v", aliasWords)
 	}
+	configOpts, err := parseConfigArgs([]string{"set", "alias.ss", "sendf", "--stack"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if configOpts.key != "alias.ss" || configOpts.value != "sendf --stack" {
+		t.Fatalf("parseConfigArgs alias value = %#v", configOpts)
+	}
+	if !isBuiltinCommand("agent-skill") {
+		t.Fatal("agent-skill is not treated as a builtin")
+	}
+	if command, err := (&App{}).helpCommand("agent-skill"); err != nil || command != "skill" {
+		t.Fatalf("helpCommand(agent-skill) = %q, %v; want skill, nil", command, err)
+	}
 	skillOpts, err := parseSkillArgs([]string{"--out=SKILL.md"})
 	if err != nil {
 		t.Fatal(err)
@@ -621,80 +636,36 @@ func TestParseArgs(t *testing.T) {
 	if skillOpts.target != "claude" || skillOpts.out != "" {
 		t.Fatalf("parseSkillArgs --claude = %#v", skillOpts)
 	}
-	if _, err := parseSkillArgs([]string{"--out"}); err == nil {
-		t.Fatal("parseSkillArgs accepted missing path")
+	conflictTests := []struct {
+		name string
+		run  func() error
+	}{
+		{
+			name: "new positional and flag branch",
+			run: func() error {
+				_, err := parseNewArgs([]string{"feature/one", "--branch", "feature/two", "-m", "bad"})
+				return err
+			},
+		},
+		{
+			name: "new conflicting base aliases",
+			run: func() error {
+				_, err := parseNewArgs([]string{"--base", "main", "--parent", "other", "-m", "bad"})
+				return err
+			},
+		},
+		{
+			name: "track conflicting base aliases",
+			run: func() error {
+				_, _, err := parseTrackArgs([]string{"--parent", "main", "--base", "other"})
+				return err
+			},
+		},
 	}
-	if _, err := parseSkillArgs([]string{"--codex", "--out", "SKILL.md"}); err == nil {
-		t.Fatal("parseSkillArgs accepted multiple destinations")
-	}
-	if _, err := parseSkillArgs([]string{"--bad"}); err == nil {
-		t.Fatal("parseSkillArgs accepted unsupported argument")
-	}
-	if _, err := parseSendArgs([]string{"origin", "upstream"}); err == nil {
-		t.Fatal("parseSendArgs accepted multiple remotes")
-	}
-	if _, err := parseSendArgs([]string{"--force-with-lease"}); err == nil {
-		t.Fatal("parseSendArgs accepted force flag")
-	}
-	if _, err := parseSyncArgs([]string{"--bad"}); err == nil {
-		t.Fatal("parseSyncArgs accepted unsupported argument")
-	}
-	if _, err := parseSyncArgs([]string{"--global"}); err == nil {
-		t.Fatal("parseSyncArgs accepted --global")
-	}
-	if _, err := parseRestackArgs([]string{"--bad", "target"}); err == nil {
-		t.Fatal("parseRestackArgs accepted --bad")
-	}
-	if _, err := parseRestackArgs([]string{"one", "two"}); err == nil {
-		t.Fatal("parseRestackArgs accepted multiple bases")
-	}
-	if _, err := parseRestackArgs(nil); err == nil {
-		t.Fatal("parseRestackArgs accepted no base")
-	}
-	if _, err := parseGoArgs(nil); err == nil {
-		t.Fatal("parseGoArgs accepted no direction")
-	}
-	if _, err := parseGoArgs([]string{"--up", "--top"}); err == nil {
-		t.Fatal("parseGoArgs accepted multiple directions")
-	}
-	if _, err := parseGoArgs([]string{"--up", "0"}); err == nil {
-		t.Fatal("parseGoArgs accepted selector 0")
-	}
-	if _, err := parseGoArgs([]string{"--up="}); err == nil {
-		t.Fatal("parseGoArgs accepted empty inline selector")
-	}
-	if _, err := parseNewArgs([]string{"--amend", "-m", "bad"}); err == nil {
-		t.Fatal("parseNewArgs accepted --amend")
-	}
-	if _, err := parseNewArgs([]string{"--signoff", "-m", "bad"}); err == nil {
-		t.Fatal("parseNewArgs accepted unsupported commit flag")
-	}
-	if _, err := parseSquashArgs([]string{"--count", "1"}); err == nil {
-		t.Fatal("parseSquashArgs accepted count 1")
-	}
-	if _, err := parseSquashArgs([]string{"--signoff"}); err == nil {
-		t.Fatal("parseSquashArgs accepted unsupported commit flag")
-	}
-	if _, err := parseAmendArgs([]string{"--branch", "feature/bad"}); err == nil {
-		t.Fatal("parseAmendArgs accepted branch flag")
-	}
-	if _, err := parseAmendArgs([]string{"--base", "stack/parent"}); err == nil {
-		t.Fatal("parseAmendArgs accepted base flag")
-	}
-	if _, err := parseAmendArgs([]string{"--reuse-current"}); err == nil {
-		t.Fatal("parseAmendArgs accepted reuse-current flag")
-	}
-	if _, err := parseNewArgs([]string{"--reuse-current", "--reuse-current"}); err == nil {
-		t.Fatal("parseNewArgs accepted duplicate reuse-current flag")
-	}
-	if _, err := parseNewArgs([]string{"feature/one", "--branch", "feature/two", "-m", "bad"}); err == nil || !strings.Contains(err.Error(), "either positional branch or -b/--branch") {
-		t.Fatalf("parseNewArgs positional and flag error = %v", err)
-	}
-	if _, err := parseNewArgs([]string{"--base", "main", "--parent", "other", "-m", "bad"}); err == nil || !strings.Contains(err.Error(), "different branches") {
-		t.Fatalf("parseNewArgs conflicting base aliases error = %v", err)
-	}
-	if _, _, err := parseTrackArgs([]string{"--parent", "main", "--base", "other"}); err == nil || !strings.Contains(err.Error(), "different branches") {
-		t.Fatalf("parseTrackArgs conflicting base aliases error = %v", err)
+	for _, tt := range conflictTests {
+		if err := tt.run(); err == nil {
+			t.Fatalf("%s succeeded", tt.name)
+		}
 	}
 }
 

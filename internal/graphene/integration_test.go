@@ -737,9 +737,9 @@ func TestNavigationAndLogAliases(t *testing.T) {
 		t.Fatalf("branch after top = %q, want stack/two", got)
 	}
 
-	code, stdout, stderr := repo.runGraphene(t, "log", "short")
+	code, stdout, stderr := repo.runGraphene(t, "log")
 	if code != 0 {
-		t.Fatalf("graphene log short exited %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+		t.Fatalf("graphene log exited %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
 	want := "" +
 		"main\n" +

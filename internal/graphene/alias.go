@@ -113,6 +113,9 @@ func (a *App) helpCommand(command string) (string, error) {
 	seen := map[string]bool{}
 
 	for depth := 0; depth < maxAliasDepth; depth++ {
+		if command == "agent-skill" {
+			return "skill", nil
+		}
 		if isBuiltinCommand(command) {
 			return command, nil
 		}
@@ -248,7 +251,7 @@ func shellQuote(arg string) string {
 
 func isBuiltinCommand(command string) bool {
 	switch command {
-	case "abort", "amend", "config", "continue", "delete", "forget", "go", "graph", "help", "import", "new", "restack", "send", "sendf", "skill", "split", "squash", "sync", "track", "version", "-h", "--help", "-v", "--version":
+	case "abort", "amend", "agent-skill", "config", "continue", "delete", "forget", "go", "graph", "help", "import", "new", "restack", "send", "sendf", "skill", "split", "squash", "sync", "track", "version", "-h", "--help", "-v", "--version":
 		return true
 	default:
 		return false

@@ -90,6 +90,10 @@ func parseConfigArgs(args []string) (configOptions, error) {
 	}
 
 	for len(rest) > 0 {
+		if rest[0] == "--" {
+			rest = rest[1:]
+			break
+		}
 		switch rest[0] {
 		case "--global":
 			if opts.scope != "" {

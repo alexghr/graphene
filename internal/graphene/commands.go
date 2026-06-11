@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/alexghr/graphene/internal/flagparse"
 	graphenestackedprs "github.com/alexghr/graphene/skills/graphene-stacked-prs"
 )
 
@@ -3498,33 +3499,44 @@ func parseAmendArgs(args []string) (commitOptions, error) {
 }
 
 func parseSplitArgs(args []string) (string, error) {
-	if len(args) > 1 {
-		return "", fmt.Errorf("usage: graphene split [branch]")
+	var target string
+	cursor := flagparse.New(args)
+	for arg, ok := cursor.Next(); ok; arg, ok = cursor.Next() {
+		if !arg.Positional() {
+			return "", fmt.Errorf("unsupported argument %q; usage: graphene split [branch]", arg.Raw())
+		}
+		if target != "" {
+			return "", fmt.Errorf("usage: graphene split [branch]")
+		}
+		target = arg.Raw()
 	}
-	if len(args) == 0 {
-		return "", nil
-	}
-	if strings.HasPrefix(args[0], "-") {
-		return "", fmt.Errorf("unsupported argument %q; usage: graphene split [branch]", args[0])
-	}
-	return args[0], nil
+	return target, nil
 }
 
 func parseRestackArgs(args []string) (restackOptions, error) {
 	var opts restackOptions
-	for _, arg := range args {
-		switch arg {
-		case "-f", "--force":
-			opts.local = true
-		default:
-			if strings.HasPrefix(arg, "-") {
-				return opts, fmt.Errorf("unsupported argument %q; usage: graphene restack [--force] <base>", arg)
-			}
+	cursor := flagparse.New(args)
+	for arg, ok := cursor.Next(); ok; arg, ok = cursor.Next() {
+		if arg.Positional() {
 			if opts.base != "" {
 				return opts, fmt.Errorf("usage: graphene restack [--force] <base>")
 			}
-			opts.base = arg
+			opts.base = arg.Raw()
+			continue
 		}
+		if flag, ok := arg.Long(); ok {
+			if value, matched, err := flag.Bool("force"); matched {
+				if err != nil {
+					return opts, err
+				}
+				opts.local = value
+				continue
+			}
+		}
+		if arg.ShortBoolCluster("f", func(flag byte) { opts.local = true }) {
+			continue
+		}
+		return opts, fmt.Errorf("unsupported argument %q; usage: graphene restack [--force] <base>", arg.Raw())
 	}
 	if opts.base == "" {
 		return opts, fmt.Errorf("usage: graphene restack [--force] <base>")
@@ -3534,83 +3546,142 @@ func parseRestackArgs(args []string) (restackOptions, error) {
 
 func parseSyncArgs(args []string) (syncOptions, error) {
 	var opts syncOptions
-	for _, arg := range args {
-		switch arg {
-		case "-a", "--all":
-			opts.all = true
-		case "-n", "--dry-run":
-			opts.dryRun = true
-		case "-f", "--force":
-			opts.force = true
-		default:
-			return opts, fmt.Errorf("unsupported argument %q; supported sync options are -a/--all, -n/--dry-run, and -f/--force", arg)
+	cursor := flagparse.New(args)
+	for arg, ok := cursor.Next(); ok; arg, ok = cursor.Next() {
+		if arg.Positional() {
+			return opts, fmt.Errorf("unsupported argument %q; supported sync options are -a/--all, -n/--dry-run, and -f/--force", arg.Raw())
 		}
+		if flag, ok := arg.Long(); ok {
+			switch {
+			case flag.Name() == "all":
+				if flag.HasValue() {
+					break
+				}
+				opts.all = true
+				continue
+			case flag.Name() == "dry-run" || flag.Name() == "no-dry-run":
+				value, _, err := flag.Bool("dry-run")
+				if err != nil {
+					return opts, err
+				}
+				opts.dryRun = value
+				continue
+			case flag.Name() == "force" || flag.Name() == "no-force":
+				value, _, err := flag.Bool("force")
+				if err != nil {
+					return opts, err
+				}
+				opts.force = value
+				continue
+			}
+		}
+		if arg.ShortBoolCluster("anf", func(flag byte) {
+			switch flag {
+			case 'a':
+				opts.all = true
+			case 'n':
+				opts.dryRun = true
+			case 'f':
+				opts.force = true
+			}
+		}) {
+			continue
+		}
+		return opts, fmt.Errorf("unsupported argument %q; supported sync options are -a/--all, -n/--dry-run, and -f/--force", arg.Raw())
 	}
 	return opts, nil
 }
 
 func parseSquashArgs(args []string) (squashOptions, error) {
 	opts := squashOptions{count: 2}
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-
+	cursor := flagparse.New(args)
+	for arg, ok := cursor.Next(); ok; arg, ok = cursor.Next() {
+		if arg.Positional() {
+			return opts, fmt.Errorf("unsupported argument %q; supported squash options are -c/--count, -m/--message, --no-edit, --no-verify, --gpg-sign, and --no-gpg-sign", arg.Raw())
+		}
+		if flag, ok := arg.Long(); ok {
+			switch flag.Name() {
+			case "count":
+				raw := flag.Value()
+				if !flag.HasValue() {
+					var err error
+					raw, err = cursor.Value(flagparse.AcceptNonFlag, fmt.Errorf("missing count after --count"))
+					if err != nil {
+						return opts, err
+					}
+				}
+				count, err := parseSquashCount(raw)
+				if err != nil {
+					return opts, err
+				}
+				opts.count = count
+				continue
+			case "message":
+				message := flag.Value()
+				if !flag.HasValue() {
+					var err error
+					message, err = cursor.Value(flagparse.AcceptAny, fmt.Errorf("missing message after --message"))
+					if err != nil {
+						return opts, err
+					}
+					opts.commitArgs = append(opts.commitArgs, "-m", message)
+				} else {
+					opts.commitArgs = append(opts.commitArgs, arg.Raw())
+				}
+				opts.messageSet = true
+				continue
+			case "no-edit":
+				if flag.HasValue() {
+					break
+				}
+				opts.commitArgs = append(opts.commitArgs, arg.Raw())
+				opts.noEdit = true
+				continue
+			case "no-verify":
+				if flag.HasValue() {
+					break
+				}
+				opts.commitArgs = append(opts.commitArgs, arg.Raw())
+				continue
+			case "gpg-sign", "no-gpg-sign":
+				if flag.Name() == "no-gpg-sign" && flag.HasValue() {
+					break
+				}
+				opts.commitArgs = append(opts.commitArgs, arg.Raw())
+				continue
+			}
+		}
+		if countRaw, ok := arg.AttachedShortValue('c', flagparse.AcceptDigits); ok {
+			count, err := parseSquashCount(countRaw)
+			if err != nil {
+				return opts, err
+			}
+			opts.count = count
+			continue
+		}
 		switch {
-		case arg == "-c" || arg == "--count":
-			if i+1 >= len(args) || args[i+1] == "" || strings.HasPrefix(args[i+1], "-") {
-				return opts, fmt.Errorf("missing count after %s", arg)
+		case arg.Raw() == "-c":
+			countRaw, err := cursor.Value(flagparse.AcceptNonFlag, fmt.Errorf("missing count after -c"))
+			if err != nil {
+				return opts, err
 			}
-			count, err := parseSquashCount(args[i+1])
+			count, err := parseSquashCount(countRaw)
 			if err != nil {
 				return opts, err
 			}
 			opts.count = count
-			i++
-		case strings.HasPrefix(arg, "--count="):
-			count, err := parseSquashCount(strings.TrimPrefix(arg, "--count="))
+		case arg.Raw() == "-m":
+			message, err := cursor.Value(flagparse.AcceptAny, fmt.Errorf("missing message after -m"))
 			if err != nil {
 				return opts, err
 			}
-			opts.count = count
-		case shortSquashCount(arg):
-			count, err := parseSquashCount(strings.TrimPrefix(arg, "-c"))
-			if err != nil {
-				return opts, err
-			}
-			opts.count = count
-		case arg == "-m" || arg == "--message":
-			if i+1 >= len(args) {
-				return opts, fmt.Errorf("missing message after %s", arg)
-			}
-			opts.commitArgs = append(opts.commitArgs, "-m", args[i+1])
+			opts.commitArgs = append(opts.commitArgs, "-m", message)
 			opts.messageSet = true
-			i++
-		case strings.HasPrefix(arg, "--message="):
-			opts.commitArgs = append(opts.commitArgs, arg)
-			opts.messageSet = true
-		case arg == "--no-edit":
-			opts.commitArgs = append(opts.commitArgs, arg)
-			opts.noEdit = true
-		case arg == "--no-verify":
-			opts.commitArgs = append(opts.commitArgs, arg)
-		case arg == "--gpg-sign" || strings.HasPrefix(arg, "--gpg-sign=") || arg == "--no-gpg-sign":
-			opts.commitArgs = append(opts.commitArgs, arg)
 		default:
-			return opts, fmt.Errorf("unsupported argument %q; supported squash options are -c/--count, -m/--message, --no-edit, --no-verify, --gpg-sign, and --no-gpg-sign", arg)
+			return opts, fmt.Errorf("unsupported argument %q; supported squash options are -c/--count, -m/--message, --no-edit, --no-verify, --gpg-sign, and --no-gpg-sign", arg.Raw())
 		}
 	}
 	return opts, nil
-}
-
-func shortSquashCount(arg string) bool {
-	if !strings.HasPrefix(arg, "-c") || len(arg) == len("-c") {
-		return false
-	}
-	for _, r := range strings.TrimPrefix(arg, "-c") {
-		if r < '0' || r > '9' {
-			return false
-		}
-	}
-	return true
 }
 
 func parseSquashCount(raw string) (int, error) {
@@ -3626,119 +3697,161 @@ func parseCommitOptions(args []string, allowBranch bool) (commitOptions, error) 
 	branchFromFlag := false
 	branchFromPosition := false
 	baseFlag := ""
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-
-		switch {
-		case arg == "-a" || arg == "--all":
-			opts.stageAll = true
-		case arg == "-u" || arg == "--update":
-			opts.stageUpdate = true
-		case shortCommitFlags(arg):
-			message, err := parseShortCommitFlags(arg, &opts)
-			if err != nil {
-				return opts, err
-			}
-			if message {
-				if i+1 >= len(args) {
-					return opts, fmt.Errorf("missing message after %s", arg)
-				}
-				opts.commitArgs = append(opts.commitArgs, "-m", args[i+1])
-				i++
-			}
-		case arg == "-b" || arg == "--branch":
-			if !allowBranch {
-				return opts, fmt.Errorf("graphene amend does not support %s", arg)
-			}
-			if opts.branch != "" {
-				if branchFromPosition {
-					return opts, fmt.Errorf("graphene new accepts either positional branch or -b/--branch, not both")
-				}
-				return opts, fmt.Errorf("new branch specified more than once")
-			}
-			if i+1 >= len(args) || args[i+1] == "" || strings.HasPrefix(args[i+1], "-") {
-				return opts, fmt.Errorf("missing branch after %s", arg)
-			}
-			opts.branch = args[i+1]
-			branchFromFlag = true
-			i++
-		case strings.HasPrefix(arg, "--branch="):
-			if !allowBranch {
-				return opts, fmt.Errorf("graphene amend does not support --branch")
-			}
-			if opts.branch != "" {
-				if branchFromPosition {
-					return opts, fmt.Errorf("graphene new accepts either positional branch or -b/--branch, not both")
-				}
-				return opts, fmt.Errorf("new branch specified more than once")
-			}
-			opts.branch = strings.TrimPrefix(arg, "--branch=")
-			if opts.branch == "" {
-				return opts, fmt.Errorf("missing branch after --branch")
-			}
-			branchFromFlag = true
-		case arg == "--base" || arg == "--parent":
-			if !allowBranch {
-				return opts, fmt.Errorf("graphene amend does not support %s", arg)
-			}
-			if i+1 >= len(args) || args[i+1] == "" || strings.HasPrefix(args[i+1], "-") {
-				return opts, missingNewBase(arg)
-			}
-			if err := setNewBase(&opts, &baseFlag, arg, args[i+1]); err != nil {
-				return opts, err
-			}
-			i++
-		case strings.HasPrefix(arg, "--base=") || strings.HasPrefix(arg, "--parent="):
-			flag, value, _ := strings.Cut(arg, "=")
-			if !allowBranch {
-				return opts, fmt.Errorf("graphene amend does not support %s", flag)
-			}
-			if value == "" {
-				return opts, missingNewBase(flag)
-			}
-			if err := setNewBase(&opts, &baseFlag, flag, value); err != nil {
-				return opts, err
-			}
-		case arg == "--reuse-current":
-			if !allowBranch {
-				return opts, fmt.Errorf("graphene amend does not support --reuse-current")
-			}
-			if opts.reuseCurrent {
-				return opts, fmt.Errorf("reuse-current specified more than once")
-			}
-			opts.reuseCurrent = true
-		case arg == "-m" || arg == "--message":
-			if i+1 >= len(args) {
-				return opts, fmt.Errorf("missing message after %s", arg)
-			}
-			opts.commitArgs = append(opts.commitArgs, "-m", args[i+1])
-			i++
-		case strings.HasPrefix(arg, "--message="):
-			opts.commitArgs = append(opts.commitArgs, arg)
-		case arg == "--no-edit":
-			opts.commitArgs = append(opts.commitArgs, arg)
-		case arg == "--no-verify":
-			opts.commitArgs = append(opts.commitArgs, arg)
-		case arg == "--gpg-sign" || strings.HasPrefix(arg, "--gpg-sign=") || arg == "--no-gpg-sign":
-			opts.commitArgs = append(opts.commitArgs, arg)
-		case arg == "--amend":
+	cursor := flagparse.New(args)
+	for arg, ok := cursor.Next(); ok; arg, ok = cursor.Next() {
+		if arg.Positional() {
 			if allowBranch {
-				return opts, fmt.Errorf("graphene new cannot use --amend; use graphene amend")
-			}
-			return opts, unsupportedCommitArg(arg, allowBranch)
-		default:
-			if allowBranch && !strings.HasPrefix(arg, "-") {
 				if opts.branch != "" {
 					if branchFromFlag {
 						return opts, fmt.Errorf("graphene new accepts either positional branch or -b/--branch, not both")
 					}
 					return opts, fmt.Errorf("graphene new accepts at most one branch")
 				}
-				opts.branch = arg
+				opts.branch = arg.Raw()
 				branchFromPosition = true
 				continue
 			}
-			return opts, unsupportedCommitArg(arg, allowBranch)
+			return opts, unsupportedCommitArg(arg.Raw(), allowBranch)
+		}
+
+		if flag, ok := arg.Long(); ok {
+			switch flag.Name() {
+			case "all":
+				if flag.HasValue() {
+					break
+				}
+				opts.stageAll = true
+				continue
+			case "update":
+				if flag.HasValue() {
+					break
+				}
+				opts.stageUpdate = true
+				continue
+			case "branch":
+				if !allowBranch {
+					return opts, fmt.Errorf("graphene amend does not support --branch")
+				}
+				if opts.branch != "" {
+					if branchFromPosition {
+						return opts, fmt.Errorf("graphene new accepts either positional branch or -b/--branch, not both")
+					}
+					return opts, fmt.Errorf("new branch specified more than once")
+				}
+				branch := flag.Value()
+				if !flag.HasValue() {
+					var err error
+					branch, err = cursor.Value(flagparse.AcceptNonFlag, fmt.Errorf("missing branch after --branch"))
+					if err != nil {
+						return opts, err
+					}
+				} else if branch == "" {
+					return opts, fmt.Errorf("missing branch after --branch")
+				}
+				opts.branch = branch
+				branchFromFlag = true
+				continue
+			case "base", "parent":
+				if !allowBranch {
+					return opts, fmt.Errorf("graphene amend does not support --%s", flag.Name())
+				}
+				base := flag.Value()
+				flagName := "--" + flag.Name()
+				if !flag.HasValue() {
+					var err error
+					base, err = cursor.Value(flagparse.AcceptNonFlag, missingNewBase(flagName))
+					if err != nil {
+						return opts, err
+					}
+				} else if base == "" {
+					return opts, missingNewBase(flagName)
+				}
+				if err := setNewBase(&opts, &baseFlag, flagName, base); err != nil {
+					return opts, err
+				}
+				continue
+			case "reuse-current":
+				if flag.HasValue() {
+					break
+				}
+				if !allowBranch {
+					return opts, fmt.Errorf("graphene amend does not support --reuse-current")
+				}
+				if opts.reuseCurrent {
+					return opts, fmt.Errorf("reuse-current specified more than once")
+				}
+				opts.reuseCurrent = true
+				continue
+			case "message":
+				message := flag.Value()
+				if !flag.HasValue() {
+					var err error
+					message, err = cursor.Value(flagparse.AcceptAny, fmt.Errorf("missing message after --message"))
+					if err != nil {
+						return opts, err
+					}
+					opts.commitArgs = append(opts.commitArgs, "-m", message)
+				} else {
+					opts.commitArgs = append(opts.commitArgs, arg.Raw())
+				}
+				continue
+			case "no-edit", "no-verify":
+				if flag.HasValue() {
+					break
+				}
+				opts.commitArgs = append(opts.commitArgs, arg.Raw())
+				continue
+			case "gpg-sign", "no-gpg-sign":
+				if flag.Name() == "no-gpg-sign" && flag.HasValue() {
+					break
+				}
+				opts.commitArgs = append(opts.commitArgs, arg.Raw())
+				continue
+			case "amend":
+				if flag.HasValue() {
+					break
+				}
+				if allowBranch {
+					return opts, fmt.Errorf("graphene new cannot use --amend; use graphene amend")
+				}
+				return opts, unsupportedCommitArg(arg.Raw(), allowBranch)
+			}
+			return opts, unsupportedCommitArg(arg.Raw(), allowBranch)
+		}
+
+		switch {
+		case arg.Raw() == "-b":
+			if !allowBranch {
+				return opts, fmt.Errorf("graphene amend does not support -b")
+			}
+			if opts.branch != "" {
+				if branchFromPosition {
+					return opts, fmt.Errorf("graphene new accepts either positional branch or -b/--branch, not both")
+				}
+				return opts, fmt.Errorf("new branch specified more than once")
+			}
+			branch, err := cursor.Value(flagparse.AcceptNonFlag, fmt.Errorf("missing branch after -b"))
+			if err != nil {
+				return opts, err
+			}
+			opts.branch = branch
+			branchFromFlag = true
+		default:
+			message, consumed, err := consumeShortCommitFlags(arg, &opts)
+			if err != nil {
+				return opts, err
+			}
+			if consumed {
+				if message {
+					value, err := cursor.Value(flagparse.AcceptAny, fmt.Errorf("missing message after %s", arg.Raw()))
+					if err != nil {
+						return opts, err
+					}
+					opts.commitArgs = append(opts.commitArgs, "-m", value)
+				}
+				continue
+			}
+			return opts, unsupportedCommitArg(arg.Raw(), allowBranch)
 		}
 	}
 	return opts, nil
@@ -3766,23 +3879,18 @@ func setNewBase(opts *commitOptions, baseFlag *string, flag, value string) error
 	return fmt.Errorf("base branch specified more than once")
 }
 
-func shortCommitFlags(arg string) bool {
-	if !strings.HasPrefix(arg, "-") || strings.HasPrefix(arg, "--") || len(arg) <= 2 {
-		return false
+func consumeShortCommitFlags(arg flagparse.Arg, opts *commitOptions) (bool, bool, error) {
+	text, ok := arg.ShortText()
+	if !ok {
+		return false, false, nil
 	}
-	for _, r := range strings.TrimPrefix(arg, "-") {
-		switch r {
-		case 'a', 'u', 'm':
-		default:
-			return false
+	for _, r := range text {
+		if r != 'a' && r != 'u' && r != 'm' {
+			return false, false, nil
 		}
 	}
-	return true
-}
-
-func parseShortCommitFlags(arg string, opts *commitOptions) (bool, error) {
 	message := false
-	for _, r := range strings.TrimPrefix(arg, "-") {
+	for _, r := range text {
 		switch r {
 		case 'a':
 			opts.stageAll = true
@@ -3790,14 +3898,12 @@ func parseShortCommitFlags(arg string, opts *commitOptions) (bool, error) {
 			opts.stageUpdate = true
 		case 'm':
 			if message {
-				return false, fmt.Errorf("message flag specified more than once")
+				return false, true, fmt.Errorf("message flag specified more than once")
 			}
 			message = true
-		default:
-			return false, fmt.Errorf("unsupported argument %q", arg)
 		}
 	}
-	return message, nil
+	return message, true, nil
 }
 
 func (a *App) stageRequestedChanges(opts commitOptions) error {
@@ -3823,38 +3929,56 @@ func unsupportedCommitArg(arg string, allowBranch bool) error {
 
 func parseForgetArgs(args []string) (forgetOptions, error) {
 	var opts forgetOptions
-	for _, arg := range args {
-		switch arg {
-		case "-f", "--force":
-			opts.force = true
-		default:
-			if strings.HasPrefix(arg, "-") {
-				return opts, fmt.Errorf("unsupported argument %q; usage: graphene forget [--force] [branch]", arg)
-			}
+	cursor := flagparse.New(args)
+	for arg, ok := cursor.Next(); ok; arg, ok = cursor.Next() {
+		if arg.Positional() {
 			if opts.branch != "" {
 				return opts, fmt.Errorf("graphene forget accepts at most one branch")
 			}
-			opts.branch = arg
+			opts.branch = arg.Raw()
+			continue
 		}
+		if flag, ok := arg.Long(); ok {
+			if value, matched, err := flag.Bool("force"); matched {
+				if err != nil {
+					return opts, err
+				}
+				opts.force = value
+				continue
+			}
+		}
+		if arg.ShortBoolCluster("f", func(flag byte) { opts.force = true }) {
+			continue
+		}
+		return opts, fmt.Errorf("unsupported argument %q; usage: graphene forget [--force] [branch]", arg.Raw())
 	}
 	return opts, nil
 }
 
 func parseDeleteArgs(args []string) (deleteOptions, error) {
 	var opts deleteOptions
-	for _, arg := range args {
-		switch arg {
-		case "-s", "--stack":
-			opts.stack = true
-		default:
-			if strings.HasPrefix(arg, "-") {
-				return opts, fmt.Errorf("unsupported argument %q; usage: graphene delete [--stack] [branch]", arg)
-			}
+	cursor := flagparse.New(args)
+	for arg, ok := cursor.Next(); ok; arg, ok = cursor.Next() {
+		if arg.Positional() {
 			if opts.branch != "" {
 				return opts, fmt.Errorf("graphene delete accepts at most one branch")
 			}
-			opts.branch = arg
+			opts.branch = arg.Raw()
+			continue
 		}
+		if flag, ok := arg.Long(); ok {
+			if value, matched, err := flag.Bool("stack"); matched {
+				if err != nil {
+					return opts, err
+				}
+				opts.stack = value
+				continue
+			}
+		}
+		if arg.ShortBoolCluster("s", func(flag byte) { opts.stack = true }) {
+			continue
+		}
+		return opts, fmt.Errorf("unsupported argument %q; usage: graphene delete [--stack] [branch]", arg.Raw())
 	}
 	return opts, nil
 }
@@ -3863,34 +3987,46 @@ func parseTrackArgs(args []string) (string, string, error) {
 	base := ""
 	baseFlag := ""
 	branch := ""
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		switch {
-		case arg == "-p" || arg == "--parent" || arg == "--base":
-			flag := canonicalTrackBaseFlag(arg)
-			if i+1 >= len(args) || args[i+1] == "" || strings.HasPrefix(args[i+1], "-") {
-				return "", "", fmt.Errorf("missing branch after %s", arg)
-			}
-			if err := setTrackBase(&base, &baseFlag, flag, args[i+1]); err != nil {
-				return "", "", err
-			}
-			i++
-		case strings.HasPrefix(arg, "--parent=") || strings.HasPrefix(arg, "--base="):
-			flag, value, _ := strings.Cut(arg, "=")
-			if value == "" {
-				return "", "", fmt.Errorf("missing branch after %s", flag)
-			}
-			if err := setTrackBase(&base, &baseFlag, flag, value); err != nil {
-				return "", "", err
-			}
-		case strings.HasPrefix(arg, "-"):
-			return "", "", fmt.Errorf("unsupported argument %q; supported track options are -p/--parent and --base", arg)
-		default:
+	cursor := flagparse.New(args)
+	for arg, ok := cursor.Next(); ok; arg, ok = cursor.Next() {
+		if arg.Positional() {
 			if branch != "" {
 				return "", "", fmt.Errorf("graphene track accepts one branch")
 			}
-			branch = arg
+			branch = arg.Raw()
+			continue
 		}
+		if flag, ok := arg.Long(); ok {
+			switch flag.Name() {
+			case "parent", "base":
+				flagName := "--" + flag.Name()
+				value := flag.Value()
+				if !flag.HasValue() {
+					var err error
+					value, err = cursor.Value(flagparse.AcceptNonFlag, fmt.Errorf("missing branch after %s", flagName))
+					if err != nil {
+						return "", "", err
+					}
+				} else if value == "" {
+					return "", "", fmt.Errorf("missing branch after %s", flagName)
+				}
+				if err := setTrackBase(&base, &baseFlag, flagName, value); err != nil {
+					return "", "", err
+				}
+				continue
+			}
+		}
+		if arg.Raw() == "-p" {
+			value, err := cursor.Value(flagparse.AcceptNonFlag, fmt.Errorf("missing branch after -p"))
+			if err != nil {
+				return "", "", err
+			}
+			if err := setTrackBase(&base, &baseFlag, "--parent", value); err != nil {
+				return "", "", err
+			}
+			continue
+		}
+		return "", "", fmt.Errorf("unsupported argument %q; supported track options are -p/--parent and --base", arg.Raw())
 	}
 	if base == "" {
 		return "", "", fmt.Errorf("usage: graphene track (--parent|--base) <base> [branch]")
@@ -3899,10 +4035,21 @@ func parseTrackArgs(args []string) (string, string, error) {
 }
 
 func parseImportArgs(args []string) (string, error) {
-	if len(args) != 1 || args[0] == "" || strings.HasPrefix(args[0], "-") {
+	var base string
+	cursor := flagparse.New(args)
+	for arg, ok := cursor.Next(); ok; arg, ok = cursor.Next() {
+		if !arg.Positional() || arg.Raw() == "" {
+			return "", fmt.Errorf("usage: graphene import <base>")
+		}
+		if base != "" {
+			return "", fmt.Errorf("usage: graphene import <base>")
+		}
+		base = arg.Raw()
+	}
+	if base == "" {
 		return "", fmt.Errorf("usage: graphene import <base>")
 	}
-	return args[0], nil
+	return base, nil
 }
 
 func canonicalTrackBaseFlag(flag string) string {
@@ -3943,36 +4090,46 @@ func parseSkillArgs(args []string) (skillOptions, error) {
 		opts.out = path
 		return nil
 	}
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-
-		switch {
-		case arg == "--codex":
+	cursor := flagparse.New(args)
+	for arg, ok := cursor.Next(); ok; arg, ok = cursor.Next() {
+		if arg.Positional() {
+			return skillOptions{}, fmt.Errorf("unsupported argument %q; supported skill options are --codex, --claude, and --out", arg.Raw())
+		}
+		flag, ok := arg.Long()
+		if !ok {
+			return skillOptions{}, fmt.Errorf("unsupported argument %q; supported skill options are --codex, --claude, and --out", arg.Raw())
+		}
+		switch flag.Name() {
+		case "codex":
+			if flag.HasValue() {
+				return skillOptions{}, fmt.Errorf("unsupported argument %q; supported skill options are --codex, --claude, and --out", arg.Raw())
+			}
 			if err := setDestination("codex"); err != nil {
 				return skillOptions{}, err
 			}
-		case arg == "--claude":
+		case "claude":
+			if flag.HasValue() {
+				return skillOptions{}, fmt.Errorf("unsupported argument %q; supported skill options are --codex, --claude, and --out", arg.Raw())
+			}
 			if err := setDestination("claude"); err != nil {
 				return skillOptions{}, err
 			}
-		case arg == "--out":
-			if i+1 >= len(args) || args[i+1] == "" || (strings.HasPrefix(args[i+1], "-") && args[i+1] != "-") {
-				return skillOptions{}, fmt.Errorf("missing path after --out")
-			}
-			if err := setOut(args[i+1]); err != nil {
-				return skillOptions{}, err
-			}
-			i++
-		case strings.HasPrefix(arg, "--out="):
-			out := strings.TrimPrefix(arg, "--out=")
-			if out == "" {
+		case "out":
+			out := flag.Value()
+			if !flag.HasValue() {
+				var err error
+				out, err = cursor.Value(flagparse.AcceptPath, fmt.Errorf("missing path after --out"))
+				if err != nil {
+					return skillOptions{}, err
+				}
+			} else if !flagparse.AcceptPath(out) {
 				return skillOptions{}, fmt.Errorf("missing path after --out")
 			}
 			if err := setOut(out); err != nil {
 				return skillOptions{}, err
 			}
 		default:
-			return skillOptions{}, fmt.Errorf("unsupported argument %q; supported skill options are --codex, --claude, and --out", arg)
+			return skillOptions{}, fmt.Errorf("unsupported argument %q; supported skill options are --codex, --claude, and --out", arg.Raw())
 		}
 	}
 	return opts, nil
@@ -3986,39 +4143,60 @@ type sendOptions struct {
 
 func parseSendArgs(args []string) (sendOptions, error) {
 	var opts sendOptions
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-
-		switch {
-		case arg == "-s" || arg == "--stack":
-			opts.stack = true
-		case arg == "-n" || arg == "--dry-run":
-			opts.dryRun = true
-		case arg == "--remote":
-			if i+1 >= len(args) || args[i+1] == "" || strings.HasPrefix(args[i+1], "-") {
-				return opts, fmt.Errorf("missing remote after --remote")
-			}
+	cursor := flagparse.New(args)
+	for arg, ok := cursor.Next(); ok; arg, ok = cursor.Next() {
+		if arg.Positional() {
 			if opts.remote != "" {
 				return opts, fmt.Errorf("graphene send accepts at most one remote")
 			}
-			opts.remote = args[i+1]
-			i++
-		case strings.HasPrefix(arg, "--remote="):
-			if opts.remote != "" {
-				return opts, fmt.Errorf("graphene send accepts at most one remote")
-			}
-			opts.remote = strings.TrimPrefix(arg, "--remote=")
-			if opts.remote == "" {
-				return opts, fmt.Errorf("missing remote after --remote")
-			}
-		case strings.HasPrefix(arg, "-"):
-			return opts, fmt.Errorf("unsupported argument %q; supported send options are --remote, -s/--stack, and -n/--dry-run", arg)
-		default:
-			if opts.remote != "" {
-				return opts, fmt.Errorf("graphene send accepts at most one remote")
-			}
-			opts.remote = arg
+			opts.remote = arg.Raw()
+			continue
 		}
+		if flag, ok := arg.Long(); ok {
+			switch {
+			case flag.Name() == "stack" || flag.Name() == "no-stack":
+				value, _, err := flag.Bool("stack")
+				if err != nil {
+					return opts, err
+				}
+				opts.stack = value
+				continue
+			case flag.Name() == "dry-run" || flag.Name() == "no-dry-run":
+				value, _, err := flag.Bool("dry-run")
+				if err != nil {
+					return opts, err
+				}
+				opts.dryRun = value
+				continue
+			case flag.Name() == "remote":
+				if opts.remote != "" {
+					return opts, fmt.Errorf("graphene send accepts at most one remote")
+				}
+				remote := flag.Value()
+				if !flag.HasValue() {
+					var err error
+					remote, err = cursor.Value(flagparse.AcceptNonFlag, fmt.Errorf("missing remote after --remote"))
+					if err != nil {
+						return opts, err
+					}
+				} else if remote == "" {
+					return opts, fmt.Errorf("missing remote after --remote")
+				}
+				opts.remote = remote
+				continue
+			}
+		}
+		if arg.ShortBoolCluster("sn", func(flag byte) {
+			switch flag {
+			case 's':
+				opts.stack = true
+			case 'n':
+				opts.dryRun = true
+			}
+		}) {
+			continue
+		}
+		return opts, fmt.Errorf("unsupported argument %q; supported send options are --remote, -s/--stack, and -n/--dry-run", arg.Raw())
 	}
 	return opts, nil
 }

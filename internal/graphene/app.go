@@ -220,16 +220,16 @@ func (a *App) usage(w io.Writer) {
   graphene continue
   graphene abort
   graphene config <get|set|unset> [--global|--local] <key> [value]
-  graphene forget [--force] [branch]
-  graphene delete [--stack] [branch]
+  graphene forget [-f|--force] [branch]
+  graphene delete [-s|--stack] [branch]
   graphene track (--parent|--base) <base> [branch]
   graphene import <base>
   graphene sync [-a|--all] [--dry-run] [--force]
-  graphene send [--remote <remote>] [--stack] [--dry-run]
-  graphene sendf [--remote <remote>] [--stack] [--dry-run]
-  graphene restack [--force] <base>
+  graphene send [options] [remote]
+  graphene sendf [options] [remote]
+  graphene restack [-f|--force] <base>
   graphene go <up|down|top|bottom> [number]
-  graphene graph [--stack]
+  graphene graph [-s|--stack]
   graphene skill [--codex|--claude|--out <path>]
   graphene version
 
@@ -305,13 +305,13 @@ examples:
   graphene config get branchPrefix
   graphene config set branchPrefix stack
   graphene config unset alias.up`,
-		"forget": `usage: graphene forget [--force] [branch]
+		"forget": `usage: graphene forget [-f|--force] [branch]
 
 Remove Graphene tracking through the current or named branch without deleting Git branches.
 
 options:
-      --force  clear pending Graphene rebase state while forgetting`,
-		"delete": `usage: graphene delete [--stack] [branch]
+  -f, --force  clear pending Graphene rebase state while forgetting`,
+		"delete": `usage: graphene delete [-s|--stack] [branch]
 
 Delete the current or named tracked branch locally and remove it from Graphene tracking.
 
@@ -362,7 +362,7 @@ options:
       --remote <remote>  push to this remote
   -s, --stack            push the current dependency path and descendants
   -n, --dry-run          show what would be pushed without updating refs or upstreams`,
-		"restack": `usage: graphene restack [--force] <base>
+		"restack": `usage: graphene restack [-f|--force] <base>
 
 Move the current branch onto another local branch, then restack dependent branches.
 
@@ -379,7 +379,7 @@ options:
   -b, --bottom [number]  switch to the bottom branch in the current stack path
   -u, --up [number]      switch to a direct child branch
   -d, --down [number]    switch to the direct parent branch`,
-		"graph":   "usage: graphene graph [--stack]\n\nPrint the tracked stack graph.\n\noptions:\n  -s, --stack  print only the current stack path",
+		"graph":   "usage: graphene graph [-s|--stack]\n\nPrint the tracked stack graph.\n\noptions:\n  -s, --stack  print only the current stack path",
 		"version": "usage: graphene version\n\nPrint the Graphene version and Git version.",
 	}
 	text, ok := usages[command]
