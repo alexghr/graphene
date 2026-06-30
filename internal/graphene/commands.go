@@ -1620,7 +1620,7 @@ func (a *App) trackBranch(base, branch string) error {
 	if err := a.validateTrackBranchesExist(base, branch); err != nil {
 		return err
 	}
-	if err := a.updateTrackParentFromUpstream(base); err != nil {
+	if err := a.updateTrackParentFromUpstream(base, branch); err != nil {
 		return err
 	}
 	if err := a.validateTrackBranchShape(base, branch); err != nil {
@@ -2831,7 +2831,7 @@ func (a *App) fetchSyncBase(base, current string) (string, error) {
 	return a.fetchBase(base)
 }
 
-func (a *App) updateTrackParentFromUpstream(base string) error {
+func (a *App) updateTrackParentFromUpstream(base, branch string) error {
 	exists, err := a.git.BranchExists(base)
 	if err != nil {
 		return err
@@ -2870,6 +2870,14 @@ func (a *App) updateTrackParentFromUpstream(base string) error {
 	}
 	if !ancestor {
 		return fmt.Errorf("cannot fast-forward %q to %q; resolve the parent branch before tracking", base, upstream)
+	}
+
+	ancestor, err = a.isAncestor(updatedBase, "refs/heads/"+branch)
+	if err != nil {
+		return err
+	}
+	if !ancestor {
+		return nil
 	}
 
 	current, err := a.git.Output("branch", "--show-current")

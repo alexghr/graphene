@@ -512,6 +512,48 @@ func TestTrackRejectsMultiCommitBranch(t *testing.T) {
 	}
 }
 
+func TestTrackDoesNotFastForwardParentOutsideBranchHistory(t *testing.T) {
+	t.Parallel()
+	repo := newTestRepo(t)
+
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	runGit(t, "", "init", "--bare", remote)
+	runGit(t, repo.dir, "remote", "add", "origin", remote)
+	runGit(t, repo.dir, "checkout", "-b", "next")
+	runGit(t, repo.dir, "push", "-u", "origin", "next")
+	oldParent := runGit(t, repo.dir, "rev-parse", "next")
+
+	runGit(t, repo.dir, "checkout", "-b", "fc/remove-ts-avm-simulator")
+	for i := 1; i <= 5; i++ {
+		commitFile(t, repo.dir, fmt.Sprintf("change-%d.txt", i), fmt.Sprintf("change %d\n", i), fmt.Sprintf("Change %d", i))
+	}
+
+	other := cloneConfiguredRepo(t, remote, "next")
+	updatedParent := commitFile(t, other, "base.txt", "base update\n", "Base update")
+	runGit(t, other, "push", "origin", "next")
+
+	code, _, stderr := repo.runGraphene(t, "track", "--parent", "next")
+	if code == 0 {
+		t.Fatal("graphene track unexpectedly succeeded")
+	}
+	if !strings.Contains(stderr, "contains 5 commits") {
+		t.Fatalf("stderr = %q", stderr)
+	}
+	if strings.Contains(stderr, "not an ancestor") {
+		t.Fatalf("track reported ancestry failure after moving parent: %q", stderr)
+	}
+	if got := runGit(t, repo.dir, "rev-parse", "next"); got != oldParent {
+		t.Fatalf("next moved from %s to %s", oldParent, got)
+	}
+	if got := runGit(t, repo.dir, "rev-parse", "origin/next"); got != updatedParent {
+		t.Fatalf("origin/next = %s, want %s", got, updatedParent)
+	}
+	state := readState(t, repo.dir)
+	if len(state.Stacks) != 0 {
+		t.Fatalf("stacks = %#v, want none", state.Stacks)
+	}
+}
+
 func TestTrackFastForwardsParentFromUpstream(t *testing.T) {
 	t.Parallel()
 	repo := newTestRepo(t)
