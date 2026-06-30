@@ -44,6 +44,25 @@ func TestRegressionSyncSendfPreservesSquashMergedMiddleBranchPatch(t *testing.T)
 	}
 }
 
+func TestRegressionSendfDryRunAfterSyncWithNewDescendant(t *testing.T) {
+	t.Parallel()
+	repo, remote := newTestRepoWithOrigin(t)
+	createStackBranch(t, repo, "one.txt", "one\n", "One")
+	expectGrapheneOK(t, repo, "send", "origin")
+	createStackBranch(t, repo, "two.txt", "two\n", "Two")
+
+	integrator := cloneConfiguredRepo(t, remote, "main")
+	writeFile(t, integrator, "base-update.txt", "base update\n")
+	runGit(t, integrator, "add", ".")
+	runGit(t, integrator, "commit", "-m", "Base update")
+	runGit(t, integrator, "push", "origin", "main")
+
+	expectGrapheneOK(t, repo, "sync")
+	if code, stdout, stderr := repo.runGraphene(t, "sendf", "--stack", "--dry-run", "origin"); code != 0 {
+		t.Fatalf("graphene sendf --stack --dry-run exited %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+}
+
 // Regression for https://github.com/alexghr/graphene/issues/8.
 func TestRegressionSyncUsesVisibleBaseForNestedStackWithoutIntermediateUpstream(t *testing.T) {
 	t.Parallel()

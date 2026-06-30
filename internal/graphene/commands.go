@@ -2492,11 +2492,16 @@ func (a *App) validateForcePushPreservesRemoteDescendantPatches(remote string, s
 			continue
 		}
 
+		exists, err := a.refExists(remoteRef)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			continue
+		}
+
 		remoteCommit, err := a.git.Output("rev-parse", "--verify", remoteRef+"^{commit}")
 		if err != nil {
-			if isGitExit(err, 1) {
-				continue
-			}
 			return err
 		}
 
