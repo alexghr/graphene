@@ -1434,12 +1434,40 @@ func TestAmendMessageOnlyWithCleanWorktree(t *testing.T) {
 	}
 }
 
-func TestRestackMovesWholeStackFromAnyBranch(t *testing.T) {
+func TestRestackMovesCurrentBranchAndDescendantsFromAnyBranch(t *testing.T) {
 	t.Parallel()
 
-	for _, current := range []string{"stack/one", "stack/two", "stack/three"} {
-		current := current
-		t.Run(current, func(t *testing.T) {
+	tests := []struct {
+		current string
+		parents []string
+		stacks  []Stack
+	}{
+		{
+			current: "stack/one",
+			parents: []string{"target", "stack/one", "stack/two"},
+			stacks:  []Stack{{Base: "target", Branches: []string{"stack/one", "stack/two", "stack/three"}}},
+		},
+		{
+			current: "stack/two",
+			parents: []string{"main", "target", "stack/two"},
+			stacks: []Stack{
+				{Base: "main", Branches: []string{"stack/one"}},
+				{Base: "target", Branches: []string{"stack/two", "stack/three"}},
+			},
+		},
+		{
+			current: "stack/three",
+			parents: []string{"main", "stack/one", "target"},
+			stacks: []Stack{
+				{Base: "main", Branches: []string{"stack/one", "stack/two"}},
+				{Base: "target", Branches: []string{"stack/three"}},
+			},
+		},
+	}
+	branches := []string{"stack/one", "stack/two", "stack/three"}
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.current, func(t *testing.T) {
 			t.Parallel()
 			repo := newTestRepo(t)
 			createStackBranch(t, repo, "one.txt", "one\n", "One")
@@ -1451,27 +1479,27 @@ func TestRestackMovesWholeStackFromAnyBranch(t *testing.T) {
 			runGit(t, repo.dir, "add", ".")
 			runGit(t, repo.dir, "commit", "-m", "Target")
 
-			runGit(t, repo.dir, "checkout", current)
-			// Regression for https://github.com/alexghr/graphene/issues/9.
+			runGit(t, repo.dir, "checkout", tt.current)
+			// Regressions for https://github.com/alexghr/graphene/issues/9 and
+			// https://github.com/alexghr/graphene/issues/18.
 			expectGrapheneOK(t, repo, "restack", "target")
 
-			assertBranchParent(t, repo.dir, "stack/one", "target")
-			assertBranchParent(t, repo.dir, "stack/two", "stack/one")
-			assertBranchParent(t, repo.dir, "stack/three", "stack/two")
-			if got := currentBranch(t, repo.dir); got != current {
-				t.Fatalf("branch = %q, want %s", got, current)
+			for i, branch := range branches {
+				assertBranchParent(t, repo.dir, branch, tt.parents[i])
+			}
+			if got := currentBranch(t, repo.dir); got != tt.current {
+				t.Fatalf("branch = %q, want %s", got, tt.current)
 			}
 
 			state := readState(t, repo.dir)
-			want := []Stack{{Base: "target", Branches: []string{"stack/one", "stack/two", "stack/three"}}}
-			if !reflect.DeepEqual(state.Stacks, want) {
-				t.Fatalf("stacks = %#v, want %#v", state.Stacks, want)
+			if !reflect.DeepEqual(state.Stacks, tt.stacks) {
+				t.Fatalf("stacks = %#v, want %#v", state.Stacks, tt.stacks)
 			}
 		})
 	}
 }
 
-func TestRestackWholeStackRestacksForkedDescendants(t *testing.T) {
+func TestRestackLeavesAncestorForksInPlace(t *testing.T) {
 	t.Parallel()
 	repo := newTestRepo(t)
 	createStackBranch(t, repo, "one.txt", "one\n", "One")
@@ -1486,11 +1514,19 @@ func TestRestackWholeStackRestacksForkedDescendants(t *testing.T) {
 	runGit(t, repo.dir, "add", ".")
 	runGit(t, repo.dir, "commit", "-m", "Target")
 
+	oneBefore := runGit(t, repo.dir, "rev-parse", "stack/one")
+	forkBefore := runGit(t, repo.dir, "rev-parse", "stack/fork")
 	runGit(t, repo.dir, "checkout", "stack/two")
 	expectGrapheneOK(t, repo, "restack", "target")
 
-	assertBranchParent(t, repo.dir, "stack/one", "target")
-	assertBranchParent(t, repo.dir, "stack/two", "stack/one")
+	if got := runGit(t, repo.dir, "rev-parse", "stack/one"); got != oneBefore {
+		t.Fatalf("stack/one changed from %s to %s", oneBefore, got)
+	}
+	if got := runGit(t, repo.dir, "rev-parse", "stack/fork"); got != forkBefore {
+		t.Fatalf("stack/fork changed from %s to %s", forkBefore, got)
+	}
+	assertBranchParent(t, repo.dir, "stack/one", "main")
+	assertBranchParent(t, repo.dir, "stack/two", "target")
 	assertBranchParent(t, repo.dir, "stack/three", "stack/two")
 	assertBranchParent(t, repo.dir, "stack/fork", "stack/one")
 	if got := currentBranch(t, repo.dir); got != "stack/two" {
@@ -1499,8 +1535,38 @@ func TestRestackWholeStackRestacksForkedDescendants(t *testing.T) {
 
 	state := readState(t, repo.dir)
 	want := []Stack{
+		{Base: "main", Branches: []string{"stack/one"}},
 		{Base: "stack/one", Branches: []string{"stack/fork"}},
-		{Base: "target", Branches: []string{"stack/one", "stack/two", "stack/three"}},
+		{Base: "target", Branches: []string{"stack/two", "stack/three"}},
+	}
+	if !reflect.DeepEqual(state.Stacks, want) {
+		t.Fatalf("stacks = %#v, want %#v", state.Stacks, want)
+	}
+}
+
+func TestRestackOntoStackRootMovesCurrentBranch(t *testing.T) {
+	t.Parallel()
+	repo := newTestRepo(t)
+	createStackBranch(t, repo, "one.txt", "one\n", "One")
+	createStackBranch(t, repo, "two.txt", "two\n", "Two")
+	oneBefore := runGit(t, repo.dir, "rev-parse", "stack/one")
+
+	// Regression for https://github.com/alexghr/graphene/issues/22.
+	expectGrapheneOK(t, repo, "restack", "main")
+
+	if got := runGit(t, repo.dir, "rev-parse", "stack/one"); got != oneBefore {
+		t.Fatalf("stack/one changed from %s to %s", oneBefore, got)
+	}
+	assertBranchParent(t, repo.dir, "stack/one", "main")
+	assertBranchParent(t, repo.dir, "stack/two", "main")
+	if got := currentBranch(t, repo.dir); got != "stack/two" {
+		t.Fatalf("branch = %q, want stack/two", got)
+	}
+
+	state := readState(t, repo.dir)
+	want := []Stack{
+		{Base: "main", Branches: []string{"stack/one"}},
+		{Base: "main", Branches: []string{"stack/two"}},
 	}
 	if !reflect.DeepEqual(state.Stacks, want) {
 		t.Fatalf("stacks = %#v, want %#v", state.Stacks, want)

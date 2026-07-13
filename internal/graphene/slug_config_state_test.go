@@ -242,6 +242,13 @@ func TestReparentBranch(t *testing.T) {
 	if _, _, ok := ReparentBranch(state, "b", "c"); ok {
 		t.Fatal("ReparentBranch allowed a branch to move onto its descendant")
 	}
+	forked := State{Stacks: []Stack{
+		{Base: "main", Branches: []string{"a", "b"}},
+		{Base: "b", Branches: []string{"e"}},
+	}}
+	if _, _, ok := ReparentBranch(forked, "b", "e"); ok {
+		t.Fatal("ReparentBranch allowed a branch to move onto its fork descendant")
+	}
 }
 
 func TestBaseBranch(t *testing.T) {

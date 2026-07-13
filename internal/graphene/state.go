@@ -437,14 +437,12 @@ func ReparentBranch(s State, current, base string) (State, []string, bool) {
 	if !ok {
 		return s, nil, false
 	}
+	if stateHasPath(s, current, base) {
+		return s, nil, false
+	}
 
 	stack := s.Stacks[loc.StackIndex]
 	moved := append([]string(nil), stack.Branches[loc.BranchIndex:]...)
-	for _, branch := range moved {
-		if branch == base {
-			return s, nil, false
-		}
-	}
 
 	if loc.BranchIndex == 0 {
 		s.Stacks = append(s.Stacks[:loc.StackIndex], s.Stacks[loc.StackIndex+1:]...)
@@ -473,56 +471,6 @@ func VisibleStackPath(s State, current string) ([]string, bool) {
 	branches = append([]string(nil), branches...)
 	branches = append(branches, stack.Branches[loc.BranchIndex+1:]...)
 	return branches, true
-}
-
-func ReparentStackPath(s State, branches []string, base string) (State, bool) {
-	if base == "" || len(branches) == 0 {
-		return s, false
-	}
-
-	moved := map[string]bool{}
-	for i, branch := range branches {
-		if branch == "" || moved[branch] || branch == base {
-			return s, false
-		}
-		parent, ok := BaseBranch(s, branch)
-		if !ok {
-			return s, false
-		}
-		if i > 0 && parent != branches[i-1] {
-			return s, false
-		}
-		moved[branch] = true
-	}
-
-	next := State{Pending: s.Pending}
-	for _, stack := range s.Stacks {
-		stackBase := stack.Base
-		var kept []string
-		flush := func() {
-			if len(kept) == 0 {
-				return
-			}
-			next.Stacks = append(next.Stacks, Stack{Base: stackBase, Branches: kept})
-			kept = nil
-		}
-
-		for _, branch := range stack.Branches {
-			if moved[branch] {
-				flush()
-				stackBase = branch
-				continue
-			}
-			kept = append(kept, branch)
-		}
-		flush()
-	}
-
-	next.Stacks = append(next.Stacks, Stack{
-		Base:     base,
-		Branches: append([]string(nil), branches...),
-	})
-	return next, true
 }
 
 func BaseBranch(s State, branch string) (string, bool) {

@@ -950,9 +950,13 @@ func (a *App) restack(args []string) error {
 		return err
 	}
 
-	wholePath, ok := VisibleStackPath(state, current)
+	oldBase, ok := BaseBranch(state, current)
 	if !ok {
 		return fmt.Errorf("branch %q is not in a graphene stack", current)
+	}
+	nextState, _, ok := ReparentBranch(state, current, base)
+	if !ok {
+		return fmt.Errorf("cannot restack %q onto %q", current, base)
 	}
 
 	dirty, err := a.git.HasTrackedChanges()
@@ -975,35 +979,6 @@ func (a *App) restack(args []string) error {
 		return err
 	}
 
-	path := wholePath
-	oldBase := ""
-	var nextState State
-	if restackBaseInPath(base, baseRef, wholePath, oldRefs) {
-		stack, index, ok := StackSuffix(state, current)
-		if !ok {
-			return fmt.Errorf("branch %q is not in a graphene stack", current)
-		}
-		path = append([]string(nil), stack.Branches[index:]...)
-		oldBase, ok = BaseBranch(state, path[0])
-		if !ok {
-			return fmt.Errorf("branch %q is not in a graphene stack", path[0])
-		}
-		nextState, _, ok = ReparentBranch(state, current, base)
-		if !ok {
-			return fmt.Errorf("cannot restack %q onto %q", current, base)
-		}
-	} else {
-		var ok bool
-		oldBase, ok = BaseBranch(state, path[0])
-		if !ok {
-			return fmt.Errorf("branch %q is not in a graphene stack", path[0])
-		}
-		nextState, ok = ReparentStackPath(state, wholePath, base)
-		if !ok {
-			return fmt.Errorf("cannot restack %q onto %q", current, base)
-		}
-	}
-
 	headUpdated := false
 	if !opts.local {
 		headUpdated, err = a.updateCurrentBranchFromUpstream(current, oldHead)
@@ -1023,38 +998,16 @@ func (a *App) restack(args []string) error {
 		return a.git.WriteState(nextState)
 	}
 
-	currentIndex := branchIndex(path, current)
-	if currentIndex < 0 {
-		return fmt.Errorf("branch %q is not in selected restack path", current)
-	}
-	top := path[len(path)-1]
 	var ops []RebaseOp
-	var rewritten []string
-	skipTops := map[string]bool{}
 	if oldBaseRef != baseRef {
 		ops = append(ops, RebaseOp{
 			Onto:     base,
 			Upstream: oldBaseRef,
 			Top:      current,
 		})
-		rewritten = append(rewritten, path...)
-		skipTops[top] = true
-		if currentIndex+1 < len(path) {
-			upstream := oldRefs[current]
-			if upstream == "" {
-				return fmt.Errorf("missing old ref for %q", current)
-			}
-			ops = append(ops, RebaseOp{
-				Onto:     current,
-				Upstream: upstream,
-				Top:      top,
-			})
-		}
-	} else if headUpdated {
-		rewritten = append(rewritten, current)
 	}
-	if len(rewritten) > 0 {
-		restackOps, err := RestackOpsAfterRewrites(nextState, rewritten, oldRefs, skipTops)
+	if oldBaseRef != baseRef || headUpdated {
+		restackOps, err := RestackOpsAfterRewrite(nextState, current, oldRefs)
 		if err != nil {
 			return err
 		}
@@ -1082,24 +1035,6 @@ func (a *App) restack(args []string) error {
 		return err
 	}
 	return a.runPendingRebases(state)
-}
-
-func restackBaseInPath(base, baseRef string, path []string, oldRefs map[string]string) bool {
-	for _, branch := range path {
-		if branch == base || oldRefs[branch] == baseRef {
-			return true
-		}
-	}
-	return false
-}
-
-func branchIndex(branches []string, branch string) int {
-	for i, candidate := range branches {
-		if candidate == branch {
-			return i
-		}
-	}
-	return -1
 }
 
 func (a *App) continueRebase(args []string) error {
