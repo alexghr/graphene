@@ -36,6 +36,8 @@ in
         subPackages = [ "cmd/graphene" ];
         postInstall = ''
           install -Dm644 aliases/graphite.gitconfig $out/share/graphene/aliases/graphite.gitconfig
+          install -Dm644 internal/graphene/graphene.bash $out/share/bash-completion/completions/graphene
+          install -Dm644 internal/graphene/graphene.bash $out/share/bash-completion/completions/gn
         '';
         checkPhase = ''
           runHook preCheck

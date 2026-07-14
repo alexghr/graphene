@@ -560,7 +560,7 @@ func shellQuote(arg string) string {
 
 func isBuiltinCommand(command string) bool {
 	switch command {
-	case "abort", "aliases", "amend", "agent-skill", "config", "continue", "delete", "forget", "go", "graph", "help", "import", "new", "restack", "send", "sendf", "skill", "split", "squash", "sync", "track", "version", "-h", "--help", "-v", "--version":
+	case "__complete", "abort", "aliases", "amend", "agent-skill", "completion", "config", "continue", "delete", "forget", "go", "graph", "help", "import", "new", "restack", "send", "sendf", "skill", "split", "squash", "sync", "track", "version", "-h", "--help", "-v", "--version":
 		return true
 	default:
 		return false

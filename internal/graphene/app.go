@@ -92,6 +92,14 @@ func (a *App) Run(args []string) int {
 				return 0
 			}
 			err = a.skill(args[2:])
+		case "completion":
+			if helpArgs(args[2:]) {
+				a.commandUsage("completion", a.stdout)
+				return 0
+			}
+			err = a.completion(args[2:])
+		case "__complete":
+			err = a.complete(args[2:])
 		case "continue":
 			if helpArgs(args[2:]) {
 				a.commandUsage("continue", a.stdout)
@@ -238,6 +246,7 @@ func (a *App) usage(w io.Writer) {
   graphene go <up|down|top|bottom> [number]
   graphene graph [-s|--stack]
   graphene skill [--codex|--claude|--out <path>]
+  graphene completion bash
   graphene version
 
 run "graphene help <command>" for command-specific help`)
@@ -301,6 +310,7 @@ options:
       --codex       install to ~/.codex/skills/graphene-stacked-prs/SKILL.md
       --claude      install to ~/.claude/skills/graphene-stacked-prs/SKILL.md
       --out <path>  write SKILL.md to this path; use - for stdout`,
+		"completion": "usage: graphene completion bash\n\nWrite the Bash completion script to stdout.",
 		"continue": "usage: graphene continue\n\nContinue the current Git rebase and any queued Graphene restacks.",
 		"abort":    "usage: graphene abort\n\nAbort the current Git rebase and clear queued Graphene restacks.",
 		"config": `usage: graphene config <get|set|unset> [--global|--local] <key> [value]
