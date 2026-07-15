@@ -25,6 +25,7 @@ func TestCompletionStaticGrammar(t *testing.T) {
 		{name: "config action", line: "graphene config s", want: []string{"set"}},
 		{name: "aliases action", line: "graphene aliases i", want: []string{"import"}},
 		{name: "go direction", line: "graphene go b", want: []string{"bottom"}},
+		{name: "completion shell", line: "graphene completion z", want: []string{"zsh"}},
 		{
 			name: "empty command argument",
 			line: "graphene new ",
@@ -240,18 +241,247 @@ func TestBashCompletionScript(t *testing.T) {
 		t.Fatalf("completion registrations = %q", registrations)
 	}
 
-	code, stdout, stderr := repo.runGraphene(t, "completion", "zsh")
-	if code == 0 || stdout != "" || !strings.Contains(stderr, "usage: graphene completion bash") {
-		t.Fatalf("unsupported shell = (%d, %q, %q)", code, stdout, stderr)
+	code, stdout, stderr := repo.runGraphene(t, "help")
+	if code != 0 || stderr != "" || !strings.Contains(stdout, "graphene completion <bash|zsh>") {
+		t.Fatalf("help does not advertise completion: (%d, %q, %q)", code, stdout, stderr)
 	}
 
-	code, stdout, stderr = repo.runGraphene(t, "help")
-	if code != 0 || stderr != "" || !strings.Contains(stdout, "graphene completion bash") {
-		t.Fatalf("help does not advertise completion: (%d, %q, %q)", code, stdout, stderr)
+	code, stdout, stderr = repo.runGraphene(t, "completion", "fish")
+	if code == 0 || stdout != "" || !strings.Contains(stderr, "usage: graphene completion <bash|zsh>") {
+		t.Fatalf("unsupported shell = (%d, %q, %q)", code, stdout, stderr)
 	}
 }
 
+func TestZshCompletionScript(t *testing.T) {
+	repo := newTestRepo(t)
+	runGit(t, repo.dir, "branch", "zsh-target")
+	runGit(t, repo.dir, "remote", "add", "origin", "git@example.test:owner/repo.git")
+
+	code, script, stderr := repo.runGraphene(t, "completion", "zsh")
+	if code != 0 {
+		t.Fatalf("graphene completion zsh exited %d\nstdout:\n%s\nstderr:\n%s", code, script, stderr)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q", stderr)
+	}
+
+	zsh, err := exec.LookPath("zsh")
+	if err != nil {
+		t.Skip("zsh is not installed")
+	}
+
+	dir := t.TempDir()
+	scriptPath := filepath.Join(dir, "_graphene")
+	writeFile(t, dir, "_graphene", script)
+
+	t.Run("syntax", func(t *testing.T) {
+		if output, err := exec.Command(zsh, "-n", scriptPath).CombinedOutput(); err != nil {
+			t.Fatalf("zsh -n failed: %v\n%s", err, output)
+		}
+	})
+
+	t.Run("registration", func(t *testing.T) {
+		command := `compdef() { print -r -- "$*"; }; source "$1"`
+		output, err := exec.Command(zsh, "-f", "-c", command, "--", scriptPath).CombinedOutput()
+		if err != nil {
+			t.Fatalf("source completion script: %v\n%s", err, output)
+		}
+		if registration := strings.TrimSpace(string(output)); registration != "_graphene graphene gn" {
+			t.Fatalf("completion registration = %q", registration)
+		}
+	})
+
+	t.Run("autoload", func(t *testing.T) {
+		binDir := t.TempDir()
+		writeExecutable(t, filepath.Join(binDir, "graphene"), `#!/bin/sh
+test "$*" = "__complete graphene co" || exit 2
+printf 'completion\n'
+`)
+		command := `
+fpath=("$1" $fpath)
+autoload -Uz _graphene
+compadd() {
+    local array_name="$2"
+    print -rl -- "${(@P)array_name}"
+}
+BUFFER="graphene co"
+CURSOR=${#BUFFER}
+_graphene
+`
+		cmd := exec.Command(zsh, "-f", "-c", command, "--", dir)
+		cmd.Env = append(os.Environ(), "PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("autoload completion script: %v\n%s", err, output)
+		}
+		if candidate := strings.TrimSpace(string(output)); candidate != "completion" {
+			t.Fatalf("autoload completion candidate = %q", candidate)
+		}
+	})
+
+	tests := []struct {
+		name      string
+		line      string
+		want      []string
+		wantFiles bool
+	}{
+		{
+			name: "commands",
+			line: "graphene co",
+			want: []string{"completion", "config", "continue"},
+		},
+		{
+			name: "flags",
+			line: "graphene send --r",
+			want: []string{"--remote"},
+		},
+		{
+			name: "branches",
+			line: "graphene checkout zsh-",
+			want: []string{"zsh-target"},
+		},
+		{
+			name: "attached branch value",
+			line: "graphene new --base=zsh-",
+			want: []string{"--base=zsh-target"},
+		},
+		{
+			name: "attached remote value",
+			line: "graphene send --remote=orig",
+			want: []string{"--remote=origin"},
+		},
+		{
+			name:      "separate path value",
+			line:      "graphene skill --out comp",
+			wantFiles: true,
+		},
+		{
+			name: "attached path value is unsupported",
+			line: "graphene skill --out=comp",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			backendOutput := completionOutputFromCLI(t, repo.dir, tt.line)
+			got, files, fileOptionsPreserved := runZshCompletion(t, zsh, scriptPath, tt.line, backendOutput)
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Fatalf("Zsh completion for %q = %#v, want %#v", tt.line, got, tt.want)
+			}
+			if files != tt.wantFiles {
+				t.Fatalf("Zsh file completion for %q = %v, want %v", tt.line, files, tt.wantFiles)
+			}
+			if tt.wantFiles && !fileOptionsPreserved {
+				t.Fatalf("Zsh file completion for %q reset completion-system options", tt.line)
+			}
+		})
+	}
+}
+
+func runZshCompletion(t *testing.T, zsh, completionScript, line, backendOutput string) ([]string, bool, bool) {
+	t.Helper()
+
+	dir := t.TempDir()
+	trace := filepath.Join(dir, "trace")
+	writeExecutable(t, filepath.Join(dir, "graphene"), `#!/bin/sh
+printf '%s\n' "$*" > "$GRAPHENE_TEST_TRACE"
+printf '%s' "$GRAPHENE_TEST_OUTPUT"
+`)
+
+	harness := `
+compdef() { :; }
+typeset -ga added
+typeset -gi files_called=0
+typeset -gi file_options_preserved=1
+compadd() {
+    local array_name
+    while (( $# )); do
+        case "$1" in
+            -a)
+                shift
+                array_name="$1"
+                added+=("${(@P)array_name}")
+                ;;
+            --)
+                shift
+                added+=("$@")
+                break
+                ;;
+        esac
+        shift
+    done
+    return 0
+}
+_files() {
+    (( files_called++ ))
+    [[ -o extendedglob && -o nullglob ]] || file_options_preserved=0
+    return 0
+}
+source "$1"
+setopt extendedglob nullglob
+BUFFER="$GRAPHENE_TEST_LINE"
+LBUFFER="$BUFFER"
+CURSOR=${#BUFFER}
+words=(${(z)BUFFER})
+if [[ "$BUFFER" == *' ' ]]; then
+    words+=("")
+fi
+CURRENT=${#words}
+PREFIX="${words[CURRENT]}"
+_graphene
+print -r -- "files:$files_called"
+print -r -- "file-options:$file_options_preserved"
+for candidate in "${added[@]}"; do
+    print -r -- "candidate:$candidate"
+done
+`
+	cmd := exec.Command(zsh, "-f", "-c", harness, "--", completionScript)
+	cmd.Env = append(os.Environ(),
+		"PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"GRAPHENE_TEST_TRACE="+trace,
+		"GRAPHENE_TEST_LINE="+line,
+		"GRAPHENE_TEST_OUTPUT="+backendOutput,
+	)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("run Zsh completion for %q: %v\n%s", line, err, output)
+	}
+
+	called, err := os.ReadFile(trace)
+	if err != nil {
+		t.Fatalf("read completion command trace: %v", err)
+	}
+	calledLine := strings.TrimSuffix(string(called), "\n")
+	if want := "__complete " + line; calledLine != want {
+		t.Fatalf("completion command = %q, want %q", calledLine, want)
+	}
+
+	var candidates []string
+	files := false
+	fileOptionsPreserved := false
+	for _, outputLine := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		switch {
+		case outputLine == "files:1":
+			files = true
+		case outputLine == "file-options:1":
+			fileOptionsPreserved = true
+		case strings.HasPrefix(outputLine, "candidate:"):
+			candidates = append(candidates, strings.TrimPrefix(outputLine, "candidate:"))
+		}
+	}
+	return candidates, files, fileOptionsPreserved
+}
+
 func completionCandidatesFromCLI(t *testing.T, dir, line string) []string {
+	t.Helper()
+	out := strings.TrimSuffix(completionOutputFromCLI(t, dir, line), "\n")
+	if out == "" {
+		return nil
+	}
+	return strings.Split(out, "\n")
+}
+
+func completionOutputFromCLI(t *testing.T, dir, line string) string {
 	t.Helper()
 	var stdout, stderr bytes.Buffer
 	app := NewApp(dir, nil, &stdout, &stderr, os.Getenv)
@@ -262,9 +492,5 @@ func completionCandidatesFromCLI(t *testing.T, dir, line string) []string {
 	if stderr.Len() != 0 {
 		t.Fatalf("graphene __complete %q stderr = %q", line, stderr.String())
 	}
-	out := strings.TrimSuffix(stdout.String(), "\n")
-	if out == "" {
-		return nil
-	}
-	return strings.Split(out, "\n")
+	return stdout.String()
 }

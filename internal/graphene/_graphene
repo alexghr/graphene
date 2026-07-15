@@ -1,0 +1,43 @@
+#compdef graphene gn
+
+_graphene()
+{
+    local line output marker first rest payload attach
+    local -a candidates
+    local ret=1
+
+    line="${BUFFER[1,CURSOR]}"
+    output="$(command graphene __complete "$line" 2>/dev/null)" || return 0
+    marker=$'__graphene_files__\t'
+
+    if [[ "$output" == "$marker"* ]]; then
+        first="${output%%$'\n'*}"
+        if [[ "$first" == "$output" ]]; then
+            rest=""
+        else
+            rest="${output#*$'\n'}"
+        fi
+        payload="${first#"$marker"}"
+        attach="${payload%%$'\t'*}"
+
+        candidates=("${(@f)rest}")
+        candidates=("${(@)candidates:#}")
+        (( ${#candidates} )) && compadd -a candidates && ret=0
+
+        # Deliberately leave attached path values such as --out=path alone.
+        [[ -n "$attach" ]] && return 0
+        _files && ret=0
+        return ret
+    fi
+
+    candidates=("${(@f)output}")
+    candidates=("${(@)candidates:#}")
+    (( ${#candidates} )) || return 0
+    compadd -a candidates
+}
+
+if [[ "$funcstack[1]" == _graphene ]]; then
+    _graphene "$@"
+else
+    compdef _graphene graphene gn
+fi

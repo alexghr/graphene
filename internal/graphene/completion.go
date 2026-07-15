@@ -11,6 +11,9 @@ import (
 //go:embed graphene.bash
 var bashCompletion string
 
+//go:embed _graphene
+var zshCompletion string
+
 var publicCompletionCommands = []string{
 	"abort",
 	"aliases",
@@ -82,10 +85,19 @@ type completionValue struct {
 }
 
 func (a *App) completion(args []string) error {
-	if len(args) != 1 || args[0] != "bash" {
-		return fmt.Errorf("usage: graphene completion bash")
+	if len(args) != 1 {
+		return fmt.Errorf("usage: graphene completion <bash|zsh>")
 	}
-	_, err := io.WriteString(a.stdout, bashCompletion)
+	var content string
+	switch args[0] {
+	case "bash":
+		content = bashCompletion
+	case "zsh":
+		content = zshCompletion
+	default:
+		return fmt.Errorf("usage: graphene completion <bash|zsh>")
+	}
+	_, err := io.WriteString(a.stdout, content)
 	return err
 }
 
@@ -132,7 +144,7 @@ func (a *App) completionCandidates(line string) completionResult {
 	switch command {
 	case "completion":
 		if len(completionPositionals(before, nil)) == 0 {
-			return completeStatic(current, append([]string{"bash"}, commandCompletionFlags[command]...))
+			return completeStatic(current, append([]string{"bash", "zsh"}, commandCompletionFlags[command]...))
 		}
 		return completionResult{}
 	case "help":

@@ -246,7 +246,7 @@ func (a *App) usage(w io.Writer) {
   graphene go <up|down|top|bottom> [number]
   graphene graph [-s|--stack]
   graphene skill [--codex|--claude|--out <path>]
-  graphene completion bash
+  graphene completion <bash|zsh>
   graphene version
 
 run "graphene help <command>" for command-specific help`)
@@ -310,7 +310,7 @@ options:
       --codex       install to ~/.codex/skills/graphene-stacked-prs/SKILL.md
       --claude      install to ~/.claude/skills/graphene-stacked-prs/SKILL.md
       --out <path>  write SKILL.md to this path; use - for stdout`,
-		"completion": "usage: graphene completion bash\n\nWrite the Bash completion script to stdout.",
+		"completion": "usage: graphene completion <bash|zsh>\n\nWrite the completion script for Bash or Zsh to stdout.",
 		"continue": "usage: graphene continue\n\nContinue the current Git rebase and any queued Graphene restacks.",
 		"abort":    "usage: graphene abort\n\nAbort the current Git rebase and clear queued Graphene restacks.",
 		"config": `usage: graphene config <get|set|unset> [--global|--local] <key> [value]

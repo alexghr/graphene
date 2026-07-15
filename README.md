@@ -14,13 +14,25 @@ curl -fL -o "$HOME/.local/bin/graphene" "https://github.com/alexghr/graphene/rel
 chmod +x "$HOME/.local/bin/graphene"
 ```
 
-Add Graphene to your Bash startup file, define the `gn` alias used below, and
-enable tab completion:
+Add Graphene to your shell startup file, define the `gn` alias used below, and
+enable tab completion.
+
+For Bash:
 
 ```
 export PATH="$HOME/.local/bin:$PATH"
 alias gn=graphene
 source <(graphene completion bash)
+```
+
+For Zsh, initialize its completion system before sourcing Graphene's script:
+
+```
+export PATH="$HOME/.local/bin:$PATH"
+alias gn=graphene
+autoload -Uz compinit
+compinit
+source <(graphene completion zsh)
 ```
 
 ## Workflow
