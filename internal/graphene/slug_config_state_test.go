@@ -440,6 +440,20 @@ func TestParseArgs(t *testing.T) {
 	if syncOpts.all || !syncOpts.dryRun {
 		t.Fatalf("parseSyncArgs --dry-run = %#v", syncOpts)
 	}
+	syncOpts, err = parseSyncArgs([]string{"--assume-merged"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !syncOpts.assumeMerged {
+		t.Fatalf("parseSyncArgs --assume-merged = %#v", syncOpts)
+	}
+	syncOpts, err = parseSyncArgs([]string{"--assume-merged", "--no-assume-merged"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if syncOpts.assumeMerged {
+		t.Fatalf("parseSyncArgs --no-assume-merged = %#v", syncOpts)
+	}
 	syncOpts, err = parseSyncArgs([]string{"-anf", "--dry-run=false"})
 	if err != nil {
 		t.Fatal(err)

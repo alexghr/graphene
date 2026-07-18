@@ -55,7 +55,7 @@ var commandCompletionFlags = map[string][]string{
 	"skill":      {"--codex", "--claude", "--out", "-h", "--help"},
 	"split":      {"-h", "--help"},
 	"squash":     {"-c", "--count", "-m", "--message", "--no-edit", "--no-verify", "--gpg-sign", "--no-gpg-sign", "-h", "--help"},
-	"sync":       {"-a", "--all", "-n", "--dry-run", "-f", "--force", "-h", "--help"},
+	"sync":       {"-a", "--all", "-n", "--dry-run", "-f", "--force", "--assume-merged", "-h", "--help"},
 	"track":      {"-p", "--parent", "--base", "-h", "--help"},
 	"version":    {"-h", "--help"},
 }

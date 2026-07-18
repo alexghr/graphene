@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -811,6 +812,17 @@ func (a *App) defaultSquashMessage(branches []string) (string, error) {
 
 func (a *App) restoreOriginalRewrite(original State, refs map[string]string, resetBranch, returnBranch string) error {
 	if resetBranch != "" {
+		if ref := refs[resetBranch]; ref != "" {
+			exists, err := a.git.BranchExists(resetBranch)
+			if err != nil {
+				return err
+			}
+			if !exists {
+				if err := a.git.OutputErr("update-ref", "refs/heads/"+resetBranch, ref); err != nil {
+					return err
+				}
+			}
+		}
 		if err := a.git.Run("switch", "--force", resetBranch); err != nil {
 			return err
 		}
@@ -1046,10 +1058,7 @@ func (a *App) continueRebase(args []string) error {
 	if err != nil {
 		return err
 	}
-	if state.Pending == nil || len(state.Pending.Queue) == 0 {
-		if state.Pending != nil && state.Pending.Operation == "split" {
-			return fmt.Errorf("split in progress; use graphene new to commit split parts or graphene abort")
-		}
+	if state.Pending == nil {
 		inProgress, err := a.git.RebaseInProgress()
 		if err != nil {
 			return err
@@ -1061,6 +1070,19 @@ func (a *App) continueRebase(args []string) error {
 			return err
 		}
 		return a.clearPendingIfRebaseDone()
+	}
+	if len(state.Pending.Queue) == 0 {
+		if state.Pending.Operation == "split" {
+			return fmt.Errorf("split in progress; use graphene new to commit split parts or graphene abort")
+		}
+		inProgress, err := a.git.RebaseInProgress()
+		if err != nil {
+			return err
+		}
+		if inProgress {
+			return fmt.Errorf("pending %s has no queued rebase", state.Pending.Operation)
+		}
+		return a.finishPendingRebases(state)
 	}
 
 	inProgress, err := a.git.RebaseInProgress()
@@ -1079,11 +1101,11 @@ func (a *App) continueRebase(args []string) error {
 			return nil
 		}
 		state.Pending.Queue = state.Pending.Queue[1:]
-		if len(state.Pending.Queue) == 0 {
-			return a.finishPendingRebases(state)
-		}
 		if err := a.git.WriteState(state); err != nil {
 			return err
+		}
+		if len(state.Pending.Queue) == 0 {
+			return a.finishPendingRebases(state)
 		}
 	}
 	return a.runPendingRebases(state)
@@ -1254,6 +1276,9 @@ func (a *App) abortRebase(args []string) error {
 	if state.Pending != nil && state.Pending.Operation == "squash" {
 		return a.abortSquash(state, inProgress)
 	}
+	if state.Pending != nil && state.Pending.Operation == "sync" {
+		return a.abortSync(state, inProgress)
+	}
 	if inProgress {
 		if err := a.git.Run("rebase", "--abort"); err != nil {
 			return err
@@ -1338,6 +1363,29 @@ func (a *App) abortSquash(state State, rebaseInProgress bool) error {
 		returnBranch = pending.ReturnBranch
 	}
 	return a.restoreOriginalRewrite(State{Stacks: cloneStacks(pending.OriginalStacks)}, pending.OriginalRefs, pending.Branch, returnBranch)
+}
+
+func (a *App) abortSync(state State, rebaseInProgress bool) error {
+	pending := state.Pending
+	if pending == nil || pending.Operation != "sync" {
+		return fmt.Errorf("no sync in progress")
+	}
+	if rebaseInProgress {
+		if err := a.git.Run("rebase", "--abort"); err != nil {
+			return err
+		}
+	}
+	if len(pending.OriginalRefs) == 0 {
+		state.Pending = nil
+		return a.git.WriteState(state)
+	}
+
+	resetBranch, err := a.git.Output("branch", "--show-current")
+	if err != nil {
+		return err
+	}
+	original := State{Stacks: cloneStacks(pending.OriginalStacks)}
+	return a.restoreOriginalRewrite(original, pending.OriginalRefs, resetBranch, pending.Branch)
 }
 
 func (a *App) forget(args []string) error {
@@ -1920,15 +1968,6 @@ func formatAvailableStackBases(state State) string {
 	return " (available bases: " + strings.Join(bases, ", ") + ")"
 }
 
-func (s syncSelection) ContainsStack(index int) bool {
-	for _, path := range s.Paths {
-		if path.StackIndex == index {
-			return true
-		}
-	}
-	return false
-}
-
 func (s syncSelection) ReturnBranch(firstRemaining map[int]int) string {
 	if s.BaseCurrent || len(s.Paths) == 0 {
 		return s.Current
@@ -2015,7 +2054,7 @@ func (a *App) sync(args []string) error {
 		if err != nil {
 			return err
 		}
-		baseRef = syncBaseRef(selection.Base, fetched)
+		baseRef = fetched.Updated
 	}
 
 	for _, path := range selection.Paths {
@@ -2025,26 +2064,11 @@ func (a *App) sync(args []string) error {
 	}
 
 	oldRefs := a.stateRefs(state)
-	if !opts.dryRun {
-		if dryRunFetch {
-			baseRef, err = a.fetchSyncBase(selection.Base, current)
-			if err != nil {
-				return err
-			}
-		} else {
-			baseRef, err = a.advanceSyncBase(selection.Base, current, fetched)
-			if err != nil {
-				return err
-			}
-		}
-	}
-
-	deletedUpstreams, err := a.deletedSyncUpstreamBranches(selection)
-	if err != nil {
-		return err
-	}
-
 	var branches []string
+	var appliedBranches []string
+	var assumedMergedBranches []string
+	var ambiguousBranches []string
+	remoteRefExists := map[string]bool{}
 	firstRemaining := map[int]int{}
 	for _, path := range selection.Paths {
 		applied, err := a.appliedPrefixBranches(baseRef, path.Stack.Branches[:path.BranchLimit], oldRefs)
@@ -2052,27 +2076,56 @@ func (a *App) sync(args []string) error {
 			return err
 		}
 		removed := append([]string(nil), applied...)
-		for _, branch := range path.Stack.Branches[len(applied):path.BranchLimit] {
-			if !deletedUpstreams[branch] {
+		appliedBranches = append(appliedBranches, applied...)
+		remaining := path.Stack.Branches[len(applied):path.BranchLimit]
+		var missing []string
+		for _, branch := range remaining {
+			upstreamMissing, err := a.syncUpstreamMissing(branch, remoteRefExists)
+			if err != nil {
+				return err
+			}
+			if !upstreamMissing {
 				break
 			}
-			removed = append(removed, branch)
+			missing = append(missing, branch)
+		}
+		if len(missing) > 0 {
+			ambiguousBranches = append(ambiguousBranches, missing...)
+			if opts.assumeMerged {
+				for _, branch := range missing {
+					removed = append(removed, branch)
+					assumedMergedBranches = append(assumedMergedBranches, branch)
+				}
+			}
 		}
 		firstRemaining[path.StackIndex] = len(removed)
 		branches = append(branches, removed...)
 	}
+	if len(ambiguousBranches) > 0 && !opts.assumeMerged {
+		quoted := make([]string, len(ambiguousBranches))
+		for i, branch := range ambiguousBranches {
+			quoted[i] = fmt.Sprintf("%q", branch)
+		}
+		return fmt.Errorf("configured upstreams no longer exist for unapplied branches %s; refusing to delete them (verify every PR was merged, then preview with graphene sync --dry-run --assume-merged)", strings.Join(quoted, ", "))
+	}
 
 	nextState := RemoveBranchesWithBase(state, branches, selection.Base)
 	baseChanges := branchBaseChanges(state, nextState)
-	deleted := map[string]bool{}
-	for _, branch := range branches {
-		deleted[branch] = true
-	}
 
 	returnBranch := selection.ReturnBranch(firstRemaining)
 
 	var ops []RebaseOp
 	var rewritten []string
+	rewrittenSet := map[string]bool{}
+	markRewritten := func(branches []string) {
+		for _, branch := range branches {
+			if branch == "" || rewrittenSet[branch] {
+				continue
+			}
+			rewritten = append(rewritten, branch)
+			rewrittenSet[branch] = true
+		}
+	}
 	skipTops := map[string]bool{}
 	for _, path := range selection.Paths {
 		first := firstRemaining[path.StackIndex]
@@ -2108,7 +2161,7 @@ func (a *App) sync(args []string) error {
 			Upstream: upstream,
 			Top:      top,
 		})
-		rewritten = append(rewritten, stack.Branches[first:topIndex+1]...)
+		markRewritten(stack.Branches[first : topIndex+1])
 		if topIndex == len(stack.Branches)-1 {
 			skipTops[top] = true
 		}
@@ -2117,28 +2170,17 @@ func (a *App) sync(args []string) error {
 		}
 	}
 
-	for i, dependent := range state.Stacks {
-		if selection.ContainsStack(i) || !deleted[dependent.Base] || len(dependent.Branches) == 0 {
-			continue
-		}
-		if err := a.validateStackShape(dependent); err != nil {
-			return err
-		}
-		upstream := oldRefs[dependent.Base]
-		if upstream == "" {
-			return fmt.Errorf("missing old ref for %q", dependent.Base)
-		}
-		top := dependent.Branches[len(dependent.Branches)-1]
-		ops = append(ops, RebaseOp{
-			Onto:     baseRef,
-			Upstream: upstream,
-			Top:      top,
-		})
-		rewritten = append(rewritten, dependent.Branches...)
-		skipTops[top] = true
-		if returnBranch == "" {
-			returnBranch = dependent.Branches[0]
-		}
+	retarget, err := a.planSyncRetargets(state, nextState, baseChanges, oldRefs, selection.Base, baseRef, rewrittenSet)
+	if err != nil {
+		return err
+	}
+	ops = append(ops, retarget.Ops...)
+	markRewritten(retarget.Branches)
+	for _, op := range retarget.Ops {
+		skipTops[op.Top] = true
+	}
+	if returnBranch == "" {
+		returnBranch = retarget.FirstBranch
 	}
 
 	restackOps, err := RestackOpsAfterRewrites(nextState, rewritten, oldRefs, skipTops)
@@ -2151,45 +2193,155 @@ func (a *App) sync(args []string) error {
 	}
 
 	if opts.dryRun {
-		a.printSyncDryRun(basePlan, branches, baseChanges, ops, returnBranch, baseRef)
+		a.printSyncDryRun(basePlan, appliedBranches, assumedMergedBranches, baseChanges, ops, returnBranch, baseRef)
 		return nil
 	}
 
-	if len(ops) == 0 {
-		if returnBranch != "" {
-			if err := a.git.Run("switch", returnBranch); err != nil {
-				return err
-			}
-		} else if err := a.switchToBaseOrDetach(selection.Base, baseRef); err != nil {
+	advanceBase := false
+	if !dryRunFetch {
+		advanceBase, err = a.syncBaseUpdateRequired(selection.Base, current, fetched)
+		if err != nil {
 			return err
 		}
-		if err := a.deleteBranches(branches); err != nil {
+	}
+	originalRefs, err := a.syncMutationRefs(current, selection.Base, advanceBase, branches, ops)
+	if err != nil {
+		return err
+	}
+
+	pendingReturnBranch := returnBranch
+	pendingReturnRef := ""
+	if pendingReturnBranch == "" {
+		pendingReturnBranch = selection.Base
+		pendingReturnRef, err = a.git.Output("rev-parse", "--verify", baseRef+"^{commit}")
+		if err != nil {
 			return err
 		}
-		if err := a.git.WriteState(nextState); err != nil {
-			return err
-		}
-		a.printSyncBaseChanges(baseChanges)
-		return nil
 	}
 
 	pending, err := a.pendingForCurrentWorktree(Pending{
-		Operation:    "sync",
-		Branch:       returnBranch,
-		ReturnBranch: returnBranch,
-		Queue:        ops,
-		Branches:     branches,
-		NextStacks:   nextState.Stacks,
-		BaseChanges:  baseChanges,
+		Operation:      "sync",
+		Branch:         current,
+		ReturnBranch:   pendingReturnBranch,
+		ReturnRef:      pendingReturnRef,
+		Queue:          ops,
+		Branches:       branches,
+		NextStacks:     nextState.Stacks,
+		BaseChanges:    baseChanges,
+		OriginalRefs:   originalRefs,
+		OriginalStacks: cloneStacks(state.Stacks),
 	})
 	if err != nil {
 		return err
+	}
+	pending.SyncBase = selection.Base
+	pending.SyncBaseUpdate = advanceBase
+	if dryRunFetch {
+		pending.SyncBaseOld = basePlan.Old
+		pending.SyncBaseNew = basePlan.Updated
+	} else {
+		pending.SyncBaseOld = fetched.Old
+		pending.SyncBaseNew = fetched.Updated
 	}
 	state.Pending = pending
 	if err := a.git.WriteState(state); err != nil {
 		return err
 	}
+	if len(ops) == 0 {
+		return a.finishPendingRebases(state)
+	}
 	return a.runPendingRebases(state)
+}
+
+type syncRetargetPlan struct {
+	Ops         []RebaseOp
+	Branches    []string
+	FirstBranch string
+}
+
+// planSyncRetargets requires every logical parent change to have a matching,
+// disjoint Git rewrite before sync can commit the planned state.
+func (a *App) planSyncRetargets(before, after State, changes []BaseChange, oldRefs map[string]string, base, baseRef string, alreadyRewritten map[string]bool) (syncRetargetPlan, error) {
+	changed := map[string]bool{}
+	for _, change := range changes {
+		if changed[change.Branch] {
+			return syncRetargetPlan{}, fmt.Errorf("cannot safely sync duplicate parent change for %q", change.Branch)
+		}
+		changed[change.Branch] = true
+	}
+
+	covered := map[string]bool{}
+	for branch, rewritten := range alreadyRewritten {
+		if rewritten {
+			covered[branch] = true
+		}
+	}
+
+	var plan syncRetargetPlan
+	for _, change := range changes {
+		if change.NewBase != base {
+			return syncRetargetPlan{}, fmt.Errorf("cannot safely sync parent change for %q from %q to %q", change.Branch, change.OldBase, change.NewBase)
+		}
+		if covered[change.Branch] {
+			continue
+		}
+
+		loc, ok := after.BranchLocation(change.Branch)
+		if !ok {
+			return syncRetargetPlan{}, fmt.Errorf("missing retargeted branch %q from planned state", change.Branch)
+		}
+		stack, ok := after.StackAt(loc.StackIndex)
+		if !ok || loc.BranchIndex != 0 || stack.Base != change.NewBase {
+			return syncRetargetPlan{}, fmt.Errorf("cannot safely sync non-prefix parent change for %q", change.Branch)
+		}
+
+		parent := change.OldBase
+		for i, branch := range stack.Branches {
+			if covered[branch] {
+				return syncRetargetPlan{}, fmt.Errorf("cannot safely sync overlapping rewrite for %q", branch)
+			}
+			if i > 0 {
+				if changed[branch] {
+					return syncRetargetPlan{}, fmt.Errorf("cannot safely sync multiple parent changes in stack containing %q", change.Branch)
+				}
+			}
+			oldParent, ok := BaseBranch(before, branch)
+			if !ok || oldParent != parent {
+				return syncRetargetPlan{}, fmt.Errorf("cannot safely sync non-linear retargeted stack at %q", branch)
+			}
+			parent = branch
+		}
+
+		upstream := oldRefs[change.OldBase]
+		if upstream == "" {
+			return syncRetargetPlan{}, fmt.Errorf("missing old ref for %q", change.OldBase)
+		}
+		retargeted := Stack{Base: change.OldBase, Branches: stack.Branches}
+		if err := a.validateStackShapeFromBase(retargeted, upstream, change.OldBase); err != nil {
+			return syncRetargetPlan{}, err
+		}
+
+		top := stack.Branches[len(stack.Branches)-1]
+		plan.Ops = append(plan.Ops, RebaseOp{
+			Onto:     baseRef,
+			Upstream: upstream,
+			Top:      top,
+		})
+		plan.Branches = append(plan.Branches, stack.Branches...)
+		if plan.FirstBranch == "" {
+			plan.FirstBranch = change.Branch
+		}
+		for _, branch := range stack.Branches {
+			covered[branch] = true
+		}
+	}
+
+	for _, change := range changes {
+		if !covered[change.Branch] {
+			return syncRetargetPlan{}, fmt.Errorf("sync plan does not rewrite retargeted branch %q", change.Branch)
+		}
+	}
+	return plan, nil
 }
 
 type syncSkippedPath struct {
@@ -2653,17 +2805,20 @@ func (a *App) clearPendingIfRebaseDone() error {
 }
 
 func (a *App) runPendingRebases(state State) error {
+	if err := a.ensurePendingSyncBase(state.Pending); err != nil {
+		return err
+	}
 	for state.Pending != nil && len(state.Pending.Queue) > 0 {
 		op := state.Pending.Queue[0]
 		if err := a.git.Run("rebase", "--update-refs", "--onto", op.Onto, op.Upstream, op.Top); err != nil {
 			return err
 		}
 		state.Pending.Queue = state.Pending.Queue[1:]
-		if len(state.Pending.Queue) == 0 {
-			return a.finishPendingRebases(state)
-		}
 		if err := a.git.WriteState(state); err != nil {
 			return err
+		}
+		if len(state.Pending.Queue) == 0 {
+			return a.finishPendingRebases(state)
 		}
 	}
 	return nil
@@ -2671,11 +2826,15 @@ func (a *App) runPendingRebases(state State) error {
 
 func (a *App) finishPendingRebases(state State) error {
 	returnBranch := ""
+	returnRef := ""
+	operation := ""
 	var appliedBranches []string
 	var baseChanges []BaseChange
 	var nextStacks []Stack
 	if state.Pending != nil {
+		operation = state.Pending.Operation
 		returnBranch = state.Pending.ReturnBranch
+		returnRef = state.Pending.ReturnRef
 		nextStacks = state.Pending.NextStacks
 		if state.Pending.Operation == "sync" || state.Pending.Operation == "squash" {
 			appliedBranches = append([]string(nil), state.Pending.Branches...)
@@ -2684,13 +2843,33 @@ func (a *App) finishPendingRebases(state State) error {
 			baseChanges = append([]BaseChange(nil), state.Pending.BaseChanges...)
 		}
 	}
+	if err := a.ensurePendingSyncBase(state.Pending); err != nil {
+		return err
+	}
 	if returnBranch != "" {
-		if err := a.git.Run("switch", returnBranch); err != nil {
-			return err
+		if returnRef != "" {
+			if err := a.switchToBaseOrDetach(returnBranch, returnRef); err != nil {
+				return err
+			}
+		} else {
+			if err := a.git.Run("switch", returnBranch); err != nil {
+				return err
+			}
 		}
 	}
 	if len(appliedBranches) > 0 {
-		if err := a.deleteBranches(appliedBranches); err != nil {
+		var err error
+		if operation == "sync" {
+			if len(state.Pending.OriginalRefs) == 0 {
+				// Pending syncs created before transactional snapshots used branch -D.
+				err = a.deleteBranches(appliedBranches)
+			} else {
+				err = a.deleteBranchRefs(appliedBranches, state.Pending.OriginalRefs)
+			}
+		} else {
+			err = a.deleteBranches(appliedBranches)
+		}
+		if err != nil {
 			return err
 		}
 		if nextStacks == nil {
@@ -2703,6 +2882,11 @@ func (a *App) finishPendingRebases(state State) error {
 	state.Pending = nil
 	if err := a.git.WriteState(state); err != nil {
 		return err
+	}
+	if operation == "sync" {
+		if err := a.deleteBranchConfigs(appliedBranches); err != nil {
+			return fmt.Errorf("sync completed, but branch config cleanup failed: %w", err)
+		}
 	}
 	a.printSyncBaseChanges(baseChanges)
 	return nil
@@ -2718,7 +2902,7 @@ func (a *App) printSyncBaseChanges(changes []BaseChange) {
 	}
 }
 
-func (a *App) printSyncDryRun(base syncBaseDryRun, branches []string, changes []BaseChange, ops []RebaseOp, returnBranch, baseRef string) {
+func (a *App) printSyncDryRun(base syncBaseDryRun, appliedBranches, assumedMergedBranches []string, changes []BaseChange, ops []RebaseOp, returnBranch, baseRef string) {
 	fmt.Fprintf(a.stdout, "Dry run: sync %s\n", base.Branch)
 	fmt.Fprintf(a.stdout, "  fetch: %s\n", base.UpstreamName())
 	if base.Old == base.Updated {
@@ -2727,11 +2911,17 @@ func (a *App) printSyncDryRun(base syncBaseDryRun, branches []string, changes []
 		fmt.Fprintf(a.stdout, "  base: %s %s -> %s\n", base.Branch, shortSyncRef(base.Old), shortSyncRef(base.Updated))
 	}
 
-	if len(branches) == 0 {
+	if len(appliedBranches) == 0 {
 		fmt.Fprintln(a.stdout, "  delete applied branches: none")
 	} else {
 		fmt.Fprintln(a.stdout, "  delete applied branches:")
-		for _, branch := range branches {
+		for _, branch := range appliedBranches {
+			fmt.Fprintf(a.stdout, "    %s\n", branch)
+		}
+	}
+	if len(assumedMergedBranches) > 0 {
+		fmt.Fprintln(a.stdout, "  delete branches assumed merged:")
+		for _, branch := range assumedMergedBranches {
 			fmt.Fprintf(a.stdout, "    %s\n", branch)
 		}
 	}
@@ -2757,13 +2947,6 @@ func (a *App) printSyncDryRun(base syncBaseDryRun, branches []string, changes []
 	} else {
 		fmt.Fprintf(a.stdout, "  return: detach at %s\n", shortSyncRef(baseRef))
 	}
-}
-
-func (a *App) fetchSyncBase(base, current string) (string, error) {
-	if base == current {
-		return a.fetchCurrentBase(base)
-	}
-	return a.fetchBase(base)
 }
 
 func (a *App) updateTrackParentFromUpstream(base, branch string) error {
@@ -2893,13 +3076,6 @@ type fetchedBase struct {
 	Updated string
 }
 
-func syncBaseRef(base string, fetched fetchedBase) string {
-	if fetched.Old == fetched.Updated {
-		return base
-	}
-	return fetched.Updated
-}
-
 func (a *App) fetchBaseUpdate(base string) (fetchedBase, error) {
 	remote, merge, err := a.git.Upstream(base)
 	if err != nil {
@@ -2932,42 +3108,25 @@ func (a *App) fetchBaseUpdate(base string) (fetchedBase, error) {
 	return fetchedBase{Old: oldBase, Updated: updatedBase}, nil
 }
 
-func (a *App) deletedSyncUpstreamBranches(selection syncSelection) (map[string]bool, error) {
-	deleted := map[string]bool{}
-	seen := map[string]bool{}
-	exists := map[string]bool{}
-
-	for _, path := range selection.Paths {
-		for _, branch := range path.Stack.Branches[:path.BranchLimit] {
-			if seen[branch] {
-				continue
-			}
-			seen[branch] = true
-
-			remote, merge, err := a.git.Upstream(branch)
-			if err != nil {
-				return nil, err
-			}
-			if remote == "" || merge == "" {
-				continue
-			}
-
-			key := remote + "\x00" + merge
-			remoteHasRef, ok := exists[key]
-			if !ok {
-				remoteHasRef, err = a.remoteRefExists(remote, merge)
-				if err != nil {
-					return nil, err
-				}
-				exists[key] = remoteHasRef
-			}
-			if !remoteHasRef {
-				deleted[branch] = true
-			}
-		}
+func (a *App) syncUpstreamMissing(branch string, remoteRefExists map[string]bool) (bool, error) {
+	remote, merge, err := a.git.Upstream(branch)
+	if err != nil {
+		return false, err
+	}
+	if remote == "" || merge == "" {
+		return false, nil
 	}
 
-	return deleted, nil
+	key := remote + "\x00" + merge
+	exists, ok := remoteRefExists[key]
+	if !ok {
+		exists, err = a.remoteRefExists(remote, merge)
+		if err != nil {
+			return false, err
+		}
+		remoteRefExists[key] = exists
+	}
+	return !exists, nil
 }
 
 func (a *App) remoteRefExists(remote, ref string) (bool, error) {
@@ -2981,45 +3140,60 @@ func (a *App) remoteRefExists(remote, ref string) (bool, error) {
 	return false, err
 }
 
-func (a *App) fetchCurrentBase(base string) (string, error) {
-	fetched, err := a.fetchBaseUpdate(base)
-	if err != nil {
-		return "", err
-	}
-	return a.advanceSyncBase(base, base, fetched)
-}
-
-func (a *App) fetchBase(base string) (string, error) {
-	fetched, err := a.fetchBaseUpdate(base)
-	if err != nil {
-		return "", err
-	}
-	return a.advanceSyncBase(base, "", fetched)
-}
-
-func (a *App) advanceSyncBase(base, current string, fetched fetchedBase) (string, error) {
+func (a *App) syncBaseUpdateRequired(base, current string, fetched fetchedBase) (bool, error) {
 	if fetched.Old == fetched.Updated {
-		return base, nil
+		return false, nil
 	}
-
 	if base == current {
-		if err := a.git.Run("merge", "--ff-only", fetched.Updated); err != nil {
-			return "", err
-		}
-		return base, nil
+		return true, nil
 	}
-
 	checkedOut, err := a.git.BranchCheckedOut(base)
 	if err != nil {
-		return "", err
+		return false, err
+	}
+	return !checkedOut, nil
+}
+
+func (a *App) ensurePendingSyncBase(pending *Pending) error {
+	if pending == nil || pending.Operation != "sync" || pending.SyncBase == "" {
+		return nil
+	}
+	if pending.SyncBaseOld == "" || pending.SyncBaseNew == "" {
+		return fmt.Errorf("pending sync has incomplete base update for %q", pending.SyncBase)
+	}
+
+	currentRef, err := a.git.Output("rev-parse", "--verify", "refs/heads/"+pending.SyncBase+"^{commit}")
+	if err != nil {
+		return err
+	}
+	if currentRef == pending.SyncBaseNew {
+		return nil
+	}
+	if !pending.SyncBaseUpdate {
+		if currentRef == pending.SyncBaseOld {
+			return nil
+		}
+		return fmt.Errorf("cannot resume sync because base %q moved from %s to %s", pending.SyncBase, shortSyncRef(pending.SyncBaseOld), shortSyncRef(currentRef))
+	}
+	if currentRef != pending.SyncBaseOld {
+		return fmt.Errorf("cannot resume sync because base %q moved from %s to %s", pending.SyncBase, shortSyncRef(pending.SyncBaseOld), shortSyncRef(currentRef))
+	}
+
+	currentBranch, err := a.git.Output("branch", "--show-current")
+	if err != nil {
+		return err
+	}
+	if currentBranch == pending.SyncBase {
+		return a.git.Run("merge", "--ff-only", pending.SyncBaseNew)
+	}
+	checkedOut, err := a.git.BranchCheckedOut(pending.SyncBase)
+	if err != nil {
+		return err
 	}
 	if checkedOut {
-		return fetched.Updated, nil
+		return fmt.Errorf("cannot resume sync while base branch %q is checked out in another worktree", pending.SyncBase)
 	}
-	if err := a.git.OutputErr("update-ref", "refs/heads/"+base, fetched.Updated, fetched.Old); err != nil {
-		return "", err
-	}
-	return base, nil
+	return a.git.OutputErr("update-ref", "refs/heads/"+pending.SyncBase, pending.SyncBaseNew, pending.SyncBaseOld)
 }
 
 func (a *App) fetchSyncBaseDryRun(base string) (string, syncBaseDryRun, error) {
@@ -3057,11 +3231,7 @@ func (a *App) fetchSyncBaseDryRun(base string) (string, syncBaseDryRun, error) {
 		return "", syncBaseDryRun{}, fmt.Errorf("cannot fast-forward %q to %q; resolve the base branch before updating the stack", base, base+"@{upstream}")
 	}
 
-	baseRef := base
-	if oldBase != updatedBase {
-		baseRef = updatedBase
-	}
-	return baseRef, syncBaseDryRun{
+	return updatedBase, syncBaseDryRun{
 		Branch:  base,
 		Remote:  remote,
 		Merge:   merge,
@@ -3075,6 +3245,52 @@ func (a *App) switchToBaseOrDetach(base, baseRef string) error {
 		return nil
 	}
 	return a.git.Run("switch", "--detach", baseRef)
+}
+
+func (a *App) deleteBranchRefs(branches []string, originalRefs map[string]string) error {
+	for _, branch := range branches {
+		exists, err := a.git.BranchExists(branch)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			continue
+		}
+		checkedOut, err := a.git.BranchCheckedOut(branch)
+		if err != nil {
+			return err
+		}
+		if checkedOut {
+			return fmt.Errorf("branch %q is checked out in a worktree; switch that worktree away before continuing sync", branch)
+		}
+		expected := originalRefs[branch]
+		if expected == "" {
+			return fmt.Errorf("cannot safely delete branch %q without its original ref", branch)
+		}
+		// Preserve branch config until the final Graphene state is durable so
+		// abort can restore both the ref and its upstream after partial cleanup.
+		if err := a.git.OutputErr("update-ref", "-d", "refs/heads/"+branch, expected); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (a *App) deleteBranchConfigs(branches []string) error {
+	for _, branch := range branches {
+		pattern := "^branch[.]" + regexp.QuoteMeta(branch) + "[.]"
+		_, err := a.git.Output("config", "--local", "--get-regexp", pattern)
+		if isGitExit(err, 1) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if err := a.git.OutputErr("config", "--local", "--remove-section", "branch."+branch); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (a *App) deleteBranches(branches []string) error {
@@ -3091,10 +3307,6 @@ func (a *App) deleteBranches(branches []string) error {
 		}
 	}
 	return nil
-}
-
-func (a *App) validateStackShape(stack Stack) error {
-	return a.validateStackShapeFromBase(stack, stack.Base, stack.Base)
 }
 
 func (a *App) validateStackShapeFromBase(stack Stack, baseRef, baseName string) error {
@@ -3292,6 +3504,76 @@ func (a *App) stateRefs(state State) map[string]string {
 	return refs
 }
 
+func (a *App) localBranchRefs() (map[string]string, error) {
+	branches, err := a.git.LocalBranches()
+	if err != nil {
+		return nil, err
+	}
+	refs := make(map[string]string, len(branches))
+	for _, branch := range branches {
+		ref, err := a.git.Output("rev-parse", "--verify", "refs/heads/"+branch+"^{commit}")
+		if err != nil {
+			return nil, err
+		}
+		refs[branch] = ref
+	}
+	return refs, nil
+}
+
+// --update-refs also moves untracked local branches whose tips are in a rebase
+// range. Snapshot exactly those refs so abort does not touch unrelated branches.
+func (a *App) syncMutationRefs(current, base string, advanceBase bool, deleted []string, ops []RebaseOp) (map[string]string, error) {
+	localRefs, err := a.localBranchRefs()
+	if err != nil {
+		return nil, err
+	}
+	affected := map[string]string{}
+	add := func(branch string) {
+		if ref := localRefs[branch]; ref != "" {
+			affected[branch] = ref
+		}
+	}
+	if advanceBase {
+		add(base)
+	}
+	for _, branch := range deleted {
+		add(branch)
+	}
+
+	checkedOut := map[string]bool{}
+	for _, op := range ops {
+		add(op.Top)
+		out, err := a.git.Output("rev-list", op.Upstream+".."+op.Top)
+		if err != nil {
+			return nil, err
+		}
+		commits := map[string]bool{}
+		for _, commit := range strings.Fields(out) {
+			commits[commit] = true
+		}
+		for branch, ref := range localRefs {
+			if !commits[ref] || branch == op.Top {
+				continue
+			}
+			if branch != current {
+				isCheckedOut, ok := checkedOut[branch]
+				if !ok {
+					isCheckedOut, err = a.git.BranchCheckedOut(branch)
+					if err != nil {
+						return nil, err
+					}
+					checkedOut[branch] = isCheckedOut
+				}
+				if isCheckedOut {
+					continue
+				}
+			}
+			add(branch)
+		}
+	}
+	return affected, nil
+}
+
 func (a *App) trackedBranchRefs(state State) map[string]string {
 	seen := map[string]bool{}
 	refs := map[string]string{}
@@ -3433,9 +3715,10 @@ type restackOptions struct {
 }
 
 type syncOptions struct {
-	all    bool
-	dryRun bool
-	force  bool
+	all          bool
+	dryRun       bool
+	force        bool
+	assumeMerged bool
 }
 
 func parseNewArgs(args []string) (commitOptions, error) {
@@ -3497,7 +3780,7 @@ func parseSyncArgs(args []string) (syncOptions, error) {
 	cursor := flagparse.New(args)
 	for arg, ok := cursor.Next(); ok; arg, ok = cursor.Next() {
 		if arg.Positional() {
-			return opts, fmt.Errorf("unsupported argument %q; supported sync options are -a/--all, -n/--dry-run, and -f/--force", arg.Raw())
+			return opts, fmt.Errorf("unsupported argument %q; supported sync options are -a/--all, -n/--dry-run, -f/--force, and --assume-merged", arg.Raw())
 		}
 		if flag, ok := arg.Long(); ok {
 			switch {
@@ -3521,6 +3804,13 @@ func parseSyncArgs(args []string) (syncOptions, error) {
 				}
 				opts.force = value
 				continue
+			case flag.Name() == "assume-merged" || flag.Name() == "no-assume-merged":
+				value, _, err := flag.Bool("assume-merged")
+				if err != nil {
+					return opts, err
+				}
+				opts.assumeMerged = value
+				continue
 			}
 		}
 		if arg.ShortBoolCluster("anf", func(flag byte) {
@@ -3535,7 +3825,7 @@ func parseSyncArgs(args []string) (syncOptions, error) {
 		}) {
 			continue
 		}
-		return opts, fmt.Errorf("unsupported argument %q; supported sync options are -a/--all, -n/--dry-run, and -f/--force", arg.Raw())
+		return opts, fmt.Errorf("unsupported argument %q; supported sync options are -a/--all, -n/--dry-run, -f/--force, and --assume-merged", arg.Raw())
 	}
 	return opts, nil
 }

@@ -1967,6 +1967,166 @@ func TestSyncDryRunPrintsPlanWithoutChangingRefsOrState(t *testing.T) {
 	}
 }
 
+func TestSyncDoesNotProbeAppliedBranchUpstream(t *testing.T) {
+	t.Parallel()
+	repo := newTestRepo(t)
+
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	runGit(t, "", "init", "--bare", remote)
+	runGit(t, repo.dir, "remote", "add", "origin", remote)
+	runGit(t, repo.dir, "push", "-u", "origin", "main")
+
+	createStackBranch(t, repo, "one.txt", "one\n", "One")
+	inaccessible := filepath.Join(t.TempDir(), "does-not-exist.git")
+	runGit(t, repo.dir, "remote", "add", "inaccessible", inaccessible)
+	runGit(t, repo.dir, "config", "branch.stack/one.remote", "inaccessible")
+	runGit(t, repo.dir, "config", "branch.stack/one.merge", "refs/heads/stack/one")
+
+	other := filepath.Join(t.TempDir(), "other")
+	runGit(t, "", "clone", "--branch", "main", remote, other)
+	runGit(t, other, "config", "user.name", "Graphene Test")
+	runGit(t, other, "config", "user.email", "graphene@example.test")
+	runGit(t, other, "config", "commit.gpgsign", "false")
+	commitFile(t, other, "one.txt", "one\n", "One (#1)")
+	runGit(t, other, "push", "origin", "main")
+
+	runGit(t, repo.dir, "checkout", "main")
+	code, stdout, stderr := repo.runGraphene(t, "sync")
+	if code != 0 {
+		t.Fatalf("graphene sync exited %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if refExists(t, repo.dir, "refs/heads/stack/one") {
+		t.Fatal("stack/one still exists")
+	}
+	if got, want := runGit(t, repo.dir, "rev-parse", "main"), runGit(t, repo.dir, "rev-parse", "origin/main"); got != want {
+		t.Fatalf("main = %s, want origin/main %s", got, want)
+	}
+	if state := readState(t, repo.dir); len(state.Stacks) != 0 {
+		t.Fatalf("stacks = %#v, want empty", state.Stacks)
+	}
+}
+
+func TestSyncAllReportsEveryAmbiguousSiblingWithoutMutation(t *testing.T) {
+	t.Parallel()
+	repo := newTestRepo(t)
+
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	runGit(t, "", "init", "--bare", remote)
+	runGit(t, repo.dir, "remote", "add", "origin", remote)
+	runGit(t, repo.dir, "push", "-u", "origin", "main")
+
+	createStackBranch(t, repo, "one.txt", "one\n", "One")
+	runGit(t, repo.dir, "push", "-u", "origin", "stack/one")
+	runGit(t, repo.dir, "checkout", "main")
+	createStackBranch(t, repo, "two.txt", "two\n", "Two")
+	runGit(t, repo.dir, "push", "-u", "origin", "stack/two")
+
+	other := filepath.Join(t.TempDir(), "other")
+	runGit(t, "", "clone", "--branch", "main", remote, other)
+	runGit(t, other, "config", "user.name", "Graphene Test")
+	runGit(t, other, "config", "user.email", "graphene@example.test")
+	runGit(t, other, "config", "commit.gpgsign", "false")
+	runGit(t, other, "push", "origin", "--delete", "stack/one", "stack/two")
+	commitFile(t, other, "base.txt", "base update\n", "Base update")
+	runGit(t, other, "push", "origin", "main")
+
+	runGit(t, repo.dir, "checkout", "main")
+	refsBefore := map[string]string{
+		"main":      runGit(t, repo.dir, "rev-parse", "main"),
+		"stack/one": runGit(t, repo.dir, "rev-parse", "stack/one"),
+		"stack/two": runGit(t, repo.dir, "rev-parse", "stack/two"),
+	}
+	stateBefore := readState(t, repo.dir)
+
+	code, stdout, stderr := repo.runGraphene(t, "sync", "--all")
+	if code == 0 {
+		t.Fatalf("graphene sync --all unexpectedly succeeded\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
+	}
+	for _, branch := range []string{"stack/one", "stack/two"} {
+		if !strings.Contains(stderr, `"`+branch+`"`) {
+			t.Fatalf("stderr = %q, want ambiguous branch %q", stderr, branch)
+		}
+	}
+	for branch, want := range refsBefore {
+		if got := runGit(t, repo.dir, "rev-parse", branch); got != want {
+			t.Fatalf("%s changed from %s to %s after refused sync", branch, want, got)
+		}
+	}
+	if got := readState(t, repo.dir); !reflect.DeepEqual(got, stateBefore) {
+		t.Fatalf("state changed after refused sync from %#v to %#v", stateBefore, got)
+	}
+
+	code, stdout, stderr = repo.runGraphene(t, "sync", "--all", "--dry-run", "--assume-merged")
+	if code != 0 {
+		t.Fatalf("graphene sync --all --dry-run --assume-merged exited %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	wantAssumedMerged := "  delete branches assumed merged:\n    stack/one\n    stack/two\n"
+	if !strings.Contains(stdout, wantAssumedMerged) {
+		t.Fatalf("stdout = %q, want it to contain %q", stdout, wantAssumedMerged)
+	}
+	for branch, want := range refsBefore {
+		if got := runGit(t, repo.dir, "rev-parse", branch); got != want {
+			t.Fatalf("%s changed from %s to %s during dry run", branch, want, got)
+		}
+	}
+	if got := readState(t, repo.dir); !reflect.DeepEqual(got, stateBefore) {
+		t.Fatalf("state changed during dry run from %#v to %#v", stateBefore, got)
+	}
+}
+
+func TestSyncAssumeMergedStopsAtLiveUpstream(t *testing.T) {
+	t.Parallel()
+	repo := newTestRepo(t)
+
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	runGit(t, "", "init", "--bare", remote)
+	runGit(t, repo.dir, "remote", "add", "origin", remote)
+	runGit(t, repo.dir, "push", "-u", "origin", "main")
+
+	createStackBranch(t, repo, "applied.txt", "applied\n", "Applied")
+	createStackBranch(t, repo, "missing.txt", "missing\n", "Missing")
+	createStackBranch(t, repo, "live.txt", "live\n", "Live")
+	createStackBranch(t, repo, "later-missing.txt", "later missing\n", "Later missing")
+	runGit(t, repo.dir, "push", "-u", "origin", "stack/applied", "stack/missing", "stack/live", "stack/later-missing")
+
+	other := filepath.Join(t.TempDir(), "other")
+	runGit(t, "", "clone", "--branch", "main", remote, other)
+	runGit(t, other, "config", "user.name", "Graphene Test")
+	runGit(t, other, "config", "user.email", "graphene@example.test")
+	runGit(t, other, "config", "commit.gpgsign", "false")
+	commitFile(t, other, "applied.txt", "applied\n", "Applied (#1)")
+	runGit(t, other, "push", "origin", "main")
+	runGit(t, other, "push", "origin", "--delete", "stack/missing", "stack/later-missing")
+
+	runGit(t, repo.dir, "checkout", "main")
+	code, _, stderr := repo.runGraphene(t, "sync", "--dry-run")
+	if code == 0 {
+		t.Fatal("graphene sync --dry-run unexpectedly accepted a missing unapplied upstream")
+	}
+	if !strings.Contains(stderr, `"stack/missing"`) {
+		t.Fatalf("stderr = %q, want stack/missing", stderr)
+	}
+	if strings.Contains(stderr, `"stack/later-missing"`) {
+		t.Fatalf("stderr = %q, must not leapfrog the live stack/live upstream", stderr)
+	}
+
+	code, stdout, stderr := repo.runGraphene(t, "sync", "--dry-run", "--assume-merged")
+	if code != 0 {
+		t.Fatalf("graphene sync --dry-run --assume-merged exited %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	wantApplied := "  delete applied branches:\n    stack/applied\n"
+	if !strings.Contains(stdout, wantApplied) {
+		t.Fatalf("stdout = %q, want it to contain %q", stdout, wantApplied)
+	}
+	wantAssumedMerged := "  delete branches assumed merged:\n    stack/missing\n"
+	if !strings.Contains(stdout, wantAssumedMerged) {
+		t.Fatalf("stdout = %q, want it to contain %q", stdout, wantAssumedMerged)
+	}
+	if strings.Contains(stdout, "  delete branches assumed merged:\n    stack/missing\n    stack/later-missing\n") {
+		t.Fatalf("stdout = %q, must not leapfrog the live stack/live upstream", stdout)
+	}
+}
+
 func TestSyncFromBaseDeletesAppliedIntermediateBranches(t *testing.T) {
 	t.Parallel()
 	repo := newTestRepo(t)
@@ -2113,6 +2273,152 @@ func TestSyncRepairsDependentsAfterDeletingMergedAncestor(t *testing.T) {
 	}
 	if !reflect.DeepEqual(state.Stacks, want) {
 		t.Fatalf("stacks = %#v, want %#v", state.Stacks, want)
+	}
+}
+
+func TestSyncRebasesSurvivingStackSuffixAfterDeletingNestedPath(t *testing.T) {
+	t.Parallel()
+	repo := newTestRepo(t)
+
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	runGit(t, "", "init", "--bare", remote)
+	runGit(t, repo.dir, "remote", "add", "origin", remote)
+	runGit(t, repo.dir, "push", "-u", "origin", "main")
+
+	createStackBranch(t, repo, "one.txt", "one\n", "One")
+	createStackBranch(t, repo, "two.txt", "two\n", "Two")
+	createStackBranch(t, repo, "child.txt", "child\n", "Child")
+	createStackBranch(t, repo, "child-two.txt", "child two\n", "Child two")
+	runGit(t, repo.dir, "checkout", "stack/two")
+	createStackBranch(t, repo, "leaf.txt", "leaf\n", "Leaf")
+
+	state := readState(t, repo.dir)
+	wantSetup := []Stack{
+		{Base: "main", Branches: []string{"stack/one", "stack/two", "stack/child", "stack/child-two"}},
+		{Base: "stack/two", Branches: []string{"stack/leaf"}},
+	}
+	if !reflect.DeepEqual(state.Stacks, wantSetup) {
+		t.Fatalf("setup stacks = %#v, want %#v", state.Stacks, wantSetup)
+	}
+
+	runGit(t, repo.dir, "push", "-u", "origin", "stack/one", "stack/two", "stack/leaf")
+
+	other := filepath.Join(t.TempDir(), "other")
+	runGit(t, "", "clone", "--branch", "main", remote, other)
+	runGit(t, other, "config", "user.name", "Graphene Test")
+	runGit(t, other, "config", "user.email", "graphene@example.test")
+	runGit(t, other, "config", "commit.gpgsign", "false")
+	commitFile(t, other, "one.txt", "one\n", "One (#1)")
+	commitFile(t, other, "two.txt", "two\n", "Two (#2)")
+	commitFile(t, other, "leaf.txt", "leaf\n", "Leaf (#3)")
+	runGit(t, other, "push", "origin", "main")
+	runGit(t, other, "push", "origin", "--delete", "stack/one", "stack/two", "stack/leaf")
+
+	childBefore := runGit(t, repo.dir, "rev-parse", "stack/child")
+	childTwoBefore := runGit(t, repo.dir, "rev-parse", "stack/child-two")
+	code, stdout, stderr := repo.runGraphene(t, "sync", "--dry-run")
+	if code != 0 {
+		t.Fatalf("graphene sync --dry-run exited %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "git rebase --update-refs --onto") || !strings.Contains(stdout, " stack/child-two") {
+		t.Fatalf("stdout = %q, want surviving suffix rebase", stdout)
+	}
+	if got := runGit(t, repo.dir, "rev-parse", "stack/child"); got != childBefore {
+		t.Fatalf("stack/child changed during dry run from %s to %s", childBefore, got)
+	}
+	if got := runGit(t, repo.dir, "rev-parse", "stack/child-two"); got != childTwoBefore {
+		t.Fatalf("stack/child-two changed during dry run from %s to %s", childTwoBefore, got)
+	}
+	if got := readState(t, repo.dir); !reflect.DeepEqual(got, state) {
+		t.Fatalf("state changed during dry run from %#v to %#v", state, got)
+	}
+
+	expectGrapheneOK(t, repo, "sync")
+
+	main := runGit(t, repo.dir, "rev-parse", "main")
+	if got := runGit(t, repo.dir, "rev-parse", "origin/main"); got != main {
+		t.Fatalf("origin/main = %s, want main %s", got, main)
+	}
+	for _, branch := range []string{"stack/one", "stack/two", "stack/leaf"} {
+		if refExists(t, repo.dir, "refs/heads/"+branch) {
+			t.Fatalf("%s still exists", branch)
+		}
+	}
+	assertBranchParent(t, repo.dir, "stack/child", "main")
+	assertBranchParent(t, repo.dir, "stack/child-two", "stack/child")
+	for _, edge := range [][2]string{{"main", "stack/child"}, {"stack/child", "stack/child-two"}} {
+		if got := runGit(t, repo.dir, "rev-list", "--count", edge[0]+".."+edge[1]); got != "1" {
+			t.Fatalf("%s contains %s commits on top of %s, want 1", edge[1], got, edge[0])
+		}
+	}
+	if got := currentBranch(t, repo.dir); got != "stack/child" {
+		t.Fatalf("branch = %q, want stack/child", got)
+	}
+	state = readState(t, repo.dir)
+	want := []Stack{{Base: "main", Branches: []string{"stack/child", "stack/child-two"}}}
+	if !reflect.DeepEqual(state.Stacks, want) {
+		t.Fatalf("stacks = %#v, want %#v", state.Stacks, want)
+	}
+	if state.Pending != nil {
+		t.Fatalf("pending state was not cleared: %#v", state.Pending)
+	}
+}
+
+func TestSyncRetargetPlanFailureDoesNotAdvanceBaseOrCreatePending(t *testing.T) {
+	t.Parallel()
+	repo := newTestRepo(t)
+
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	runGit(t, "", "init", "--bare", remote)
+	runGit(t, repo.dir, "remote", "add", "origin", remote)
+	runGit(t, repo.dir, "push", "-u", "origin", "main")
+	oldMain := runGit(t, repo.dir, "rev-parse", "main")
+
+	createStackBranch(t, repo, "one.txt", "one\n", "One")
+	createStackBranch(t, repo, "two.txt", "two\n", "Two")
+	createStackBranch(t, repo, "survivor.txt", "survivor\n", "Survivor")
+	runGit(t, repo.dir, "checkout", "stack/two")
+	createStackBranch(t, repo, "child.txt", "child\n", "Child")
+
+	stateBefore := readState(t, repo.dir)
+	stateBefore.Stacks = append(stateBefore.Stacks, Stack{
+		Base:     "stack/two",
+		Branches: []string{"stack/child"},
+	})
+	if err := (Git{Dir: repo.dir}).WriteState(stateBefore); err != nil {
+		t.Fatal(err)
+	}
+
+	other := filepath.Join(t.TempDir(), "other")
+	runGit(t, "", "clone", "--branch", "main", remote, other)
+	runGit(t, other, "config", "user.name", "Graphene Test")
+	runGit(t, other, "config", "user.email", "graphene@example.test")
+	runGit(t, other, "config", "commit.gpgsign", "false")
+	commitFile(t, other, "one.txt", "one\n", "One (#1)")
+	commitFile(t, other, "two.txt", "two\n", "Two (#2)")
+	runGit(t, other, "push", "origin", "main")
+	newMain := runGit(t, other, "rev-parse", "main")
+
+	runGit(t, repo.dir, "checkout", "main")
+	code, _, stderr := repo.runGraphene(t, "sync", "--all")
+	if code == 0 {
+		t.Fatal("graphene sync --all unexpectedly succeeded")
+	}
+	if !strings.Contains(stderr, `cannot safely sync duplicate parent change for "stack/child"`) {
+		t.Fatalf("stderr = %q", stderr)
+	}
+	if got := runGit(t, repo.dir, "rev-parse", "origin/main"); got != newMain {
+		t.Fatalf("origin/main = %s, want fetched main %s", got, newMain)
+	}
+	if got := runGit(t, repo.dir, "rev-parse", "main"); got != oldMain {
+		t.Fatalf("main changed from %s to %s after planning failed", oldMain, got)
+	}
+	stateAfter := readState(t, repo.dir)
+	if !reflect.DeepEqual(stateAfter, stateBefore) {
+		t.Fatalf("state after planning failure = %#v, want %#v", stateAfter, stateBefore)
+	}
+	if stateAfter.Pending != nil {
+		t.Fatalf("pending state was created after planning failure: %#v", stateAfter.Pending)
 	}
 }
 
@@ -2428,6 +2734,267 @@ func TestSyncLastAppliedBranchDeletesStack(t *testing.T) {
 	state := readState(t, repo.dir)
 	if len(state.Stacks) != 0 || state.Pending != nil {
 		t.Fatalf("state = %#v, want empty", state)
+	}
+}
+
+func TestSyncAbortRestoresCompletedRebases(t *testing.T) {
+	t.Parallel()
+	repo := newTestRepo(t)
+
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	runGit(t, "", "init", "--bare", remote)
+	runGit(t, repo.dir, "remote", "add", "origin", remote)
+	runGit(t, repo.dir, "push", "-u", "origin", "main")
+
+	createStackBranch(t, repo, "one.txt", "one\n", "One")
+	runGit(t, repo.dir, "checkout", "main")
+	createStackBranch(t, repo, "file.txt", "two\n", "Two")
+	runGit(t, repo.dir, "checkout", "main")
+
+	other := filepath.Join(t.TempDir(), "other")
+	runGit(t, "", "clone", "--branch", "main", remote, other)
+	runGit(t, other, "config", "user.name", "Graphene Test")
+	runGit(t, other, "config", "user.email", "graphene@example.test")
+	runGit(t, other, "config", "commit.gpgsign", "false")
+	commitFile(t, other, "file.txt", "remote\n", "Conflicting base update")
+	runGit(t, other, "push", "origin", "main")
+
+	runGit(t, repo.dir, "branch", "local/bookmark", "stack/one")
+	branches := []string{"main", "stack/one", "stack/two", "local/bookmark"}
+	originalRefs := map[string]string{}
+	for _, branch := range branches {
+		originalRefs[branch] = runGit(t, repo.dir, "rev-parse", branch)
+	}
+	originalLocalRefs := runGit(t, repo.dir, "for-each-ref", "--sort=refname", "--format=%(refname) %(objectname)", "refs/heads")
+	originalState := readState(t, repo.dir)
+	originalBranch := currentBranch(t, repo.dir)
+
+	code, _, stderr := repo.runGraphene(t, "sync", "--all")
+	if code == 0 {
+		t.Fatal("graphene sync --all unexpectedly succeeded")
+	}
+	if stderr == "" {
+		t.Fatal("graphene sync --all failed without conflict output")
+	}
+	if got := runGit(t, repo.dir, "rev-parse", "stack/one"); got == originalRefs["stack/one"] {
+		t.Fatal("first stack rebase did not complete before the conflict")
+	}
+	if got := runGit(t, repo.dir, "rev-parse", "local/bookmark"); got == originalRefs["local/bookmark"] {
+		t.Fatal("untracked local bookmark did not move with the first completed rebase")
+	}
+	state := readState(t, repo.dir)
+	if state.Pending == nil || state.Pending.Operation != "sync" {
+		t.Fatalf("pending state = %#v, want sync", state.Pending)
+	}
+	inProgress, err := (Git{Dir: repo.dir}).RebaseInProgress()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !inProgress {
+		t.Fatal("rebase is not in progress after conflict")
+	}
+
+	expectGrapheneOK(t, repo, "abort")
+
+	for _, branch := range branches {
+		if got := runGit(t, repo.dir, "rev-parse", branch); got != originalRefs[branch] {
+			t.Fatalf("%s = %s after abort, want original %s", branch, got, originalRefs[branch])
+		}
+	}
+	if got := runGit(t, repo.dir, "for-each-ref", "--sort=refname", "--format=%(refname) %(objectname)", "refs/heads"); got != originalLocalRefs {
+		t.Fatalf("local refs after abort = %q, want original %q", got, originalLocalRefs)
+	}
+	if got := currentBranch(t, repo.dir); got != originalBranch {
+		t.Fatalf("branch = %q after abort, want %q", got, originalBranch)
+	}
+	if status := runGit(t, repo.dir, "status", "--porcelain"); status != "" {
+		t.Fatalf("status after abort = %q, want clean", status)
+	}
+	state = readState(t, repo.dir)
+	if !reflect.DeepEqual(state, originalState) {
+		t.Fatalf("state after abort = %#v, want original %#v", state, originalState)
+	}
+	if state.Pending != nil {
+		t.Fatalf("pending state was not cleared: %#v", state.Pending)
+	}
+	inProgress, err = (Git{Dir: repo.dir}).RebaseInProgress()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if inProgress {
+		t.Fatal("rebase is still in progress after abort")
+	}
+}
+
+func TestSyncAbortRestoresBranchDeletedDuringFinalization(t *testing.T) {
+	t.Parallel()
+	repo := newTestRepo(t)
+
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	runGit(t, "", "init", "--bare", remote)
+	runGit(t, repo.dir, "remote", "add", "origin", remote)
+	runGit(t, repo.dir, "push", "-u", "origin", "main")
+	createStackBranch(t, repo, "one.txt", "one\n", "One")
+	runGit(t, repo.dir, "push", "-u", "origin", "stack/one")
+
+	original := readState(t, repo.dir)
+	one := runGit(t, repo.dir, "rev-parse", "stack/one")
+	state := original
+	state.Pending = &Pending{
+		Operation:      "sync",
+		Branch:         "stack/one",
+		ReturnBranch:   "main",
+		Branches:       []string{"stack/one"},
+		OriginalRefs:   map[string]string{"stack/one": one},
+		OriginalStacks: cloneStacks(original.Stacks),
+	}
+	if err := (Git{Dir: repo.dir}).WriteState(state); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo.dir, "checkout", "main")
+	runGit(t, repo.dir, "update-ref", "-d", "refs/heads/stack/one", one)
+	if got := runGit(t, repo.dir, "config", "--get", "branch.stack/one.remote"); got != "origin" {
+		t.Fatalf("upstream config was removed during ref-only finalization: %q", got)
+	}
+
+	expectGrapheneOK(t, repo, "abort")
+
+	if got := runGit(t, repo.dir, "rev-parse", "stack/one"); got != one {
+		t.Fatalf("stack/one = %s after abort, want %s", got, one)
+	}
+	if got := runGit(t, repo.dir, "config", "--get", "branch.stack/one.remote"); got != "origin" {
+		t.Fatalf("upstream remote after abort = %q, want origin", got)
+	}
+	if got := currentBranch(t, repo.dir); got != "stack/one" {
+		t.Fatalf("branch after abort = %q, want stack/one", got)
+	}
+	if got := readState(t, repo.dir); !reflect.DeepEqual(got, original) {
+		t.Fatalf("state after abort = %#v, want %#v", got, original)
+	}
+}
+
+func TestContinueResumesJournaledSyncBaseFastForward(t *testing.T) {
+	t.Parallel()
+	repo := newTestRepo(t)
+
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	runGit(t, "", "init", "--bare", remote)
+	runGit(t, repo.dir, "remote", "add", "origin", remote)
+	runGit(t, repo.dir, "push", "-u", "origin", "main")
+	oldMain := runGit(t, repo.dir, "rev-parse", "main")
+
+	createStackBranch(t, repo, "one.txt", "one\n", "One")
+	oldOne := runGit(t, repo.dir, "rev-parse", "stack/one")
+
+	other := filepath.Join(t.TempDir(), "other")
+	runGit(t, "", "clone", "--branch", "main", remote, other)
+	runGit(t, other, "config", "user.name", "Graphene Test")
+	runGit(t, other, "config", "user.email", "graphene@example.test")
+	runGit(t, other, "config", "commit.gpgsign", "false")
+	commitFile(t, other, "base.txt", "base update\n", "Base update")
+	runGit(t, other, "push", "origin", "main")
+	runGit(t, repo.dir, "fetch", "origin", "main")
+	newMain := runGit(t, repo.dir, "rev-parse", "origin/main")
+
+	state := readState(t, repo.dir)
+	state.Pending = &Pending{
+		Operation:    "sync",
+		Branch:       "stack/one",
+		ReturnBranch: "stack/one",
+		Queue: []RebaseOp{{
+			Onto:     newMain,
+			Upstream: oldMain,
+			Top:      "stack/one",
+		}},
+		NextStacks:     cloneStacks(state.Stacks),
+		OriginalRefs:   map[string]string{"main": oldMain, "stack/one": oldOne},
+		OriginalStacks: cloneStacks(state.Stacks),
+		SyncBase:       "main",
+		SyncBaseOld:    oldMain,
+		SyncBaseNew:    newMain,
+		SyncBaseUpdate: true,
+	}
+	if err := (Git{Dir: repo.dir}).WriteState(state); err != nil {
+		t.Fatal(err)
+	}
+	if got := runGit(t, repo.dir, "rev-parse", "main"); got != oldMain {
+		t.Fatalf("main = %s before continue, want old main %s", got, oldMain)
+	}
+
+	expectGrapheneOK(t, repo, "continue")
+
+	if got := runGit(t, repo.dir, "rev-parse", "main"); got != newMain {
+		t.Fatalf("main = %s after continue, want fetched main %s", got, newMain)
+	}
+	assertBranchParent(t, repo.dir, "stack/one", "main")
+	if got := currentBranch(t, repo.dir); got != "stack/one" {
+		t.Fatalf("branch = %q after continue, want stack/one", got)
+	}
+	state = readState(t, repo.dir)
+	if state.Pending != nil {
+		t.Fatalf("pending state was not cleared: %#v", state.Pending)
+	}
+	want := []Stack{{Base: "main", Branches: []string{"stack/one"}}}
+	if !reflect.DeepEqual(state.Stacks, want) {
+		t.Fatalf("stacks = %#v, want %#v", state.Stacks, want)
+	}
+}
+
+func TestContinueFinishesPendingSyncWithEmptyQueue(t *testing.T) {
+	t.Parallel()
+	repo := newTestRepo(t)
+
+	createStackBranch(t, repo, "one.txt", "one\n", "One")
+	runGit(t, repo.dir, "checkout", "main")
+	state := readState(t, repo.dir)
+	state.Pending = &Pending{
+		Operation:    "sync",
+		Branch:       "main",
+		ReturnBranch: "main",
+		Branches:     []string{"stack/one"},
+	}
+	if err := (Git{Dir: repo.dir}).WriteState(state); err != nil {
+		t.Fatal(err)
+	}
+
+	// A failed finalization may already have completed some cleanup before retry.
+	runGit(t, repo.dir, "branch", "-D", "stack/one")
+	expectGrapheneOK(t, repo, "continue")
+
+	if refExists(t, repo.dir, "refs/heads/stack/one") {
+		t.Fatal("stack/one still exists")
+	}
+	state = readState(t, repo.dir)
+	if len(state.Stacks) != 0 || state.Pending != nil {
+		t.Fatalf("state = %#v, want completed empty sync state", state)
+	}
+}
+
+func TestContinueFinishesLegacyPendingSyncWithoutSnapshots(t *testing.T) {
+	t.Parallel()
+	repo := newTestRepo(t)
+
+	createStackBranch(t, repo, "one.txt", "one\n", "One")
+	runGit(t, repo.dir, "checkout", "main")
+	state := readState(t, repo.dir)
+	state.Pending = &Pending{
+		Operation:    "sync",
+		Branch:       "main",
+		ReturnBranch: "main",
+		Branches:     []string{"stack/one"},
+	}
+	if err := (Git{Dir: repo.dir}).WriteState(state); err != nil {
+		t.Fatal(err)
+	}
+
+	expectGrapheneOK(t, repo, "continue")
+
+	if refExists(t, repo.dir, "refs/heads/stack/one") {
+		t.Fatal("stack/one still exists")
+	}
+	state = readState(t, repo.dir)
+	if len(state.Stacks) != 0 || state.Pending != nil {
+		t.Fatalf("state = %#v, want completed empty sync state", state)
 	}
 }
 

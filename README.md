@@ -117,6 +117,13 @@ Preview the same sync first:
 gn sync -a --dry-run
 ```
 
+Sync only removes branches automatically when their commits are ancestors of the updated base or their patches are already present there. A deleted remote branch is not, by itself, proof that it was merged. If sync reports missing upstreams, preview the explicit assumption and verify every listed PR was merged before running it for real:
+
+```
+gn sync --assume-merged --dry-run
+gn sync --assume-merged
+```
+
 Record an existing one-commit branch on top of a base branch:
 
 ```

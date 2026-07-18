@@ -94,6 +94,8 @@ graphene sendf --dry-run
 
 Use `graphene sync -a` or `graphene sync --all` when intentionally syncing every descendant from the current base branch. Use `graphene sync --dry-run` or `graphene sync -a --dry-run` to preview the planned fetch, deletions, retargets, and rebases without changing refs or Graphene state.
 
+If sync reports that configured upstreams for unapplied branches no longer exist, run `graphene sync --dry-run --assume-merged` and verify every listed PR was merged before using the flag for a real sync. A missing remote ref alone is not merge evidence, so do not use this flag only to get past the safety check.
+
 If sync reports branches to retarget or rewrites stack branches, use `graphene sendf --dry-run` before pushing. Only force-with-lease push with `graphene sendf` after approval.
 
 ## Amend A Stacked Branch

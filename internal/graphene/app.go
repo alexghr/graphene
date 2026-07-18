@@ -239,7 +239,7 @@ func (a *App) usage(w io.Writer) {
   graphene delete [-s|--stack] [branch]
   graphene track (--parent|--base) <base> [branch]
   graphene import <base>
-  graphene sync [-a|--all] [--dry-run] [--force]
+  graphene sync [-a|--all] [--dry-run] [--force] [--assume-merged]
   graphene send [options] [remote]
   graphene sendf [options] [remote]
   graphene restack [-f|--force] <base>
@@ -311,8 +311,8 @@ options:
       --claude      install to ~/.claude/skills/graphene-stacked-prs/SKILL.md
       --out <path>  write SKILL.md to this path; use - for stdout`,
 		"completion": "usage: graphene completion <bash|zsh>\n\nWrite the completion script for Bash or Zsh to stdout.",
-		"continue": "usage: graphene continue\n\nContinue the current Git rebase and any queued Graphene restacks.",
-		"abort":    "usage: graphene abort\n\nAbort the current Git rebase and clear queued Graphene restacks.",
+		"continue":   "usage: graphene continue\n\nContinue the current Git rebase and any queued Graphene restacks.",
+		"abort":      "usage: graphene abort\n\nAbort the current Git rebase and clear queued Graphene restacks.",
 		"config": `usage: graphene config <get|set|unset> [--global|--local] <key> [value]
 
 Read and write Graphene settings in Git config. Keys may be written with or without the graphene. prefix.
@@ -362,18 +362,20 @@ options:
 Create or reuse one branch per commit from the local base branch to HEAD, then record the path as a Graphene stack.
 
 Graphene reuses the current branch for HEAD. Intermediate commits reuse a single existing local branch when one points at that commit; otherwise Graphene creates a branch from the commit subject using branchPrefix.`,
-		"sync": `usage: graphene sync [-a|--all] [--dry-run] [--force]
+		"sync": `usage: graphene sync [-a|--all] [--dry-run] [--force] [--assume-merged]
 
 Fetch the stack base, drop already-applied branches on the current path, and restack affected children.
 
 From an untracked stack base, --all syncs every stack descendant of the current branch.
 
 Branches detected as already applied upstream are removed from Graphene state and deleted locally.
+If configured upstreams disappeared for branches whose patches are not applied to the base, sync stops without changing local branches or Graphene state. Verify every branch shown by --dry-run --assume-merged before using the flag for a real sync.
 
 options:
-  -a, --all             sync every stack descendant from the current base branch
-  -n, --dry-run        show the planned fetch, deletions, retargets, and rebases without changing refs or state
-  -f, --force          sync safe stacks even when skipped stacks checked out elsewhere would become stale`,
+  -a, --all           sync every stack descendant from the current base branch
+  -n, --dry-run       show the planned fetch, deletions, retargets, and rebases without changing refs or state
+  -f, --force         sync safe stacks even when skipped stacks checked out elsewhere would become stale
+      --assume-merged treat consecutive missing upstream branches as merged and delete them`,
 		"send": `usage: graphene send [options] [remote]
 
 Push the current branch and its dependency path, then print pull request URLs.

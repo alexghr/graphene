@@ -22,6 +22,7 @@ type Pending struct {
 	Worktree       string            `json:"worktree,omitempty"`
 	Branch         string            `json:"branch,omitempty"`
 	ReturnBranch   string            `json:"returnBranch,omitempty"`
+	ReturnRef      string            `json:"returnRef,omitempty"`
 	Queue          []RebaseOp        `json:"queue,omitempty"`
 	Top            string            `json:"top,omitempty"`
 	Branches       []string          `json:"branches,omitempty"`
@@ -31,6 +32,10 @@ type Pending struct {
 	OriginalBase   string            `json:"originalBase,omitempty"`
 	OriginalRefs   map[string]string `json:"originalRefs,omitempty"`
 	OriginalStacks []Stack           `json:"originalStacks,omitempty"`
+	SyncBase       string            `json:"syncBase,omitempty"`
+	SyncBaseOld    string            `json:"syncBaseOld,omitempty"`
+	SyncBaseNew    string            `json:"syncBaseNew,omitempty"`
+	SyncBaseUpdate bool              `json:"syncBaseUpdate,omitempty"`
 }
 
 type RebaseOp struct {
