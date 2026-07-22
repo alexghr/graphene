@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+  pull_request:
   workflow_dispatch:
 
 jobs:
@@ -16,6 +17,10 @@ jobs:
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
+
+      - name: Lint
+        run: |
+          ./devenv shell --quiet --no-reload -- graphene-lint
 
       - name: Test
         run: |

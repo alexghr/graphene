@@ -2,6 +2,34 @@
 let
   pkgs-unstable = import inputs.nixpkgs-unstable { system = pkgs.stdenv.system; };
   version = lib.removeSuffix "\n" (builtins.readFile ./VERSION);
+  lint = pkgs.writeShellApplication {
+    name = "graphene-lint";
+    runtimeInputs = [
+      pkgs.findutils
+      pkgs.go
+      pkgs-unstable.gotools
+      pkgs-unstable.go-tools
+    ];
+    text = ''
+      export XDG_CACHE_HOME="''${XDG_CACHE_HOME:-''${TMPDIR:-/tmp}/graphene-lint-cache}"
+      mkdir -p "$XDG_CACHE_HOME"
+
+      unformatted="$({
+        find . \
+          \( -path './.git' -o -path './.devenv' -o -path './.direnv' \) -prune \
+          -o -type f -name '*.go' -print0
+      } | xargs -0 -r gofmt -l)"
+      if [ -n "$unformatted" ]; then
+        printf 'The following Go files are not formatted:\n%s\n' "$unformatted" >&2
+        exit 1
+      fi
+
+      go vet ./...
+      staticcheck ./...
+      modernize ./...
+      go fix -diff ./...
+    '';
+  };
 in
   {
     packages = with pkgs;
@@ -20,6 +48,7 @@ in
     scripts = {
       graphene-test.exec = "go test -parallel 8 ./...";
       graphene-build.exec = "go build -o bin/graphene ./cmd/graphene";
+      graphene-lint.exec = "${lint}/bin/graphene-lint";
     };
 
     outputs = {
@@ -35,6 +64,7 @@ in
         nativeCheckInputs = [
           pkgs.git
           pkgs.zsh
+          lint
         ];
         subPackages = [ "cmd/graphene" ];
         postInstall = ''
@@ -45,6 +75,7 @@ in
         '';
         checkPhase = ''
           runHook preCheck
+          graphene-lint
           go test -parallel 8 ./...
           runHook postCheck
         '';
