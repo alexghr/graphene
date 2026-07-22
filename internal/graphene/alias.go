@@ -42,7 +42,7 @@ func (a *App) expandAliases(args []string) (aliasExpansion, error) {
 	expanded := append([]string(nil), args...)
 	seen := map[string]bool{}
 
-	for depth := 0; depth < maxAliasDepth; depth++ {
+	for range maxAliasDepth {
 		if len(expanded) < 2 || isBuiltinCommand(expanded[1]) {
 			return aliasExpansion{args: expanded}, nil
 		}
@@ -60,8 +60,8 @@ func (a *App) expandAliases(args []string) (aliasExpansion, error) {
 		}
 		seen[name] = true
 
-		if strings.HasPrefix(value, "!") {
-			script := strings.TrimPrefix(value, "!")
+		if after, ok0 := strings.CutPrefix(value, "!"); ok0 {
+			script := after
 			if strings.TrimSpace(script) == "" {
 				return aliasExpansion{}, fmt.Errorf("alias %q has an empty shell command", name)
 			}
@@ -391,7 +391,7 @@ func (a *App) aliasFileEntries(source string) ([]aliasImportEntry, error) {
 	}
 
 	var entries []aliasImportEntry
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		key, value, ok := strings.Cut(line, " ")
 		if !ok {
 			value = ""
@@ -421,7 +421,7 @@ func validAliasName(name string) bool {
 func (a *App) helpCommand(command string) (string, error) {
 	seen := map[string]bool{}
 
-	for depth := 0; depth < maxAliasDepth; depth++ {
+	for range maxAliasDepth {
 		if command == "agent-skill" {
 			return "skill", nil
 		}
@@ -454,12 +454,14 @@ func (a *App) helpCommand(command string) (string, error) {
 }
 
 func (a *App) runShellAlias(alias shellAlias) error {
-	command := alias.script
+	var command strings.Builder
+	command.WriteString(alias.script)
 	for _, arg := range alias.args {
-		command += " " + shellQuote(arg)
+		command.WriteByte(' ')
+		command.WriteString(shellQuote(arg))
 	}
 
-	cmdArgs := []string{"-c", command, alias.name}
+	cmdArgs := []string{"-c", command.String(), alias.name}
 	cmdArgs = append(cmdArgs, alias.args...)
 	cmd := exec.Command("sh", cmdArgs...)
 	cmd.Dir = a.git.Dir
@@ -467,8 +469,7 @@ func (a *App) runShellAlias(alias shellAlias) error {
 	cmd.Stdout = a.stdout
 	cmd.Stderr = a.stderr
 	if err := cmd.Run(); err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
+		if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
 			return &shellAliasError{name: alias.name, code: exitErr.ExitCode()}
 		}
 		return fmt.Errorf("run alias %s: %w", alias.name, err)

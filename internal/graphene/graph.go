@@ -181,7 +181,7 @@ func writePending(b *strings.Builder, pending *Pending) {
 	b.WriteByte('\n')
 	if len(pending.Queue) > 1 {
 		b.WriteString("  remaining: ")
-		b.WriteString(fmt.Sprint(len(pending.Queue)))
+		fmt.Fprint(b, len(pending.Queue))
 		b.WriteByte('\n')
 	}
 }

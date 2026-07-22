@@ -140,6 +140,19 @@ func TestUnknownCommandReturnsGitFailure(t *testing.T) {
 	}
 }
 
+func TestUnknownHelpCommandFails(t *testing.T) {
+	t.Parallel()
+	repo := newTestRepo(t)
+
+	code, stdout, stderr := repo.runGraphene(t, "help", "missing")
+	if code == 0 {
+		t.Fatal("graphene help missing unexpectedly succeeded")
+	}
+	if stdout != "" || stderr != "unknown command \"missing\"\n" {
+		t.Fatalf("graphene help missing = (%d, %q, %q)", code, stdout, stderr)
+	}
+}
+
 func TestAliasTakesPrecedenceOverGitFallback(t *testing.T) {
 	t.Parallel()
 	repo := newTestRepo(t)
@@ -1466,7 +1479,6 @@ func TestRestackMovesCurrentBranchAndDescendantsFromAnyBranch(t *testing.T) {
 	}
 	branches := []string{"stack/one", "stack/two", "stack/three"}
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.current, func(t *testing.T) {
 			t.Parallel()
 			repo := newTestRepo(t)

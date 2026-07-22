@@ -3,6 +3,7 @@ package graphene
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 )
 
 const stateConfigKey = "graphene.state"
@@ -223,12 +224,7 @@ func stateHasPath(s State, from, to string) bool {
 			return true
 		}
 		seen[branch] = true
-		for _, child := range graph.children[branch] {
-			if walk(child) {
-				return true
-			}
-		}
-		return false
+		return slices.ContainsFunc(graph.children[branch], walk)
 	}
 	return walk(from)
 }
@@ -607,10 +603,5 @@ func StateRefNames(s State) []string {
 }
 
 func StateContainsName(s State, name string) bool {
-	for _, existing := range StateRefNames(s) {
-		if existing == name {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(StateRefNames(s), name)
 }

@@ -65,8 +65,7 @@ func (g Git) Output(args ...string) (string, error) {
 }
 
 func gitCommandError(args []string, err error, stderr string, streamed bool) error {
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) {
+	if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
 		return &GitError{
 			Args:     append([]string(nil), args...),
 			Code:     exitErr.ExitCode(),
@@ -230,7 +229,7 @@ func (g Git) BranchCheckedOut(branch string) (bool, error) {
 		return false, err
 	}
 	target := "refs/heads/" + branch
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		if strings.TrimPrefix(line, "branch ") == target && strings.HasPrefix(line, "branch ") {
 			return true, nil
 		}
@@ -256,7 +255,7 @@ func (g Git) Version() (gitVersion, error) {
 }
 
 func parseGitVersion(out string) (gitVersion, error) {
-	for _, field := range strings.Fields(out) {
+	for field := range strings.FieldsSeq(out) {
 		if field == "" || field[0] < '0' || field[0] > '9' {
 			continue
 		}

@@ -192,11 +192,12 @@ func (a *App) Run(args []string) int {
 			err = a.version(args[2:], gitVersion)
 		case "help":
 			if len(args) > 2 {
-				command, err := a.helpCommand(args[2])
-				if err != nil {
+				helpCommand, helpErr := a.helpCommand(args[2])
+				if helpErr != nil {
+					err = helpErr
 					break
 				}
-				if !a.commandUsage(command, a.stdout) {
+				if !a.commandUsage(helpCommand, a.stdout) {
 					err = fmt.Errorf("unknown command %q", args[2])
 					break
 				}

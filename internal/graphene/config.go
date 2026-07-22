@@ -133,13 +133,13 @@ func grapheneConfigKey(key string) (string, error) {
 	if key == "" || strings.HasPrefix(key, "-") {
 		return "", fmt.Errorf("invalid config key %q", key)
 	}
-	if strings.HasPrefix(key, "graphene.") {
-		key = strings.TrimPrefix(key, "graphene.")
+	if after, ok := strings.CutPrefix(key, "graphene."); ok {
+		key = after
 	}
 	if key == "state" {
 		return "", fmt.Errorf("graphene.state is managed internally")
 	}
-	for _, part := range strings.Split(key, ".") {
+	for part := range strings.SplitSeq(key, ".") {
 		if part == "" {
 			return "", fmt.Errorf("invalid config key %q", key)
 		}

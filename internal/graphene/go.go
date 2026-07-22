@@ -81,7 +81,7 @@ func parseGoArgs(args []string) (goOptions, error) {
 			}
 			opts.direction = direction
 			if inlineSelector && selector == "" {
-				return opts, fmt.Errorf("invalid selector %q; use 1, 2, ...", selector)
+				return opts, fmt.Errorf("invalid selector %q; expected a positive integer", selector)
 			}
 			if selector == "" {
 				selector, _ = cursor.OptionalPositionalValue()
@@ -149,7 +149,7 @@ func goFlag(arg flagparse.Arg) (parsedGoFlag, bool) {
 func parseGoSelector(raw string) (int, error) {
 	n, err := strconv.Atoi(raw)
 	if err != nil || n < 1 {
-		return 0, fmt.Errorf("invalid selector %q; use 1, 2, ...", raw)
+		return 0, fmt.Errorf("invalid selector %q; expected a positive integer", raw)
 	}
 	return n, nil
 }

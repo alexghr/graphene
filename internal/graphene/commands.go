@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1835,14 +1836,14 @@ func (a *App) validateImportedBranches(base string, branches []importBranch) err
 }
 
 func (a *App) cleanupCreatedBranches(branches []string) {
-	for i := len(branches) - 1; i >= 0; i-- {
-		_ = a.git.OutputErr("branch", "-D", branches[i])
+	for _, v := range slices.Backward(branches) {
+		_ = a.git.OutputErr("branch", "-D", v)
 	}
 }
 
 func shortImportRef(ref string) string {
-	if strings.HasPrefix(ref, "refs/heads/") {
-		return strings.TrimPrefix(ref, "refs/heads/")
+	if after, ok := strings.CutPrefix(ref, "refs/heads/"); ok {
+		return after
 	}
 	return shortSyncRef(ref)
 }
@@ -2647,7 +2648,7 @@ func (a *App) commitPatchAppliedTo(upstream, commit string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		fields := strings.Fields(line)
 		if len(fields) != 2 || fields[1] != commit {
 			continue
@@ -3065,8 +3066,8 @@ type syncBaseDryRun struct {
 }
 
 func (b syncBaseDryRun) UpstreamName() string {
-	if strings.HasPrefix(b.Merge, "refs/heads/") {
-		return b.Remote + "/" + strings.TrimPrefix(b.Merge, "refs/heads/")
+	if after, ok := strings.CutPrefix(b.Merge, "refs/heads/"); ok {
+		return b.Remote + "/" + after
 	}
 	return b.Remote + " " + b.Merge
 }
@@ -3447,7 +3448,7 @@ func (a *App) appliedCommitRefs(base, top string) (map[string]bool, error) {
 	}
 
 	applied := map[string]bool{}
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		fields := strings.Fields(line)
 		if len(fields) != 2 || fields[0] != "-" {
 			continue
@@ -3548,7 +3549,7 @@ func (a *App) syncMutationRefs(current, base string, advanceBase bool, deleted [
 			return nil, err
 		}
 		commits := map[string]bool{}
-		for _, commit := range strings.Fields(out) {
+		for commit := range strings.FieldsSeq(out) {
 			commits[commit] = true
 		}
 		for branch, ref := range localRefs {
@@ -3855,10 +3856,8 @@ func parseSquashArgs(args []string) (squashOptions, error) {
 				opts.count = count
 				continue
 			case "message":
-				message := flag.Value()
 				if !flag.HasValue() {
-					var err error
-					message, err = cursor.Value(flagparse.AcceptAny, fmt.Errorf("missing message after --message"))
+					message, err := cursor.Value(flagparse.AcceptAny, fmt.Errorf("missing message after --message"))
 					if err != nil {
 						return opts, err
 					}
@@ -3925,7 +3924,7 @@ func parseSquashArgs(args []string) (squashOptions, error) {
 func parseSquashCount(raw string) (int, error) {
 	count, err := strconv.Atoi(raw)
 	if err != nil || count < 2 {
-		return 0, fmt.Errorf("invalid squash count %q; use 2, 3, ...", raw)
+		return 0, fmt.Errorf("invalid squash count %q; expected an integer of at least 2", raw)
 	}
 	return count, nil
 }
@@ -4021,10 +4020,8 @@ func parseCommitOptions(args []string, allowBranch bool) (commitOptions, error) 
 				opts.reuseCurrent = true
 				continue
 			case "message":
-				message := flag.Value()
 				if !flag.HasValue() {
-					var err error
-					message, err = cursor.Value(flagparse.AcceptAny, fmt.Errorf("missing message after --message"))
+					message, err := cursor.Value(flagparse.AcceptAny, fmt.Errorf("missing message after --message"))
 					if err != nil {
 						return opts, err
 					}
@@ -4288,13 +4285,6 @@ func parseImportArgs(args []string) (string, error) {
 		return "", fmt.Errorf("usage: graphene import <base>")
 	}
 	return base, nil
-}
-
-func canonicalTrackBaseFlag(flag string) string {
-	if flag == "-p" {
-		return "--parent"
-	}
-	return flag
 }
 
 func setTrackBase(base, baseFlag *string, flag, value string) error {

@@ -460,7 +460,7 @@ done
 	var candidates []string
 	files := false
 	fileOptionsPreserved := false
-	for _, outputLine := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+	for outputLine := range strings.SplitSeq(strings.TrimSpace(string(output)), "\n") {
 		switch {
 		case outputLine == "files:1":
 			files = true

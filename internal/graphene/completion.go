@@ -4,6 +4,7 @@ import (
 	_ "embed"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -253,10 +254,8 @@ func (a *App) completeAliases(before []string, current string) completionResult 
 
 func (a *App) completeGo(before []string, current string) completionResult {
 	positionals := completionPositionals(before, nil)
-	for _, arg := range before {
-		if isGoCompletionDirection(arg) {
-			return completionResult{}
-		}
+	if slices.ContainsFunc(before, isGoCompletionDirection) {
+		return completionResult{}
 	}
 	if len(positionals) > 0 {
 		return completionResult{}
@@ -490,12 +489,7 @@ func completionHasValue(args []string, valueFlags map[string]completionValue) bo
 }
 
 func completionAfterDoubleDash(args []string) bool {
-	for _, arg := range args {
-		if arg == "--" {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(args, "--")
 }
 
 func splitCompletionLine(line string) []string {
@@ -583,7 +577,7 @@ func (a *App) configuredAliasNames() []string {
 		return nil
 	}
 	var names []string
-	for _, record := range strings.Split(out, "\x00") {
+	for record := range strings.SplitSeq(out, "\x00") {
 		key, _, _ := strings.Cut(record, "\n")
 		name := strings.TrimPrefix(key, "graphene.alias.")
 		if name != key && validAliasName(name) {
@@ -596,7 +590,7 @@ func (a *App) configuredAliasNames() []string {
 func (a *App) expandCompletionAlias(args []string) ([]string, bool) {
 	expanded := append([]string(nil), args...)
 	seen := map[string]bool{}
-	for depth := 0; depth < maxAliasDepth; depth++ {
+	for range maxAliasDepth {
 		if len(expanded) == 0 || isBuiltinCommand(expanded[0]) {
 			return expanded, false
 		}
