@@ -1,15 +1,14 @@
 package graphene
 
 import (
-	"encoding/json"
 	"fmt"
+	"slices"
 )
 
-const stateConfigKey = "graphene.state"
-
 type State struct {
-	Stacks  []Stack  `json:"stacks,omitempty"`
-	Pending *Pending `json:"pending,omitempty"`
+	Stacks    []Stack           `json:"stacks,omitempty"`
+	Operation *OperationJournal `json:"operation,omitempty"`
+	Pending   *Pending          `json:"pending,omitempty"`
 }
 
 type Stack struct {
@@ -53,45 +52,6 @@ type BaseChange struct {
 type BranchLocation struct {
 	StackIndex  int
 	BranchIndex int
-}
-
-func (g Git) ReadState() (State, error) {
-	raw, err := g.Output("config", "--local", "--get", stateConfigKey)
-	if err != nil {
-		if isGitExit(err, 1) {
-			return State{}, nil
-		}
-		return State{}, err
-	}
-	if raw == "" {
-		return State{}, nil
-	}
-
-	var state State
-	if err := json.Unmarshal([]byte(raw), &state); err != nil {
-		return State{}, fmt.Errorf("parse %s: %w", stateConfigKey, err)
-	}
-	return state, nil
-}
-
-func (g Git) WriteState(state State) error {
-	if state.empty() {
-		_, err := g.Output("config", "--local", "--unset", stateConfigKey)
-		if err == nil || isGitExit(err, 5) {
-			return nil
-		}
-		return err
-	}
-
-	data, err := json.Marshal(state)
-	if err != nil {
-		return err
-	}
-	return g.OutputErr("config", "--local", stateConfigKey, string(data))
-}
-
-func (s State) empty() bool {
-	return len(s.Stacks) == 0 && s.Pending == nil
 }
 
 func cloneStacks(stacks []Stack) []Stack {
@@ -223,12 +183,7 @@ func stateHasPath(s State, from, to string) bool {
 			return true
 		}
 		seen[branch] = true
-		for _, child := range graph.children[branch] {
-			if walk(child) {
-				return true
-			}
-		}
-		return false
+		return slices.ContainsFunc(graph.children[branch], walk)
 	}
 	return walk(from)
 }
@@ -607,10 +562,5 @@ func StateRefNames(s State) []string {
 }
 
 func StateContainsName(s State, name string) bool {
-	for _, existing := range StateRefNames(s) {
-		if existing == name {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(StateRefNames(s), name)
 }

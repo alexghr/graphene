@@ -690,6 +690,65 @@ func TestParseArgs(t *testing.T) {
 	}
 }
 
+func TestParseRecoveryArgs(t *testing.T) {
+	t.Parallel()
+
+	continueOpts, err := parseContinueArgs([]string{"--accept-current"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !continueOpts.acceptCurrent {
+		t.Fatal("parseContinueArgs did not detect --accept-current")
+	}
+	continueOpts, err = parseContinueArgs([]string{"--accept-current", "--no-accept-current"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if continueOpts.acceptCurrent {
+		t.Fatal("parseContinueArgs did not apply --no-accept-current")
+	}
+
+	for _, args := range [][]string{{"-f"}, {"--force"}} {
+		abortOpts, err := parseAbortArgs(args)
+		if err != nil {
+			t.Fatalf("parseAbortArgs(%q): %v", args, err)
+		}
+		if !abortOpts.force {
+			t.Fatalf("parseAbortArgs(%q) did not enable force", args)
+		}
+	}
+	abortOpts, err := parseAbortArgs([]string{"--force", "--no-force"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if abortOpts.force {
+		t.Fatal("parseAbortArgs did not apply --no-force")
+	}
+
+	for name, parse := range map[string]func() error{
+		"continue positional": func() error {
+			_, err := parseContinueArgs([]string{"unexpected"})
+			return err
+		},
+		"continue unknown flag": func() error {
+			_, err := parseContinueArgs([]string{"--force"})
+			return err
+		},
+		"abort positional": func() error {
+			_, err := parseAbortArgs([]string{"unexpected"})
+			return err
+		},
+		"abort unknown flag": func() error {
+			_, err := parseAbortArgs([]string{"--accept-current"})
+			return err
+		},
+	} {
+		if err := parse(); err == nil {
+			t.Fatalf("%s succeeded", name)
+		}
+	}
+}
+
 func TestParseGitVersion(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

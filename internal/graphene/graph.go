@@ -80,7 +80,7 @@ func WriteCurrentStackGraph(w io.Writer, state State, current string) error {
 func RenderGraph(state State, current string) string {
 	graph := newStackGraph(state)
 	roots := graph.roots()
-	if len(roots) == 0 && state.Pending == nil {
+	if len(roots) == 0 && state.Pending == nil && state.Operation == nil {
 		return ""
 	}
 
@@ -94,11 +94,14 @@ func RenderGraph(state State, current string) string {
 	if state.Pending != nil {
 		writePending(&b, state.Pending)
 	}
+	if state.Operation != nil {
+		writeOperation(&b, state.Operation)
+	}
 	return b.String()
 }
 
 func RenderCurrentStackGraph(state State, current string) (string, error) {
-	if len(state.Stacks) == 0 && state.Pending == nil {
+	if len(state.Stacks) == 0 && state.Pending == nil && state.Operation == nil {
 		return "", nil
 	}
 
@@ -116,10 +119,29 @@ func RenderCurrentStackGraph(state State, current string) (string, error) {
 	}
 
 	stackState := State{
-		Stacks:  []Stack{{Base: base, Branches: path}},
-		Pending: state.Pending,
+		Stacks:    []Stack{{Base: base, Branches: path}},
+		Operation: state.Operation,
+		Pending:   state.Pending,
 	}
 	return RenderGraph(stackState, current), nil
+}
+
+func writeOperation(b *strings.Builder, operation *OperationJournal) {
+	b.WriteString("pending ")
+	b.WriteString(operation.Kind)
+	if operation.OriginalBranch != "" {
+		b.WriteString(": ")
+		b.WriteString(operation.OriginalBranch)
+	}
+	b.WriteByte('\n')
+	b.WriteString("  phase: ")
+	b.WriteString(string(operation.Phase))
+	b.WriteByte('\n')
+	if operation.Active != nil {
+		b.WriteString("  active: ")
+		b.WriteString(operation.Active.ID)
+		b.WriteByte('\n')
+	}
 }
 
 func writeGraphNode(b *strings.Builder, graph stackGraph, name, current, prefix string) {
@@ -181,7 +203,7 @@ func writePending(b *strings.Builder, pending *Pending) {
 	b.WriteByte('\n')
 	if len(pending.Queue) > 1 {
 		b.WriteString("  remaining: ")
-		b.WriteString(fmt.Sprint(len(pending.Queue)))
+		fmt.Fprint(b, len(pending.Queue))
 		b.WriteByte('\n')
 	}
 }

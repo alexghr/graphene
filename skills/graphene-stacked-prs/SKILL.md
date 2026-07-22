@@ -176,3 +176,17 @@ To abandon the pending Graphene operation:
 ```sh
 graphene abort
 ```
+
+If Graphene reports that an interrupted action has an ambiguous result, inspect the current refs and operation status before accepting them:
+
+```sh
+graphene continue --accept-current
+```
+
+Normal abort refuses to overwrite unexpected ref or branch-config changes. Only after reviewing that drift, use the forced form, which preserves displaced data as recovery refs or artifacts:
+
+```sh
+graphene abort --force
+```
+
+If a previous abort stopped during destructive worktree restoration, inspect the worktree before using the same forced form to resume it.

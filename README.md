@@ -140,6 +140,28 @@ gn import main
 
 Run `gn help` or `gn help <command>` for full command details.
 
+## Recovering interrupted operations
+
+When a Graphene operation stops for conflicts, resolve them, stage the result, and continue:
+
+```
+gn continue
+```
+
+If Graphene cannot tell whether an interrupted action completed, inspect the current refs before explicitly accepting them as that action's result:
+
+```
+gn continue --accept-current
+```
+
+To abandon an operation before its commit point and restore its original local state, run `gn abort`. Graphene normally refuses to overwrite refs or branch configuration changed outside the operation. After reviewing the reported drift, `gn abort --force` permits that overwrite and preserves displaced data as recovery refs or artifacts.
+
+Graphene journals mutating operations before changing refs, branch configuration, the index, or the worktree. If a process stops midway, rerun `gn continue` or `gn abort`; cleanup and rollback are restartable. If an earlier abort stopped during its destructive worktree-restoration step, inspect the worktree and use `gn abort --force` to explicitly resume it.
+
+Once an operation journal exists, Graphene owns its recorded refs, config, index, worktree, and initialized submodule checkouts until the operation commits or aborts. Do not edit them with another process while recovery is pending; Graphene rejects drift where it can, and `abort --force` is the explicit escape hatch for intentionally replacing operation-owned state.
+
+Repository state lives in `<git-common-dir>/graphene/state.json`, with journal artifacts and the repository-wide operation lock beside it. Existing `graphene.state` values in local Git config are migrated automatically and remain readable during an interrupted migration.
+
 ## Aliases
 
 Graphene has Git-style aliases stored as config keys under `alias.<name>`. For example, you can create the common short commands yourself:
@@ -210,7 +232,7 @@ Restart Codex or Claude Code after installing a new skill.
 
 ## Worktrees
 
-Stack state is stored in the repository's local Git config under `graphene.state`, so linked worktrees for the same repository share the same stack graph.
+Stack state is stored under the repository's common Git directory, so linked worktrees share the same stack graph and operation journal. Only one mutating Graphene command runs at a time. An interrupted worktree operation must be continued or aborted from the worktree that owns it; disjoint `send` operations from another worktree remain available.
 
 When `gn sync` needs a newer base branch that is checked out in another worktree, Graphene fetches the upstream and rebases onto the fetched commit instead of switching to or updating the checked-out branch.
 

@@ -12,10 +12,11 @@ import (
 )
 
 type Git struct {
-	Dir    string
-	Stdin  io.Reader
-	Stdout io.Writer
-	Stderr io.Writer
+	Dir       string
+	Stdin     io.Reader
+	Stdout    io.Writer
+	Stderr    io.Writer
+	stateLock *StateLock
 }
 
 type GitError struct {
@@ -53,20 +54,27 @@ func (g Git) Run(args ...string) error {
 }
 
 func (g Git) Output(args ...string) (string, error) {
+	stdout, err := g.OutputBytes(args...)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimRight(string(stdout), "\n"), nil
+}
+
+func (g Git) OutputBytes(args ...string) ([]byte, error) {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = g.Dir
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return "", gitCommandError(args, err, stderr.String(), false)
+		return nil, gitCommandError(args, err, stderr.String(), false)
 	}
-	return strings.TrimRight(stdout.String(), "\n"), nil
+	return stdout.Bytes(), nil
 }
 
 func gitCommandError(args []string, err error, stderr string, streamed bool) error {
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) {
+	if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
 		return &GitError{
 			Args:     append([]string(nil), args...),
 			Code:     exitErr.ExitCode(),
@@ -95,6 +103,26 @@ func (g Git) CurrentBranch() (string, error) {
 
 func (g Git) Head() (string, error) {
 	return g.Output("rev-parse", "HEAD")
+}
+
+func (g Git) Root() (string, error) {
+	root, err := g.Output("rev-parse", "--show-toplevel")
+	if err != nil {
+		return "", err
+	}
+	if !filepath.IsAbs(root) {
+		return "", fmt.Errorf("git returned non-absolute worktree root %q", root)
+	}
+	return filepath.Clean(root), nil
+}
+
+func (g Git) Rooted() (Git, error) {
+	root, err := g.Root()
+	if err != nil {
+		return Git{}, err
+	}
+	g.Dir = root
+	return g, nil
 }
 
 func (g Git) BranchExists(branch string) (bool, error) {
@@ -230,7 +258,7 @@ func (g Git) BranchCheckedOut(branch string) (bool, error) {
 		return false, err
 	}
 	target := "refs/heads/" + branch
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		if strings.TrimPrefix(line, "branch ") == target && strings.HasPrefix(line, "branch ") {
 			return true, nil
 		}
@@ -256,7 +284,7 @@ func (g Git) Version() (gitVersion, error) {
 }
 
 func parseGitVersion(out string) (gitVersion, error) {
-	for _, field := range strings.Fields(out) {
+	for field := range strings.FieldsSeq(out) {
 		if field == "" || field[0] < '0' || field[0] > '9' {
 			continue
 		}
@@ -321,6 +349,34 @@ func (g Git) RebaseInProgress() (bool, error) {
 	return false, nil
 }
 
+func (g Git) RunOperationSwitch(args ...string) error {
+	if len(args) > 0 {
+		target := args[len(args)-1]
+		if !strings.HasPrefix(target, "-") {
+			if err := g.RequireNoUntrackedDirectoryCollision(target, "branch switch"); err != nil {
+				return err
+			}
+		}
+	}
+	command := []string{"-c", "submodule.recurse=false", "switch", "--no-overwrite-ignore", "--no-recurse-submodules"}
+	return g.Run(append(command, args...)...)
+}
+
+func (g Git) RunOperationReset(args ...string) error {
+	if len(args) >= 2 && (args[0] == "--hard" || args[0] == "--keep") {
+		if err := g.RequireNoUntrackedDirectoryCollision(args[len(args)-1], "worktree reset"); err != nil {
+			return err
+		}
+	}
+	command := []string{"-c", "submodule.recurse=false", "reset", "--no-recurse-submodules"}
+	return g.Run(append(command, args...)...)
+}
+
+func (g Git) RunOperationRebase(args ...string) error {
+	command := []string{"-c", "submodule.recurse=false", "rebase"}
+	return g.Run(append(command, args...)...)
+}
+
 func (g Git) WorktreeID() (string, error) {
 	path, err := g.Output("rev-parse", "--absolute-git-dir")
 	if err != nil {
@@ -330,18 +386,22 @@ func (g Git) WorktreeID() (string, error) {
 }
 
 func (g Git) GitPath(name string) (string, error) {
-	path, err := g.Output("rev-parse", "--git-path", name)
+	path, err := g.Output("rev-parse", "--path-format=absolute", "--git-path", name)
 	if err != nil {
 		return "", err
 	}
-	if !filepath.IsAbs(path) && g.Dir != "" {
-		path = filepath.Join(g.Dir, path)
+	if !filepath.IsAbs(path) {
+		return "", fmt.Errorf("git returned non-absolute path for %q: %q", name, path)
 	}
-	return path, nil
+	return filepath.Clean(path), nil
 }
 
 func (g Git) HasUnstagedChanges() (bool, error) {
-	_, err := g.Output("diff", "--quiet", "--ignore-submodules", "--")
+	rooted, err := g.Rooted()
+	if err != nil {
+		return false, err
+	}
+	_, err = rooted.Output("diff", "--quiet", "--ignore-submodules", "--")
 	if err == nil {
 		return false, nil
 	}
@@ -352,7 +412,11 @@ func (g Git) HasUnstagedChanges() (bool, error) {
 }
 
 func (g Git) HasStagedChanges() (bool, error) {
-	_, err := g.Output("diff", "--cached", "--quiet", "--ignore-submodules", "--")
+	rooted, err := g.Rooted()
+	if err != nil {
+		return false, err
+	}
+	_, err = rooted.Output("diff", "--cached", "--quiet", "--ignore-submodules", "--")
 	if err == nil {
 		return false, nil
 	}
@@ -364,6 +428,18 @@ func (g Git) HasStagedChanges() (bool, error) {
 
 func (g Git) HasTrackedChanges() (bool, error) {
 	out, err := g.Output("status", "--porcelain", "--untracked-files=no")
+	if err != nil {
+		return false, err
+	}
+	return out != "", nil
+}
+
+func (g Git) HasTrackedChangesIgnoringSubmodules() (bool, error) {
+	rooted, err := g.Rooted()
+	if err != nil {
+		return false, err
+	}
+	out, err := rooted.Output("status", "--porcelain", "--untracked-files=no", "--ignore-submodules=all")
 	if err != nil {
 		return false, err
 	}

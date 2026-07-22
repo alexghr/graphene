@@ -32,7 +32,7 @@ func (a *App) Run(args []string) int {
 	if len(args) >= 2 {
 		command = args[1]
 	}
-	shellAliasRan := false
+	var expandedShell *shellAlias
 	gitVersion, err := a.git.Version()
 	if err == nil && !isVersionCommand(command) && gitVersion.less(minimumGitVersion) {
 		err = fmt.Errorf("graphene requires git >= %s; found git %s", minimumGitVersion, gitVersion)
@@ -48,19 +48,31 @@ func (a *App) Run(args []string) int {
 		if expandErr != nil {
 			err = expandErr
 		} else if expanded.shell != nil {
-			err = a.runShellAlias(*expanded.shell)
-			shellAliasRan = true
+			expandedShell = expanded.shell
 		} else {
 			args = expanded.args
 			command = args[1]
 		}
 	}
 
-	if err == nil && shellAliasRan {
-		return 0
+	var stateLock *StateLock
+	if err == nil && expandedShell == nil && commandNeedsStateLock(command, args[2:]) {
+		stateLock, err = a.git.AcquireStateLock()
+		if err == nil {
+			a.git.stateLock = stateLock
+			var state State
+			state, err = a.git.ReadState()
+			if err == nil && state.Operation != nil && !commandAllowedDuringOperation(command, state.Operation) {
+				err = fmt.Errorf("pending %s operation; use graphene continue or graphene abort", state.Operation.Kind)
+			}
+		}
 	}
 
-	if err == nil {
+	if err == nil && expandedShell != nil {
+		err = a.runShellAlias(*expandedShell)
+	}
+
+	if err == nil && expandedShell == nil {
 		switch command {
 		case "new":
 			if helpArgs(args[2:]) {
@@ -105,13 +117,21 @@ func (a *App) Run(args []string) int {
 				a.commandUsage("continue", a.stdout)
 				return 0
 			}
-			err = a.continueRebase(args[2:])
+			var opts continueOptions
+			opts, err = parseContinueArgs(args[2:])
+			if err == nil {
+				err = a.continueRebase(opts)
+			}
 		case "abort":
 			if helpArgs(args[2:]) {
 				a.commandUsage("abort", a.stdout)
 				return 0
 			}
-			err = a.abortRebase(args[2:])
+			var opts abortOptions
+			opts, err = parseAbortArgs(args[2:])
+			if err == nil {
+				err = a.abortRebase(opts)
+			}
 		case "config":
 			if helpArgs(args[2:]) {
 				a.commandUsage("config", a.stdout)
@@ -192,11 +212,12 @@ func (a *App) Run(args []string) int {
 			err = a.version(args[2:], gitVersion)
 		case "help":
 			if len(args) > 2 {
-				command, err := a.helpCommand(args[2])
-				if err != nil {
+				helpCommand, helpErr := a.helpCommand(args[2])
+				if helpErr != nil {
+					err = helpErr
 					break
 				}
-				if !a.commandUsage(command, a.stdout) {
+				if !a.commandUsage(helpCommand, a.stdout) {
 					err = fmt.Errorf("unknown command %q", args[2])
 					break
 				}
@@ -212,6 +233,12 @@ func (a *App) Run(args []string) int {
 			err = a.git.Run(gitArgs...)
 		}
 	}
+	if stateLock != nil {
+		a.git.stateLock = nil
+		if closeErr := stateLock.Close(); err == nil {
+			err = closeErr
+		}
+	}
 
 	if err == nil {
 		return 0
@@ -225,14 +252,36 @@ func (a *App) Run(args []string) int {
 	return errorExitCode(err)
 }
 
+func commandNeedsStateLock(command string, args []string) bool {
+	if helpArgs(args) {
+		return false
+	}
+	switch command {
+	case "new", "amend", "split", "squash", "continue", "abort", "forget", "delete", "track", "import", "sync", "send", "sendf", "restack", "go":
+		return true
+	default:
+		return false
+	}
+}
+
+func commandAllowedDuringOperation(command string, operation *OperationJournal) bool {
+	if command == "continue" || command == "abort" {
+		return true
+	}
+	if command == "send" || command == "sendf" {
+		return true
+	}
+	return command == "new" && operation.Kind == "split" && operation.Phase == operationInteractive
+}
+
 func (a *App) usage(w io.Writer) {
 	fmt.Fprintln(w, `usage:
   graphene new [options] [branch]
   graphene amend [options]
   graphene split [branch]
   graphene squash [--count <n>]
-  graphene continue
-  graphene abort
+  graphene continue [--accept-current]
+  graphene abort [-f|--force]
   graphene config <get|set|unset> [--global|--local] <key> [value]
   graphene aliases import [--global|--local] [--force] <path-or-url>
   graphene forget [-f|--force] [branch]
@@ -311,8 +360,18 @@ options:
       --claude      install to ~/.claude/skills/graphene-stacked-prs/SKILL.md
       --out <path>  write SKILL.md to this path; use - for stdout`,
 		"completion": "usage: graphene completion <bash|zsh>\n\nWrite the completion script for Bash or Zsh to stdout.",
-		"continue":   "usage: graphene continue\n\nContinue the current Git rebase and any queued Graphene restacks.",
-		"abort":      "usage: graphene abort\n\nAbort the current Git rebase and clear queued Graphene restacks.",
+		"continue": `usage: graphene continue [--accept-current]
+
+Continue the current Graphene operation, including any active Git rebase.
+
+options:
+      --accept-current  accept the current refs as the result of an interrupted ambiguous action`,
+		"abort": `usage: graphene abort [-f|--force]
+
+Abort the current Graphene operation and restore its original local state.
+
+options:
+  -f, --force  permit destructive rollback after drift or interruption; displaced refs and config are preserved`,
 		"config": `usage: graphene config <get|set|unset> [--global|--local] <key> [value]
 
 Read and write Graphene settings in Git config. Keys may be written with or without the graphene. prefix.

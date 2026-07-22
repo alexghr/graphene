@@ -3,6 +3,7 @@ package graphene
 import (
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -29,6 +30,12 @@ func (a *App) newBranch(args []string) error {
 	state, err := a.git.ReadState()
 	if err != nil {
 		return err
+	}
+	if state.Operation != nil {
+		if state.Operation.Kind == "split" && state.Operation.Phase == operationInteractive {
+			return a.newDuringSplitOperation(opts, current, state)
+		}
+		return fmt.Errorf("pending %s operation; use graphene continue or graphene abort", state.Operation.Kind)
 	}
 	if state.Pending != nil {
 		if state.Pending.Operation == "split" && len(state.Pending.Queue) == 0 {
@@ -64,10 +71,6 @@ func (a *App) newBranch(args []string) error {
 		recordBase = opts.base
 	}
 
-	if err := a.stageRequestedChanges(opts); err != nil {
-		return err
-	}
-
 	branch := opts.branch
 	temp := false
 	var cfg Config
@@ -85,38 +88,58 @@ func (a *App) newBranch(args []string) error {
 		temp = true
 	}
 
-	if !opts.reuseCurrent {
-		if err := a.git.Run("switch", "-c", branch); err != nil {
-			return err
-		}
-	}
-
 	commitGitArgs := append([]string{"commit"}, opts.commitArgs...)
-	if err := a.git.Run(commitGitArgs...); err != nil {
-		if !opts.reuseCurrent {
-			a.cleanupFailedCommit(current, branch)
-		}
-		return err
+	commit := &journalCommit{
+		Branch:       branch,
+		Mode:         "new",
+		StageAll:     opts.stageAll,
+		StageUpdate:  opts.stageUpdate,
+		CreateBranch: !opts.reuseCurrent,
+		Args:         commitGitArgs,
 	}
-
+	plan := &journalNewBranch{
+		RecordBase:  recordBase,
+		Derive:      temp,
+		FinalBranch: branch,
+	}
+	desiredStacks := cloneStacks(state.Stacks)
 	if temp {
-		subject, err := a.git.Output("log", "-1", "--format=%s")
+		plan.BranchPrefix = cfg.BranchPrefix
+		plan.FinalBranch = ""
+	} else {
+		next := State{Stacks: cloneStacks(state.Stacks)}
+		if err := next.AddCommit(recordBase, branch); err != nil {
+			return err
+		}
+		desiredStacks = next.Stacks
+	}
+	plannedRefs := map[string]string{}
+	for _, name := range []string{current, recordBase} {
+		if plannedRefs[name] != "" {
+			continue
+		}
+		oid, err := a.git.Output("rev-parse", "--verify", "refs/heads/"+name+"^{commit}")
 		if err != nil {
 			return err
 		}
-		branch, err = a.derivedBranchName(cfg, subject)
-		if err != nil {
-			return err
-		}
-		if err := a.git.Run("branch", "-m", branch); err != nil {
-			return err
-		}
+		plannedRefs[name] = oid
 	}
-
-	if err := state.AddCommit(recordBase, branch); err != nil {
-		return err
-	}
-	return a.git.WriteState(state)
+	return a.startRebaseQueueOperation(
+		state,
+		"new",
+		current,
+		"",
+		desiredStacks,
+		[]string{recordBase},
+		plannedRefs,
+		nil,
+		nil,
+		nil,
+		commit,
+		true,
+		nil,
+		plan,
+	)
 }
 
 func (a *App) inferReuseCurrentBase(current string) (string, error) {
@@ -155,6 +178,9 @@ func (a *App) split(args []string) error {
 	if err != nil {
 		return err
 	}
+	if state.Operation != nil {
+		return fmt.Errorf("pending %s operation; use graphene continue or graphene abort", state.Operation.Kind)
+	}
 	if state.Pending != nil {
 		return fmt.Errorf("pending rebase exists; use graphene continue or graphene abort")
 	}
@@ -191,44 +217,15 @@ func (a *App) split(args []string) error {
 	if err != nil {
 		return err
 	}
-	originalRefs := a.trackedBranchRefs(state)
-
-	originalStacks := cloneStacks(state.Stacks)
+	baseHead, err := a.git.Output("rev-parse", "--verify", base+"^{commit}")
+	if err != nil {
+		return err
+	}
 	nextState, ok := TruncateStackAfterBranch(State{Stacks: cloneStacks(state.Stacks)}, target)
 	if !ok {
 		return fmt.Errorf("branch %q is not in a graphene stack", target)
 	}
-	pending, err := a.pendingForCurrentWorktree(Pending{
-		Operation:      "split",
-		Branch:         target,
-		ReturnBranch:   current,
-		Top:            originalHead,
-		Branches:       []string{target},
-		OriginalHead:   originalHead,
-		OriginalBase:   base,
-		OriginalRefs:   originalRefs,
-		OriginalStacks: originalStacks,
-	})
-	if err != nil {
-		return err
-	}
-	nextState.Pending = pending
-
-	if target != current {
-		if err := a.git.Run("switch", target); err != nil {
-			return err
-		}
-	}
-	if err := a.git.WriteState(nextState); err != nil {
-		return err
-	}
-	if err := a.git.Run("reset", "-N", base); err != nil {
-		nextState.Pending = nil
-		nextState.Stacks = state.Stacks
-		_ = a.git.WriteState(nextState)
-		return err
-	}
-	return nil
+	return a.startSplitOperation(state, current, target, base, baseHead, originalHead, nextState)
 }
 
 func (a *App) newDuringSplit(opts commitOptions, current string, state State) error {
@@ -487,6 +484,9 @@ func (a *App) squash(args []string) error {
 	if err != nil {
 		return err
 	}
+	if state.Operation != nil {
+		return fmt.Errorf("pending %s operation; use graphene continue or graphene abort", state.Operation.Kind)
+	}
 	if state.Pending != nil {
 		return fmt.Errorf("pending rebase exists; use graphene continue or graphene abort")
 	}
@@ -539,57 +539,32 @@ func (a *App) squash(args []string) error {
 		return err
 	}
 	defer cleanup()
-
-	if current != selection.Bottom {
-		if err := a.git.Run("switch", selection.Bottom); err != nil {
-			return err
-		}
+	commit := &journalCommit{
+		Branch:    selection.Bottom,
+		Mode:      "squash",
+		ResetHard: topRef,
+		ResetSoft: baseRef,
+		Args:      commitArgs,
 	}
-	restore := func(cause error) error {
-		if restoreErr := a.restoreOriginalRewrite(State{Stacks: cloneStacks(state.Stacks)}, oldRefs, selection.Bottom, current); restoreErr != nil {
-			return fmt.Errorf("%w; additionally failed to restore original squash state: %v", cause, restoreErr)
-		}
-		return cause
-	}
-	if err := a.git.Run("reset", "--hard", topRef); err != nil {
-		return restore(err)
-	}
-	if err := a.git.Run("reset", "--soft", baseRef); err != nil {
-		return restore(err)
-	}
-	if err := a.git.Run(commitArgs...); err != nil {
-		return restore(err)
-	}
-
-	if len(ops) == 0 {
-		if err := a.deleteBranches(selection.Removed); err != nil {
-			return restore(err)
-		}
-		if err := a.git.WriteState(nextState); err != nil {
-			return restore(err)
-		}
-		return nil
-	}
-
-	pending, err := a.pendingForCurrentWorktree(Pending{
-		Operation:      "squash",
-		Branch:         selection.Bottom,
-		ReturnBranch:   selection.Bottom,
-		Queue:          ops,
-		Top:            selection.Top,
-		Branches:       append([]string(nil), selection.Removed...),
-		NextStacks:     nextState.Stacks,
-		OriginalRefs:   oldRefs,
-		OriginalStacks: cloneStacks(state.Stacks),
-	})
-	if err != nil {
-		return restore(err)
-	}
-	state.Pending = pending
-	if err := a.git.WriteState(state); err != nil {
-		return restore(err)
-	}
-	return a.runPendingRebases(state)
+	plannedRefs := make(map[string]string, len(oldRefs)+1)
+	maps.Copy(plannedRefs, oldRefs)
+	plannedRefs[selection.Base] = baseRef
+	return a.startRebaseQueueOperation(
+		state,
+		"squash",
+		current,
+		selection.Bottom,
+		nextState.Stacks,
+		[]string{selection.Base},
+		plannedRefs,
+		ops,
+		nil,
+		nil,
+		commit,
+		false,
+		selection.Removed,
+		nil,
+	)
 }
 
 func squashRange(state State, current string, count int) (squashSelection, error) {
@@ -759,25 +734,12 @@ func (a *App) squashCommitArgs(opts squashOptions, branches []string) ([]string,
 	if err != nil {
 		return nil, nil, err
 	}
-	path, err := a.git.GitPath("graphene/SQUASH_MSG")
-	if err != nil {
-		return nil, nil, err
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, nil, err
-	}
-	if err := os.WriteFile(path, []byte(message), 0o644); err != nil {
-		return nil, nil, err
-	}
-	cleanup := func() {
-		_ = os.Remove(path)
-	}
 	args = append(args, opts.commitArgs...)
 	if !opts.noEdit {
 		args = append(args, "--edit")
 	}
-	args = append(args, "-F", path)
-	return args, cleanup, nil
+	args = append(args, "-m", message)
+	return args, func() {}, nil
 }
 
 func (a *App) defaultSquashMessage(branches []string) (string, error) {
@@ -869,11 +831,22 @@ func (a *App) amend(args []string) error {
 	if err != nil {
 		return err
 	}
+	if state.Operation != nil {
+		return fmt.Errorf("pending %s operation; use graphene continue or graphene abort", state.Operation.Kind)
+	}
 	if state.Pending != nil {
 		return fmt.Errorf("pending rebase exists; use graphene continue or graphene abort")
 	}
 
-	if err := a.stageRequestedChanges(opts); err != nil {
+	oldRefs := a.stateRefs(state)
+	oldHead, err := a.git.Head()
+	if err != nil {
+		return err
+	}
+	oldRefs[current] = oldHead
+
+	ops, err := RestackOpsAfterRewrite(state, current, oldRefs)
+	if err != nil {
 		return err
 	}
 	if !opts.stageAll && !opts.stageUpdate {
@@ -889,55 +862,26 @@ func (a *App) amend(args []string) error {
 			if !staged {
 				return fmt.Errorf("unstaged changes are not included by graphene amend; stage them first or use -a/--all or -u/--update")
 			}
+			if len(ops) > 0 {
+				return fmt.Errorf("unstaged changes would prevent restacking; stash or commit them before graphene amend")
+			}
 		}
-	}
-
-	oldRefs := a.stateRefs(state)
-	oldHead, err := a.git.Head()
-	if err != nil {
-		return err
-	}
-	oldRefs[current] = oldHead
-
-	ops, err := RestackOpsAfterRewrite(state, current, oldRefs)
-	if err != nil {
-		return err
 	}
 	if len(ops) > 0 {
-		dirty, err := a.git.HasUnstagedChanges()
-		if err != nil {
-			return err
-		}
-		if dirty {
-			return fmt.Errorf("unstaged changes would prevent restacking; stash or commit them before graphene amend")
-		}
 		if err := a.validateRebaseOpsUpdateable("amend", current, state, oldRefs, ops); err != nil {
 			return err
 		}
 	}
 
 	commitGitArgs := append([]string{"commit", "--amend"}, opts.commitArgs...)
-	if err := a.git.Run(commitGitArgs...); err != nil {
-		return err
+	commit := &journalCommit{
+		Branch:      current,
+		Mode:        "amend",
+		StageAll:    opts.stageAll,
+		StageUpdate: opts.stageUpdate,
+		Args:        commitGitArgs,
 	}
-	if len(ops) == 0 {
-		return nil
-	}
-
-	pending, err := a.pendingForCurrentWorktree(Pending{
-		Operation:    "amend",
-		Branch:       current,
-		ReturnBranch: current,
-		Queue:        ops,
-	})
-	if err != nil {
-		return err
-	}
-	state.Pending = pending
-	if err := a.git.WriteState(state); err != nil {
-		return err
-	}
-	return a.runPendingRebases(state)
+	return a.startRebaseQueueOperation(state, "amend", current, current, state.Stacks, nil, oldRefs, ops, nil, nil, commit, true, nil, nil)
 }
 
 func (a *App) restack(args []string) error {
@@ -954,6 +898,9 @@ func (a *App) restack(args []string) error {
 	state, err := a.git.ReadState()
 	if err != nil {
 		return err
+	}
+	if state.Operation != nil {
+		return fmt.Errorf("pending %s operation; use graphene continue or graphene abort", state.Operation.Kind)
 	}
 	if state.Pending != nil {
 		return fmt.Errorf("pending rebase exists; use graphene continue or graphene abort")
@@ -991,13 +938,14 @@ func (a *App) restack(args []string) error {
 		return err
 	}
 
-	headUpdated := false
+	updatedHead := oldHead
 	if !opts.local {
-		headUpdated, err = a.updateCurrentBranchFromUpstream(current, oldHead)
+		updatedHead, err = a.fetchCurrentBranchUpdate(current, oldHead)
 		if err != nil {
 			return err
 		}
 	}
+	headUpdated := updatedHead != oldHead
 	oldBaseRef := oldRefs[oldBase]
 	if oldBaseRef == "" {
 		oldBaseRef, err = a.git.Output("rev-parse", "--verify", oldBase+"^{commit}")
@@ -1028,35 +976,30 @@ func (a *App) restack(args []string) error {
 	if err := a.validateRebaseOpsUpdateable("restack", current, nextState, oldRefs, ops); err != nil {
 		return err
 	}
-	if len(ops) == 0 {
+	if len(ops) == 0 && !headUpdated {
 		return a.git.WriteState(nextState)
 	}
-
-	pending, err := a.pendingForCurrentWorktree(Pending{
-		Operation:    "restack",
-		Branch:       current,
-		ReturnBranch: current,
-		Queue:        ops,
-		NextStacks:   nextState.Stacks,
-	})
-	if err != nil {
-		return err
+	var fastForward *journalFastForward
+	topOverrides := map[int]string{}
+	if headUpdated {
+		fastForward = &journalFastForward{Branch: current, Old: oldHead, New: updatedHead}
+		for index, op := range ops {
+			if op.Top == current {
+				topOverrides[index] = updatedHead
+			}
+		}
 	}
-	state.Pending = pending
-	if err := a.git.WriteState(state); err != nil {
-		return err
-	}
-	return a.runPendingRebases(state)
+	oldRefs[base] = baseRef
+	return a.startRebaseQueueOperation(state, "restack", current, current, nextState.Stacks, []string{base}, oldRefs, ops, fastForward, topOverrides, nil, false, nil, nil)
 }
 
-func (a *App) continueRebase(args []string) error {
-	if len(args) != 0 {
-		return fmt.Errorf("graphene continue does not accept arguments")
-	}
-
+func (a *App) continueRebase(opts continueOptions) error {
 	state, err := a.git.ReadState()
 	if err != nil {
 		return err
+	}
+	if state.Operation != nil {
+		return a.continueOperation(state, opts)
 	}
 	if state.Pending == nil {
 		inProgress, err := a.git.RebaseInProgress()
@@ -1258,13 +1201,13 @@ func restoreRebaseMerge(snapshot *rebaseMergeSnapshot) error {
 	return nil
 }
 
-func (a *App) abortRebase(args []string) error {
-	if len(args) != 0 {
-		return fmt.Errorf("graphene abort does not accept arguments")
-	}
+func (a *App) abortRebase(opts abortOptions) error {
 	state, err := a.git.ReadState()
 	if err != nil {
 		return err
+	}
+	if state.Operation != nil {
+		return a.abortOperation(state, opts)
 	}
 	inProgress, err := a.git.RebaseInProgress()
 	if err != nil {
@@ -1439,6 +1382,9 @@ func (a *App) deleteBranch(args []string) error {
 	if err != nil {
 		return err
 	}
+	if state.Operation != nil {
+		return fmt.Errorf("pending %s operation; use graphene continue or graphene abort", state.Operation.Kind)
+	}
 	if state.Pending != nil {
 		return fmt.Errorf("pending rebase exists; use graphene continue or graphene abort")
 	}
@@ -1468,6 +1414,7 @@ func (a *App) deleteBranch(args []string) error {
 	if !ok {
 		return fmt.Errorf("branch %q is not in a graphene stack", branch)
 	}
+	switchBranch := ""
 	if current == branch {
 		baseExists, err := a.git.BranchExists(base)
 		if err != nil {
@@ -1476,9 +1423,7 @@ func (a *App) deleteBranch(args []string) error {
 		if !baseExists {
 			return fmt.Errorf("base branch %q does not exist; switch away from %q before graphene delete", base, branch)
 		}
-		if err := a.git.Run("switch", base); err != nil {
-			return err
-		}
+		switchBranch = base
 	} else {
 		checkedOut, err := a.git.BranchCheckedOut(branch)
 		if err != nil {
@@ -1489,11 +1434,31 @@ func (a *App) deleteBranch(args []string) error {
 		}
 	}
 
-	if err := a.git.Run("branch", "-D", branch); err != nil {
+	nextState := RemoveBranches(State{Stacks: cloneStacks(state.Stacks)}, []string{branch})
+	old, err := a.git.RefValue("refs/heads/" + branch)
+	if err != nil {
 		return err
 	}
-	nextState := RemoveBranches(State{Stacks: cloneStacks(state.Stacks)}, []string{branch})
-	return a.git.WriteState(nextState)
+	policy := worktreeRestoreNone
+	if switchBranch != "" {
+		policy = worktreeRestoreIndex
+	}
+	baseOID, err := a.git.Output("rev-parse", "--verify", "refs/heads/"+base+"^{commit}")
+	if err != nil {
+		return err
+	}
+	return a.startRefMutationOperation(
+		state,
+		"delete",
+		current,
+		nextState.Stacks,
+		[]string{base},
+		map[string]string{base: baseOID},
+		[]refEdit{{Ref: "refs/heads/" + branch, Old: old}},
+		[]string{branch},
+		switchBranch,
+		policy,
+	)
 }
 
 func (a *App) deleteBranchStack(branch, current string, state State) error {
@@ -1518,6 +1483,7 @@ func (a *App) deleteBranchStack(branch, current string, state State) error {
 		}
 	}
 
+	switchBranch := ""
 	if deleting[current] {
 		base, ok := BaseBranch(state, branch)
 		if !ok {
@@ -1530,12 +1496,13 @@ func (a *App) deleteBranchStack(branch, current string, state State) error {
 		if !baseExists {
 			return fmt.Errorf("base branch %q does not exist; switch away from %q before graphene delete --stack", base, current)
 		}
-		if err := a.git.Run("switch", base); err != nil {
-			return err
-		}
+		switchBranch = base
 	}
 
 	for _, branch := range branches {
+		if branch == current && switchBranch != "" {
+			continue
+		}
 		checkedOut, err := a.git.BranchCheckedOut(branch)
 		if err != nil {
 			return err
@@ -1545,13 +1512,32 @@ func (a *App) deleteBranchStack(branch, current string, state State) error {
 		}
 	}
 
+	nextState := RemoveBranches(State{Stacks: cloneStacks(state.Stacks)}, branches)
+	edits := make([]refEdit, 0, len(branches))
 	for _, branch := range branches {
-		if err := a.git.Run("branch", "-D", branch); err != nil {
+		old, err := a.git.RefValue("refs/heads/" + branch)
+		if err != nil {
 			return err
 		}
+		edits = append(edits, refEdit{Ref: "refs/heads/" + branch, Old: old})
 	}
-	nextState := RemoveBranches(State{Stacks: cloneStacks(state.Stacks)}, branches)
-	return a.git.WriteState(nextState)
+	policy := worktreeRestoreNone
+	if switchBranch != "" {
+		policy = worktreeRestoreIndex
+	}
+	observed := []string{}
+	if base, ok := BaseBranch(state, branch); ok {
+		observed = append(observed, base)
+	}
+	plannedRefs := map[string]string{}
+	for _, name := range observed {
+		oid, err := a.git.Output("rev-parse", "--verify", "refs/heads/"+name+"^{commit}")
+		if err != nil {
+			return err
+		}
+		plannedRefs[name] = oid
+	}
+	return a.startRefMutationOperation(state, "delete", current, nextState.Stacks, observed, plannedRefs, edits, branches, switchBranch, policy)
 }
 
 func stackSubtreeBranches(state State, root string) []string {
@@ -1592,6 +1578,9 @@ func (a *App) trackBranch(base, branch string) error {
 	if err != nil {
 		return err
 	}
+	if state.Operation != nil {
+		return fmt.Errorf("pending %s operation; use graphene continue or graphene abort", state.Operation.Kind)
+	}
 	if state.Pending != nil {
 		return fmt.Errorf("pending rebase exists; use graphene continue or graphene abort")
 	}
@@ -1603,13 +1592,48 @@ func (a *App) trackBranch(base, branch string) error {
 	if err := a.validateTrackBranchesExist(base, branch); err != nil {
 		return err
 	}
-	if err := a.updateTrackParentFromUpstream(base, branch); err != nil {
+	oldBase, updatedBase, updateBase, err := a.planTrackParentUpdate(base, branch)
+	if err != nil {
 		return err
 	}
-	if err := a.validateTrackBranchShape(base, branch); err != nil {
+	baseForValidation := "refs/heads/" + base
+	if updateBase {
+		baseForValidation = updatedBase
+	}
+	if err := a.validateTrackBranchShapeFromRef(base, baseForValidation, branch); err != nil {
 		return err
 	}
-	return a.git.WriteState(nextState)
+	if !updateBase {
+		return a.git.WriteState(nextState)
+	}
+	current, err := a.git.CurrentBranch()
+	if err != nil {
+		return err
+	}
+	policy := worktreeRestoreNone
+	if current == base {
+		policy = worktreeRestoreIndex
+	}
+	branchOID, err := a.git.Output("rev-parse", "--verify", "refs/heads/"+branch+"^{commit}")
+	if err != nil {
+		return err
+	}
+	return a.startRefMutationOperation(
+		state,
+		"track",
+		current,
+		nextState.Stacks,
+		[]string{base, branch},
+		map[string]string{base: oldBase, branch: branchOID},
+		[]refEdit{{
+			Ref: "refs/heads/" + base,
+			Old: RefValue{Exists: true, OID: oldBase},
+			New: RefValue{Exists: true, OID: updatedBase},
+		}},
+		nil,
+		"",
+		policy,
+	)
 }
 
 func (a *App) track(args []string) error {
@@ -1640,6 +1664,9 @@ func (a *App) importStack(args []string) error {
 	state, err := a.git.ReadState()
 	if err != nil {
 		return err
+	}
+	if state.Operation != nil {
+		return fmt.Errorf("pending %s operation; use graphene continue or graphene abort", state.Operation.Kind)
 	}
 	if state.Pending != nil {
 		return fmt.Errorf("pending rebase exists; use graphene continue or graphene abort")
@@ -1708,23 +1735,37 @@ func (a *App) importStack(args []string) error {
 		parent = branch.Branch
 	}
 
-	var created []string
+	var edits []refEdit
 	for _, branch := range branches {
 		if !branch.Create {
 			continue
 		}
-		if err := a.git.OutputErr("branch", branch.Branch, branch.Commit); err != nil {
-			a.cleanupCreatedBranches(created)
+		edits = append(edits, refEdit{
+			Ref: "refs/heads/" + branch.Branch,
+			New: RefValue{Exists: true, OID: branch.Commit},
+		})
+	}
+	if len(edits) == 0 {
+		if err := a.validateImportedBranches(base, branches); err != nil {
 			return err
 		}
-		created = append(created, branch.Branch)
+		return a.git.WriteState(nextState)
 	}
-
-	if err := a.validateImportedBranches(base, branches); err != nil {
-		a.cleanupCreatedBranches(created)
-		return err
+	observed := []string{base}
+	for _, branch := range branches {
+		if !branch.Create {
+			observed = append(observed, branch.Branch)
+		}
 	}
-	return a.git.WriteState(nextState)
+	plannedRefs := map[string]string{}
+	for _, name := range observed {
+		oid, err := a.git.Output("rev-parse", "--verify", "refs/heads/"+name+"^{commit}")
+		if err != nil {
+			return err
+		}
+		plannedRefs[name] = oid
+	}
+	return a.startRefMutationOperation(state, "import", current, nextState.Stacks, observed, plannedRefs, edits, nil, "", worktreeRestoreNone)
 }
 
 func (a *App) importCommits(base string) ([]string, error) {
@@ -1834,26 +1875,11 @@ func (a *App) validateImportedBranches(base string, branches []importBranch) err
 	return nil
 }
 
-func (a *App) cleanupCreatedBranches(branches []string) {
-	for i := len(branches) - 1; i >= 0; i-- {
-		_ = a.git.OutputErr("branch", "-D", branches[i])
-	}
-}
-
 func shortImportRef(ref string) string {
-	if strings.HasPrefix(ref, "refs/heads/") {
-		return strings.TrimPrefix(ref, "refs/heads/")
+	if after, ok := strings.CutPrefix(ref, "refs/heads/"); ok {
+		return after
 	}
 	return shortSyncRef(ref)
-}
-
-func (a *App) pendingForCurrentWorktree(pending Pending) (*Pending, error) {
-	worktree, err := a.git.WorktreeID()
-	if err != nil {
-		return nil, err
-	}
-	pending.Worktree = worktree
-	return &pending, nil
 }
 
 type syncSelection struct {
@@ -1869,6 +1895,29 @@ type syncPath struct {
 	BranchLimit        int
 	CurrentBranchIndex int
 	SkipTops           []string
+}
+
+type syncComponent struct {
+	Names      []string
+	Branches   map[string]bool
+	Deleted    []string
+	Ops        []RebaseOp
+	Foreground bool
+}
+
+func (c syncComponent) Name() string {
+	return strings.Join(c.Names, ", ")
+}
+
+type syncComponentFailure struct {
+	Component syncComponent
+	Top       string
+}
+
+type syncSubmodule struct {
+	Path   string
+	Head   string
+	Branch string `json:",omitempty"`
 }
 
 func syncSelectionForCurrent(state State, current string) (syncSelection, bool) {
@@ -1998,6 +2047,9 @@ func (a *App) sync(args []string) error {
 	if err != nil {
 		return err
 	}
+	if state.Operation != nil {
+		return fmt.Errorf("pending %s operation; use graphene continue or graphene abort", state.Operation.Kind)
+	}
 	if state.Pending != nil {
 		return fmt.Errorf("pending rebase exists; use graphene continue or graphene abort")
 	}
@@ -2025,6 +2077,10 @@ func (a *App) sync(args []string) error {
 	}
 	if dirty {
 		return fmt.Errorf("tracked changes would prevent sync; stash or commit them before graphene sync")
+	}
+	initialSubmodules, err := a.snapshotCleanSyncSubmodules()
+	if err != nil {
+		return err
 	}
 
 	var skipped []syncSkippedPath
@@ -2070,6 +2126,7 @@ func (a *App) sync(args []string) error {
 	var ambiguousBranches []string
 	remoteRefExists := map[string]bool{}
 	firstRemaining := map[int]int{}
+	removedByPath := make([][]string, 0, len(selection.Paths))
 	for _, path := range selection.Paths {
 		applied, err := a.appliedPrefixBranches(baseRef, path.Stack.Branches[:path.BranchLimit], oldRefs)
 		if err != nil {
@@ -2100,6 +2157,7 @@ func (a *App) sync(args []string) error {
 		}
 		firstRemaining[path.StackIndex] = len(removed)
 		branches = append(branches, removed...)
+		removedByPath = append(removedByPath, append([]string(nil), removed...))
 	}
 	if len(ambiguousBranches) > 0 && !opts.assumeMerged {
 		quoted := make([]string, len(ambiguousBranches))
@@ -2197,6 +2255,12 @@ func (a *App) sync(args []string) error {
 		return nil
 	}
 
+	components, err := planSyncComponents(state, selection, current, removedByPath, ops)
+	if err != nil {
+		return err
+	}
+	ops = syncComponentOps(components)
+
 	advanceBase := false
 	if !dryRunFetch {
 		advanceBase, err = a.syncBaseUpdateRequired(selection.Base, current, fetched)
@@ -2219,38 +2283,125 @@ func (a *App) sync(args []string) error {
 		}
 	}
 
-	pending, err := a.pendingForCurrentWorktree(Pending{
-		Operation:      "sync",
-		Branch:         current,
-		ReturnBranch:   pendingReturnBranch,
-		ReturnRef:      pendingReturnRef,
-		Queue:          ops,
-		Branches:       branches,
-		NextStacks:     nextState.Stacks,
-		BaseChanges:    baseChanges,
-		OriginalRefs:   originalRefs,
-		OriginalStacks: cloneStacks(state.Stacks),
-	})
+	baseOld := fetched.Old
+	baseNew := fetched.Updated
+	if dryRunFetch {
+		baseOld = basePlan.Old
+		baseNew = basePlan.Updated
+	}
+	plannedSyncRefs := make(map[string]string, len(oldRefs)+1)
+	maps.Copy(plannedSyncRefs, oldRefs)
+	currentHead, err := a.git.Head()
 	if err != nil {
 		return err
 	}
-	pending.SyncBase = selection.Base
-	pending.SyncBaseUpdate = advanceBase
-	if dryRunFetch {
-		pending.SyncBaseOld = basePlan.Old
-		pending.SyncBaseNew = basePlan.Updated
-	} else {
-		pending.SyncBaseOld = fetched.Old
-		pending.SyncBaseNew = fetched.Updated
+	plannedSyncRefs[current] = currentHead
+	return a.startSyncOperation(
+		state,
+		current,
+		pendingReturnBranch,
+		pendingReturnRef,
+		selection.Base,
+		baseOld,
+		baseNew,
+		advanceBase,
+		components,
+		originalRefs,
+		plannedSyncRefs,
+		initialSubmodules,
+	)
+}
+
+func planSyncComponents(state State, selection syncSelection, current string, removedByPath [][]string, ops []RebaseOp) ([]syncComponent, error) {
+	if len(removedByPath) != len(selection.Paths) {
+		return nil, fmt.Errorf("cannot safely sync: component deletion plan does not match selected stacks")
 	}
-	state.Pending = pending
-	if err := a.git.WriteState(state); err != nil {
-		return err
+
+	graph := newStackGraph(state)
+	var components []syncComponent
+	for i, path := range selection.Paths {
+		component := syncComponent{
+			Names:    []string{syncPathName(path)},
+			Branches: map[string]bool{},
+			Deleted:  append([]string(nil), removedByPath[i]...),
+		}
+		for _, branch := range syncPathAffectedBranches(path, graph) {
+			component.Branches[branch] = true
+		}
+
+		// Stack state is expected to be a forest, but merge overlapping closures
+		// defensively so one ref can never be committed by two independent units.
+		for componentIndex := 0; componentIndex < len(components); {
+			if !syncComponentsOverlap(component, components[componentIndex]) {
+				componentIndex++
+				continue
+			}
+			component = mergeSyncComponents(components[componentIndex], component)
+			components = append(components[:componentIndex], components[componentIndex+1:]...)
+		}
+		components = append(components, component)
 	}
-	if len(ops) == 0 {
-		return a.finishPendingRebases(state)
+
+	for _, op := range ops {
+		owner := -1
+		for i := range components {
+			if !components[i].Branches[op.Top] {
+				continue
+			}
+			if owner >= 0 {
+				return nil, fmt.Errorf("cannot safely sync: rebase of %q overlaps stack components %q and %q", op.Top, components[owner].Name(), components[i].Name())
+			}
+			owner = i
+		}
+		if owner < 0 {
+			return nil, fmt.Errorf("cannot safely sync: rebase of %q is outside every selected stack component", op.Top)
+		}
+		components[owner].Ops = append(components[owner].Ops, op)
 	}
-	return a.runPendingRebases(state)
+
+	trackedCurrent := state.ContainsBranch(current)
+	var background, foreground []syncComponent
+	for _, component := range components {
+		component.Foreground = trackedCurrent && component.Branches[current]
+		if component.Foreground {
+			foreground = append(foreground, component)
+		} else {
+			background = append(background, component)
+		}
+	}
+	return append(background, foreground...), nil
+}
+
+func syncComponentsOverlap(left, right syncComponent) bool {
+	for branch := range left.Branches {
+		if right.Branches[branch] {
+			return true
+		}
+	}
+	return false
+}
+
+func mergeSyncComponents(left, right syncComponent) syncComponent {
+	merged := syncComponent{
+		Names:    append(append([]string(nil), left.Names...), right.Names...),
+		Branches: map[string]bool{},
+		Deleted:  append(append([]string(nil), left.Deleted...), right.Deleted...),
+	}
+	for branch := range left.Branches {
+		merged.Branches[branch] = true
+	}
+	for branch := range right.Branches {
+		merged.Branches[branch] = true
+	}
+	return merged
+}
+
+func syncComponentOps(components []syncComponent) []RebaseOp {
+	var ops []RebaseOp
+	for _, component := range components {
+		ops = append(ops, component.Ops...)
+	}
+	return ops
 }
 
 type syncRetargetPlan struct {
@@ -2647,7 +2798,7 @@ func (a *App) commitPatchAppliedTo(upstream, commit string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		fields := strings.Fields(line)
 		if len(fields) != 2 || fields[1] != commit {
 			continue
@@ -2658,6 +2809,20 @@ func (a *App) commitPatchAppliedTo(upstream, commit string) (bool, error) {
 }
 
 func (a *App) validateSendAllowed(state State, branches []string) error {
+	if state.Operation != nil {
+		currentWorktree, err := a.git.WorktreeID()
+		if err != nil {
+			return err
+		}
+		if filepath.Clean(state.Operation.Worktree) == filepath.Clean(currentWorktree) {
+			return fmt.Errorf("pending %s operation; use graphene continue or graphene abort", state.Operation.Kind)
+		}
+		for _, branch := range branches {
+			if _, owned := state.Operation.Refs["refs/heads/"+branch]; owned {
+				return fmt.Errorf("pending %s in another worktree is rewriting branch %q; use graphene continue or graphene abort there before graphene send", state.Operation.Kind, branch)
+			}
+		}
+	}
 	if state.Pending == nil {
 		return nil
 	}
@@ -2824,6 +2989,29 @@ func (a *App) runPendingRebases(state State) error {
 	return nil
 }
 
+func (a *App) printSyncComponentSummary(succeeded []syncComponent, failures []syncComponentFailure, originalBranch, base string) {
+	if len(succeeded) > 0 {
+		fmt.Fprintln(a.stdout, "Synced:")
+		for _, component := range succeeded {
+			fmt.Fprintf(a.stdout, "  %s\n", component.Name())
+		}
+		fmt.Fprintln(a.stdout)
+	}
+	fmt.Fprintln(a.stdout, "Could not sync; restored unchanged:")
+	for _, failure := range failures {
+		fmt.Fprintf(a.stdout, "  %s: conflict rebasing %s\n", failure.Component.Name(), failure.Top)
+	}
+	fmt.Fprintf(a.stdout, "\nStill on %s. Run:\n", originalBranch)
+	for _, failure := range failures {
+		branch := failure.Component.Names[0]
+		if strings.Contains(branch, "..") {
+			branch = strings.SplitN(branch, "..", 2)[0]
+		}
+		fmt.Fprintf(a.stdout, "  git switch %s\n", branch)
+		fmt.Fprintf(a.stdout, "  graphene restack %s\n", base)
+	}
+}
+
 func (a *App) finishPendingRebases(state State) error {
 	returnBranch := ""
 	returnRef := ""
@@ -2949,111 +3137,108 @@ func (a *App) printSyncDryRun(base syncBaseDryRun, appliedBranches, assumedMerge
 	}
 }
 
-func (a *App) updateTrackParentFromUpstream(base, branch string) error {
+func (a *App) planTrackParentUpdate(base, branch string) (string, string, bool, error) {
 	exists, err := a.git.BranchExists(base)
 	if err != nil {
-		return err
+		return "", "", false, err
 	}
 	if !exists {
-		return nil
+		return "", "", false, nil
 	}
 
 	remote, merge, err := a.git.Upstream(base)
 	if err != nil {
-		return err
+		return "", "", false, err
 	}
 	if remote == "" || merge == "" {
-		return nil
+		return "", "", false, nil
 	}
 
 	oldBase, err := a.git.Output("rev-parse", "--verify", "refs/heads/"+base+"^{commit}")
 	if err != nil {
-		return err
+		return "", "", false, err
 	}
 	if err := a.git.Run("fetch", "--prune", remote); err != nil {
-		return err
+		return "", "", false, err
 	}
 
 	upstream := base + "@{upstream}"
 	updatedBase, err := a.git.Output("rev-parse", "--verify", upstream+"^{commit}")
 	if err != nil {
-		return err
+		return "", "", false, err
 	}
 	if oldBase == updatedBase {
-		return nil
+		return oldBase, updatedBase, false, nil
 	}
 	ancestor, err := a.isAncestor(oldBase, updatedBase)
 	if err != nil {
-		return err
+		return "", "", false, err
 	}
 	if !ancestor {
-		return fmt.Errorf("cannot fast-forward %q to %q; resolve the parent branch before tracking", base, upstream)
+		return "", "", false, fmt.Errorf("cannot fast-forward %q to %q; resolve the parent branch before tracking", base, upstream)
 	}
 
 	ancestor, err = a.isAncestor(updatedBase, "refs/heads/"+branch)
 	if err != nil {
-		return err
+		return "", "", false, err
 	}
 	if !ancestor {
-		return nil
+		return oldBase, updatedBase, false, nil
 	}
 
 	current, err := a.git.Output("branch", "--show-current")
 	if err != nil {
-		return err
+		return "", "", false, err
 	}
 	if current == base {
-		return a.git.Run("merge", "--ff-only", updatedBase)
+		return oldBase, updatedBase, true, nil
 	}
 
 	checkedOut, err := a.git.BranchCheckedOut(base)
 	if err != nil {
-		return err
+		return "", "", false, err
 	}
 	if checkedOut {
-		return fmt.Errorf("branch %q is checked out in another worktree; switch that worktree away from the branch before graphene track", base)
+		return "", "", false, fmt.Errorf("branch %q is checked out in another worktree; switch that worktree away from the branch before graphene track", base)
 	}
-	return a.git.OutputErr("update-ref", "refs/heads/"+base, updatedBase, oldBase)
+	return oldBase, updatedBase, true, nil
 }
 
-func (a *App) updateCurrentBranchFromUpstream(branch, oldHead string) (bool, error) {
+func (a *App) fetchCurrentBranchUpdate(branch, oldHead string) (string, error) {
 	remote, merge, err := a.git.Upstream(branch)
 	if err != nil {
-		return false, err
+		return "", err
 	}
 	if remote == "" || merge == "" {
-		return false, nil
+		return oldHead, nil
 	}
 	if err := a.git.Run("fetch", remote); err != nil {
-		return false, err
+		return "", err
 	}
 
 	upstream := branch + "@{upstream}"
 	updatedHead, err := a.git.Output("rev-parse", "--verify", upstream+"^{commit}")
 	if err != nil {
-		return false, err
+		return "", err
 	}
 	if oldHead == updatedHead {
-		return false, nil
+		return oldHead, nil
 	}
 	ancestor, err := a.isAncestor(updatedHead, oldHead)
 	if err != nil {
-		return false, err
+		return "", err
 	}
 	if ancestor {
-		return false, nil
+		return oldHead, nil
 	}
 	ancestor, err = a.isAncestor(oldHead, updatedHead)
 	if err != nil {
-		return false, err
+		return "", err
 	}
 	if !ancestor {
-		return false, fmt.Errorf("current branch %q diverged from upstream %q (local %s, upstream %s); reconcile the branch or rerun with --force to restack using local refs only", branch, upstream, shortSyncRef(oldHead), shortSyncRef(updatedHead))
+		return "", fmt.Errorf("current branch %q diverged from upstream %q (local %s, upstream %s); reconcile the branch or rerun with --force to restack using local refs only", branch, upstream, shortSyncRef(oldHead), shortSyncRef(updatedHead))
 	}
-	if err := a.git.Run("merge", "--ff-only", updatedHead); err != nil {
-		return false, err
-	}
-	return true, nil
+	return updatedHead, nil
 }
 
 type syncBaseDryRun struct {
@@ -3065,8 +3250,8 @@ type syncBaseDryRun struct {
 }
 
 func (b syncBaseDryRun) UpstreamName() string {
-	if strings.HasPrefix(b.Merge, "refs/heads/") {
-		return b.Remote + "/" + strings.TrimPrefix(b.Merge, "refs/heads/")
+	if after, ok := strings.CutPrefix(b.Merge, "refs/heads/"); ok {
+		return b.Remote + "/" + after
 	}
 	return b.Remote + " " + b.Merge
 }
@@ -3241,10 +3426,10 @@ func (a *App) fetchSyncBaseDryRun(base string) (string, syncBaseDryRun, error) {
 }
 
 func (a *App) switchToBaseOrDetach(base, baseRef string) error {
-	if err := a.git.OutputErr("switch", base); err == nil {
+	if err := a.git.RunOperationSwitch(base); err == nil {
 		return nil
 	}
-	return a.git.Run("switch", "--detach", baseRef)
+	return a.git.RunOperationSwitch("--detach", baseRef)
 }
 
 func (a *App) deleteBranchRefs(branches []string, originalRefs map[string]string) error {
@@ -3447,7 +3632,7 @@ func (a *App) appliedCommitRefs(base, top string) (map[string]bool, error) {
 	}
 
 	applied := map[string]bool{}
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		fields := strings.Fields(line)
 		if len(fields) != 2 || fields[0] != "-" {
 			continue
@@ -3548,7 +3733,7 @@ func (a *App) syncMutationRefs(current, base string, advanceBase bool, deleted [
 			return nil, err
 		}
 		commits := map[string]bool{}
-		for _, commit := range strings.Fields(out) {
+		for commit := range strings.FieldsSeq(out) {
 			commits[commit] = true
 		}
 		for branch, ref := range localRefs {
@@ -3658,7 +3843,10 @@ func (a *App) validateTrackBranchesExist(base, branch string) error {
 }
 
 func (a *App) validateTrackBranchShape(base, branch string) error {
-	baseRef := "refs/heads/" + base
+	return a.validateTrackBranchShapeFromRef(base, "refs/heads/"+base, branch)
+}
+
+func (a *App) validateTrackBranchShapeFromRef(base, baseRef, branch string) error {
 	branchRef := "refs/heads/" + branch
 	ancestor, err := a.isAncestor(baseRef, branchRef)
 	if err != nil {
@@ -3855,10 +4043,8 @@ func parseSquashArgs(args []string) (squashOptions, error) {
 				opts.count = count
 				continue
 			case "message":
-				message := flag.Value()
 				if !flag.HasValue() {
-					var err error
-					message, err = cursor.Value(flagparse.AcceptAny, fmt.Errorf("missing message after --message"))
+					message, err := cursor.Value(flagparse.AcceptAny, fmt.Errorf("missing message after --message"))
 					if err != nil {
 						return opts, err
 					}
@@ -3925,7 +4111,7 @@ func parseSquashArgs(args []string) (squashOptions, error) {
 func parseSquashCount(raw string) (int, error) {
 	count, err := strconv.Atoi(raw)
 	if err != nil || count < 2 {
-		return 0, fmt.Errorf("invalid squash count %q; use 2, 3, ...", raw)
+		return 0, fmt.Errorf("invalid squash count %q; use an integer of at least 2", raw)
 	}
 	return count, nil
 }
@@ -4021,10 +4207,8 @@ func parseCommitOptions(args []string, allowBranch bool) (commitOptions, error) 
 				opts.reuseCurrent = true
 				continue
 			case "message":
-				message := flag.Value()
 				if !flag.HasValue() {
-					var err error
-					message, err = cursor.Value(flagparse.AcceptAny, fmt.Errorf("missing message after --message"))
+					message, err := cursor.Value(flagparse.AcceptAny, fmt.Errorf("missing message after --message"))
 					if err != nil {
 						return opts, err
 					}
@@ -4288,13 +4472,6 @@ func parseImportArgs(args []string) (string, error) {
 		return "", fmt.Errorf("usage: graphene import <base>")
 	}
 	return base, nil
-}
-
-func canonicalTrackBaseFlag(flag string) string {
-	if flag == "-p" {
-		return "--parent"
-	}
-	return flag
 }
 
 func setTrackBase(base, baseFlag *string, flag, value string) error {

@@ -37,6 +37,8 @@ func TestCompletionStaticGrammar(t *testing.T) {
 		{name: "command flags", line: "graphene new --no-", want: []string{"--no-edit", "--no-gpg-sign", "--no-verify"}},
 		{name: "optional value flag", line: "graphene new --g", want: []string{"--gpg-sign"}},
 		{name: "remote flag", line: "graphene send --r", want: []string{"--remote"}},
+		{name: "continue recovery flag", line: "graphene continue --a", want: []string{"--accept-current"}},
+		{name: "abort recovery flags", line: "graphene abort -", want: []string{"--force", "--help", "-f", "-h"}},
 		{name: "explicit deleted-upstream policy", line: "graphene sync --ass", want: []string{"--assume-merged"}},
 		{name: "escaped whitespace groups a value", line: `graphene new --message hello\ world --b`, want: []string{"--base", "--branch"}},
 		{name: "help flag", line: "graphene delete -h", want: []string{"-h"}},
@@ -50,6 +52,24 @@ func TestCompletionStaticGrammar(t *testing.T) {
 				t.Fatalf("completion for %q = %#v, want %#v", tt.line, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestRecoveryCommandHelp(t *testing.T) {
+	t.Parallel()
+	repo := newTestRepo(t)
+
+	for _, tt := range []struct {
+		command string
+		want    string
+	}{
+		{command: "continue", want: "usage: graphene continue [--accept-current]"},
+		{command: "abort", want: "usage: graphene abort [-f|--force]"},
+	} {
+		code, stdout, stderr := repo.runGraphene(t, tt.command, "--help")
+		if code != 0 || stderr != "" || !strings.Contains(stdout, tt.want) {
+			t.Fatalf("graphene %s --help = (%d, %q, %q), want help containing %q", tt.command, code, stdout, stderr, tt.want)
+		}
 	}
 }
 
@@ -460,7 +480,7 @@ done
 	var candidates []string
 	files := false
 	fileOptionsPreserved := false
-	for _, outputLine := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+	for outputLine := range strings.SplitSeq(strings.TrimSpace(string(output)), "\n") {
 		switch {
 		case outputLine == "files:1":
 			files = true
