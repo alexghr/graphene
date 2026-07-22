@@ -11,8 +11,10 @@ let
       pkgs-unstable.go-tools
     ];
     text = ''
-      export XDG_CACHE_HOME="''${XDG_CACHE_HOME:-''${TMPDIR:-/tmp}/graphene-lint-cache}"
-      mkdir -p "$XDG_CACHE_HOME"
+      lint_cache_root="''${TMPDIR:-/tmp}/graphene-lint-cache"
+      export XDG_CACHE_HOME="''${XDG_CACHE_HOME:-$lint_cache_root}"
+      export STATICCHECK_CACHE="''${STATICCHECK_CACHE:-$lint_cache_root/staticcheck}"
+      mkdir -p "$XDG_CACHE_HOME" "$STATICCHECK_CACHE"
 
       unformatted="$({
         find . \
