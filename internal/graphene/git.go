@@ -12,10 +12,11 @@ import (
 )
 
 type Git struct {
-	Dir    string
-	Stdin  io.Reader
-	Stdout io.Writer
-	Stderr io.Writer
+	Dir       string
+	Stdin     io.Reader
+	Stdout    io.Writer
+	Stderr    io.Writer
+	stateLock *StateLock
 }
 
 type GitError struct {

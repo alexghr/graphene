@@ -32,7 +32,7 @@ func (a *App) Run(args []string) int {
 	if len(args) >= 2 {
 		command = args[1]
 	}
-	shellAliasRan := false
+	var expandedShell *shellAlias
 	gitVersion, err := a.git.Version()
 	if err == nil && !isVersionCommand(command) && gitVersion.less(minimumGitVersion) {
 		err = fmt.Errorf("graphene requires git >= %s; found git %s", minimumGitVersion, gitVersion)
@@ -48,19 +48,28 @@ func (a *App) Run(args []string) int {
 		if expandErr != nil {
 			err = expandErr
 		} else if expanded.shell != nil {
-			err = a.runShellAlias(*expanded.shell)
-			shellAliasRan = true
+			expandedShell = expanded.shell
 		} else {
 			args = expanded.args
 			command = args[1]
 		}
 	}
 
-	if err == nil && shellAliasRan {
-		return 0
+	// NOTE: this makes *App.Run() not thread safe as acquiring a lock here would make it available
+	// in other goroutines using the same *App
+	var stateLock *StateLock
+	if err == nil && expandedShell == nil && commandNeedsStateLock(command, args[2:]) {
+		stateLock, err = a.git.AcquireStateLock()
+		if err == nil {
+			a.git.stateLock = stateLock
+		}
 	}
 
-	if err == nil {
+	if err == nil && expandedShell != nil {
+		err = a.runShellAlias(*expandedShell)
+	}
+
+	if err == nil && expandedShell == nil {
 		switch command {
 		case "new":
 			if helpArgs(args[2:]) {
@@ -213,6 +222,12 @@ func (a *App) Run(args []string) int {
 			err = a.git.Run(gitArgs...)
 		}
 	}
+	if stateLock != nil {
+		if closeErr := stateLock.Close(); err == nil {
+			err = closeErr
+		}
+		a.git.stateLock = nil
+	}
 
 	if err == nil {
 		return 0
@@ -224,6 +239,18 @@ func (a *App) Run(args []string) int {
 		fmt.Fprintln(a.stderr, err)
 	}
 	return errorExitCode(err)
+}
+
+func commandNeedsStateLock(command string, args []string) bool {
+	if helpArgs(args) {
+		return false
+	}
+	switch command {
+	case "new", "amend", "split", "squash", "continue", "abort", "forget", "delete", "track", "import", "sync", "send", "sendf", "restack", "go":
+		return true
+	default:
+		return false
+	}
 }
 
 func (a *App) usage(w io.Writer) {

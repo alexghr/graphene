@@ -1,12 +1,9 @@
 package graphene
 
 import (
-	"encoding/json"
 	"fmt"
 	"slices"
 )
-
-const stateConfigKey = "graphene.state"
 
 type State struct {
 	Stacks  []Stack  `json:"stacks,omitempty"`
@@ -54,45 +51,6 @@ type BaseChange struct {
 type BranchLocation struct {
 	StackIndex  int
 	BranchIndex int
-}
-
-func (g Git) ReadState() (State, error) {
-	raw, err := g.Output("config", "--local", "--get", stateConfigKey)
-	if err != nil {
-		if isGitExit(err, 1) {
-			return State{}, nil
-		}
-		return State{}, err
-	}
-	if raw == "" {
-		return State{}, nil
-	}
-
-	var state State
-	if err := json.Unmarshal([]byte(raw), &state); err != nil {
-		return State{}, fmt.Errorf("parse %s: %w", stateConfigKey, err)
-	}
-	return state, nil
-}
-
-func (g Git) WriteState(state State) error {
-	if state.empty() {
-		_, err := g.Output("config", "--local", "--unset", stateConfigKey)
-		if err == nil || isGitExit(err, 5) {
-			return nil
-		}
-		return err
-	}
-
-	data, err := json.Marshal(state)
-	if err != nil {
-		return err
-	}
-	return g.OutputErr("config", "--local", stateConfigKey, string(data))
-}
-
-func (s State) empty() bool {
-	return len(s.Stacks) == 0 && s.Pending == nil
 }
 
 func cloneStacks(stacks []Stack) []Stack {
