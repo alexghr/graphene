@@ -281,6 +281,92 @@ func TestRegressionSyncAllowsStackAlreadyBasedOnFetchedBase(t *testing.T) {
 	}
 }
 
+func TestRegressionSyncAllAllowsLocalBaseAheadOfUpstream(t *testing.T) {
+	t.Parallel()
+	repo, _ := newTestRepoWithOrigin(t)
+	remoteMain := runGit(t, repo.dir, "rev-parse", "origin/main")
+	createStackBranch(t, repo, "one.txt", "one\n", "One")
+	createStackBranch(t, repo, "two.txt", "two\n", "Two")
+
+	runGit(t, repo.dir, "switch", "main")
+	runGit(t, repo.dir, "merge", "--ff-only", "stack/one")
+	localMain := runGit(t, repo.dir, "rev-parse", "main")
+	twoBefore := runGit(t, repo.dir, "rev-parse", "stack/two")
+	stateBefore := readState(t, repo.dir)
+
+	code, stdout, stderr := repo.runGraphene(t, "sync", "--all", "--dry-run")
+	if code != 0 {
+		t.Fatalf("graphene sync --all --dry-run exited %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if got := runGit(t, repo.dir, "rev-parse", "main"); got != localMain {
+		t.Fatalf("main changed from %s to %s during dry run", localMain, got)
+	}
+	if got := runGit(t, repo.dir, "rev-parse", "origin/main"); got != remoteMain {
+		t.Fatalf("origin/main changed from %s to %s during dry run", remoteMain, got)
+	}
+	if got := runGit(t, repo.dir, "rev-parse", "stack/two"); got != twoBefore {
+		t.Fatalf("stack/two changed from %s to %s during dry run", twoBefore, got)
+	}
+	if got := readState(t, repo.dir); !reflect.DeepEqual(got, stateBefore) {
+		t.Fatalf("state changed during dry run from %#v to %#v", stateBefore, got)
+	}
+
+	expectGrapheneOK(t, repo, "sync", "--all")
+	if got := runGit(t, repo.dir, "rev-parse", "main"); got != localMain {
+		t.Fatalf("main = %s, want local commit %s", got, localMain)
+	}
+	if got := runGit(t, repo.dir, "rev-parse", "origin/main"); got != remoteMain {
+		t.Fatalf("origin/main = %s, want remote commit %s", got, remoteMain)
+	}
+	if refExists(t, repo.dir, "refs/heads/stack/one") {
+		t.Fatal("stack/one still exists after its commit was applied to main")
+	}
+	assertBranchParent(t, repo.dir, "stack/two", "main")
+	if !refFileExists(t, repo.dir, "stack/two:two.txt") {
+		t.Fatal("stack/two lost its patch during sync")
+	}
+	if got := currentBranch(t, repo.dir); got != "main" {
+		t.Fatalf("current branch = %q, want main", got)
+	}
+	wantState := State{Stacks: []Stack{{Base: "main", Branches: []string{"stack/two"}}}}
+	if got := readState(t, repo.dir); !reflect.DeepEqual(got, wantState) {
+		t.Fatalf("state = %#v, want %#v", got, wantState)
+	}
+}
+
+func TestRegressionSyncAllRejectsDivergedBase(t *testing.T) {
+	t.Parallel()
+	repo, remote := newTestRepoWithOrigin(t)
+	createStackBranch(t, repo, "one.txt", "one\n", "One")
+	runGit(t, repo.dir, "switch", "main")
+	commitFile(t, repo.dir, "local.txt", "local\n", "Local base update")
+
+	actor := cloneConfiguredRepo(t, remote, "main")
+	commitFile(t, actor, "remote.txt", "remote\n", "Remote base update")
+	runGit(t, actor, "push", "origin", "main")
+
+	mainBefore := runGit(t, repo.dir, "rev-parse", "main")
+	oneBefore := runGit(t, repo.dir, "rev-parse", "stack/one")
+	stateBefore := readState(t, repo.dir)
+	code, stdout, stderr := repo.runGraphene(t, "sync", "--all")
+	if code == 0 {
+		t.Fatalf("graphene sync --all unexpectedly succeeded\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
+	}
+	wantError := "cannot fast-forward \"main\" to \"main@{upstream}\"; resolve the base branch before updating the stack"
+	if !strings.Contains(stderr, wantError) {
+		t.Fatalf("stderr = %q, want it to contain %q", stderr, wantError)
+	}
+	if got := runGit(t, repo.dir, "rev-parse", "main"); got != mainBefore {
+		t.Fatalf("main changed from %s to %s after refused sync", mainBefore, got)
+	}
+	if got := runGit(t, repo.dir, "rev-parse", "stack/one"); got != oneBefore {
+		t.Fatalf("stack/one changed from %s to %s after refused sync", oneBefore, got)
+	}
+	if got := readState(t, repo.dir); !reflect.DeepEqual(got, stateBefore) {
+		t.Fatalf("state changed after refused sync from %#v to %#v", stateBefore, got)
+	}
+}
+
 func newTestRepoWithOrigin(t *testing.T) (testRepo, string) {
 	t.Helper()
 

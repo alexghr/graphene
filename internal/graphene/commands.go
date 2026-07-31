@@ -3077,6 +3077,26 @@ type fetchedBase struct {
 	Updated string
 }
 
+func (a *App) syncBaseAfterFetch(base, upstream, oldBase, updatedBase string) (string, error) {
+	ancestor, err := a.isAncestor(oldBase, updatedBase)
+	if err != nil {
+		return "", err
+	}
+	if ancestor {
+		return updatedBase, nil
+	}
+
+	ancestor, err = a.isAncestor(updatedBase, oldBase)
+	if err != nil {
+		return "", err
+	}
+	if ancestor {
+		return oldBase, nil
+	}
+
+	return "", fmt.Errorf("cannot fast-forward %q to %q; resolve the base branch before updating the stack", base, upstream)
+}
+
 func (a *App) fetchBaseUpdate(base string) (fetchedBase, error) {
 	remote, merge, err := a.git.Upstream(base)
 	if err != nil {
@@ -3099,12 +3119,9 @@ func (a *App) fetchBaseUpdate(base string) (fetchedBase, error) {
 	if err != nil {
 		return fetchedBase{}, err
 	}
-	ancestor, err := a.isAncestor(oldBase, updatedBase)
+	updatedBase, err = a.syncBaseAfterFetch(base, upstream, oldBase, updatedBase)
 	if err != nil {
 		return fetchedBase{}, err
-	}
-	if !ancestor {
-		return fetchedBase{}, fmt.Errorf("cannot fast-forward %q to %q; resolve the base branch before updating the stack", base, upstream)
 	}
 	return fetchedBase{Old: oldBase, Updated: updatedBase}, nil
 }
@@ -3224,12 +3241,9 @@ func (a *App) fetchSyncBaseDryRun(base string) (string, syncBaseDryRun, error) {
 		return "", syncBaseDryRun{}, cleanupErr
 	}
 
-	ancestor, err := a.isAncestor(oldBase, updatedBase)
+	updatedBase, err = a.syncBaseAfterFetch(base, base+"@{upstream}", oldBase, updatedBase)
 	if err != nil {
 		return "", syncBaseDryRun{}, err
-	}
-	if !ancestor {
-		return "", syncBaseDryRun{}, fmt.Errorf("cannot fast-forward %q to %q; resolve the base branch before updating the stack", base, base+"@{upstream}")
 	}
 
 	return updatedBase, syncBaseDryRun{
