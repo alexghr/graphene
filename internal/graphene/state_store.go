@@ -247,12 +247,16 @@ func (g Git) writeLegacyStateValue(value string) error {
 }
 
 func writeStateFileAtomic(path string, file stateFile) error {
+	return writeJSONFileAtomic(path, file)
+}
+
+func writeJSONFileAtomic(path string, value any) error {
 	dir := filepath.Dir(path)
 	if err := ensureDurableDir(dir, 0o700); err != nil {
 		return fmt.Errorf("create graphene state directory: %w", err)
 	}
 
-	data, err := json.Marshal(file)
+	data, err := json.Marshal(value)
 	if err != nil {
 		return fmt.Errorf("encode graphene state: %w", err)
 	}

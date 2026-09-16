@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -17,6 +18,7 @@ type Git struct {
 	Stdout    io.Writer
 	Stderr    io.Writer
 	stateLock *StateLock
+	indexFile string
 }
 
 type GitError struct {
@@ -41,9 +43,17 @@ func (e *GitError) Error() string {
 	return fmt.Sprintf("git %s exited with status %d", strings.Join(e.Args, " "), e.Code)
 }
 
-func (g Git) Run(args ...string) error {
+func (g Git) command(args ...string) *exec.Cmd {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = g.Dir
+	if g.indexFile != "" {
+		cmd.Env = append(os.Environ(), "GIT_INDEX_FILE="+g.indexFile)
+	}
+	return cmd
+}
+
+func (g Git) Run(args ...string) error {
+	cmd := g.command(args...)
 	cmd.Stdin = g.Stdin
 	cmd.Stdout = g.Stdout
 	cmd.Stderr = g.Stderr
@@ -54,15 +64,24 @@ func (g Git) Run(args ...string) error {
 }
 
 func (g Git) Output(args ...string) (string, error) {
-	cmd := exec.Command("git", args...)
-	cmd.Dir = g.Dir
+	out, err := g.OutputBytes(args...)
+	return strings.TrimRight(string(out), "\n"), err
+}
+
+func (g Git) OutputBytes(args ...string) ([]byte, error) {
+	return g.outputWithInput(nil, args...)
+}
+
+func (g Git) outputWithInput(input io.Reader, args ...string) ([]byte, error) {
+	cmd := g.command(args...)
+	cmd.Stdin = input
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return "", gitCommandError(args, err, stderr.String(), false)
+		return nil, gitCommandError(args, err, stderr.String(), false)
 	}
-	return strings.TrimRight(stdout.String(), "\n"), nil
+	return stdout.Bytes(), nil
 }
 
 func gitCommandError(args []string, err error, stderr string, streamed bool) error {
@@ -330,12 +349,12 @@ func (g Git) WorktreeID() (string, error) {
 }
 
 func (g Git) GitPath(name string) (string, error) {
-	path, err := g.Output("rev-parse", "--git-path", name)
+	path, err := g.Output("rev-parse", "--path-format=absolute", "--git-path", name)
 	if err != nil {
 		return "", err
 	}
-	if !filepath.IsAbs(path) && g.Dir != "" {
-		path = filepath.Join(g.Dir, path)
+	if !filepath.IsAbs(path) {
+		return "", fmt.Errorf("git returned non-absolute path for %q: %q", name, path)
 	}
 	return path, nil
 }
