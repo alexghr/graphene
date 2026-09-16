@@ -461,19 +461,19 @@ func TestParseArgs(t *testing.T) {
 	if !syncOpts.all || syncOpts.dryRun || !syncOpts.force {
 		t.Fatalf("parseSyncArgs cluster override = %#v", syncOpts)
 	}
-	restackOpts, err := parseRestackArgs([]string{"--force", "target"})
+	restackOpts, err := parseRestackArgs([]string{"--fetch", "target"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if restackOpts.base != "target" || !restackOpts.local {
-		t.Fatalf("parseRestackArgs --force = %#v", restackOpts)
+	if restackOpts.base != "target" || !restackOpts.fetch {
+		t.Fatalf("parseRestackArgs --fetch = %#v", restackOpts)
 	}
-	restackOpts, err = parseRestackArgs([]string{"-f", "target"})
+	restackOpts, err = parseRestackArgs([]string{"target"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if restackOpts.base != "target" || !restackOpts.local {
-		t.Fatalf("parseRestackArgs -f = %#v", restackOpts)
+	if restackOpts.base != "target" || restackOpts.fetch {
+		t.Fatalf("parseRestackArgs default = %#v", restackOpts)
 	}
 	graphOpts, err := parseGraphArgs([]string{"--stack"})
 	if err != nil {

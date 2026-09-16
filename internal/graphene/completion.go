@@ -50,7 +50,7 @@ var commandCompletionFlags = map[string][]string{
 	"graph":      {"-s", "--stack", "-h", "--help"},
 	"import":     {"-h", "--help"},
 	"new":        {"-a", "--all", "-u", "--update", "-b", "--branch", "--base", "--parent", "--reuse-current", "-m", "--message", "--no-edit", "--no-verify", "--gpg-sign", "--no-gpg-sign", "-h", "--help"},
-	"restack":    {"-f", "--force", "-h", "--help"},
+	"restack":    {"--fetch", "-h", "--help"},
 	"send":       {"--remote", "-s", "--stack", "-n", "--dry-run", "-h", "--help"},
 	"sendf":      {"--remote", "-s", "--stack", "-n", "--dry-run", "-h", "--help"},
 	"skill":      {"--codex", "--claude", "--out", "-h", "--help"},

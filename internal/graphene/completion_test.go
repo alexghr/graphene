@@ -87,7 +87,7 @@ func TestCompletionBranchDomains(t *testing.T) {
 		{name: "track parent attached", line: "graphene track --parent=lo", want: []string{"--parent=local/untracked"}},
 		{name: "track optional branch", line: "graphene track --parent main lo", want: []string{"local/untracked"}},
 		{name: "import local branch", line: "graphene import lo", want: []string{"local/untracked"}},
-		{name: "restack local branch", line: "graphene restack --force lo", want: []string{"local/untracked"}},
+		{name: "restack local branch", line: "graphene restack --fetch lo", want: []string{"local/untracked"}},
 		{name: "checkout existing branch", line: "graphene checkout lo", want: []string{"local/untracked"}},
 		{name: "switch existing branch", line: "graphene switch lo", want: []string{"local/untracked"}},
 		{name: "checkout new branch slot", line: "graphene checkout -b lo"},
@@ -123,7 +123,7 @@ func TestCompletionConfiguredAliases(t *testing.T) {
 	t.Parallel()
 	repo := newTestRepo(t)
 	runGit(t, repo.dir, "branch", "local-target")
-	runGit(t, repo.dir, "config", "graphene.alias.onto", "restack --force")
+	runGit(t, repo.dir, "config", "graphene.alias.onto", "restack --fetch")
 	runGit(t, repo.dir, "config", "graphene.alias.up", "go up")
 	runGit(t, repo.dir, "config", "graphene.alias.boom", "!touch completion-shell-alias-ran")
 	runGit(t, repo.dir, "config", "graphene.alias.sync", "graph")

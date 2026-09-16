@@ -993,8 +993,12 @@ func (a *App) restack(args []string) error {
 	}
 
 	headUpdated := false
-	if !opts.local {
-		headUpdated, err = a.updateCurrentBranchFromUpstream(current, oldHead)
+	if opts.fetch {
+		fetched, err := a.fetchUpstream(current)
+		if err != nil {
+			return err
+		}
+		headUpdated, err = a.fastForwardCurrentBranch(current, oldHead, fetched.Updated)
 		if err != nil {
 			return err
 		}
@@ -1604,9 +1608,6 @@ func (a *App) trackBranch(base, branch string) error {
 	if err := a.validateTrackBranchesExist(base, branch); err != nil {
 		return err
 	}
-	if err := a.updateTrackParentFromUpstream(base, branch); err != nil {
-		return err
-	}
 	if err := a.validateTrackBranchShape(base, branch); err != nil {
 		return err
 	}
@@ -2038,25 +2039,18 @@ func (a *App) sync(args []string) error {
 		return nil
 	}
 
-	var baseRef string
-	var basePlan syncBaseDryRun
-	var fetched fetchedBase
-	dryRunFetch := opts.dryRun || len(skipped) > 0 && !opts.force
-	if dryRunFetch {
-		baseRef, basePlan, err = a.fetchSyncBaseDryRun(selection.Base)
-		if err != nil {
-			return err
-		}
-		if len(skipped) > 0 && !opts.force && basePlan.Old != basePlan.Updated {
-			return fmt.Errorf("sync would leave skipped stacks stale because base %q would advance from %s to %s; switch other worktrees away from skipped branches or rerun with --force", selection.Base, shortSyncRef(basePlan.Old), shortSyncRef(basePlan.Updated))
-		}
-	} else {
-		fetched, err = a.fetchBaseUpdate(selection.Base)
-		if err != nil {
-			return err
-		}
-		baseRef = fetched.Updated
+	fetched, err := a.fetchUpstream(selection.Base)
+	if err != nil {
+		return err
 	}
+	fetched.Updated, err = a.syncBaseAfterFetch(selection.Base, selection.Base+"@{upstream}", fetched.Old, fetched.Updated)
+	if err != nil {
+		return err
+	}
+	if len(skipped) > 0 && !opts.force && fetched.Old != fetched.Updated {
+		return fmt.Errorf("sync would leave skipped stacks stale because base %q would advance from %s to %s; switch other worktrees away from skipped branches or rerun with --force", selection.Base, shortSyncRef(fetched.Old), shortSyncRef(fetched.Updated))
+	}
+	baseRef := fetched.Updated
 
 	for _, path := range selection.Paths {
 		if err := a.validateStackShapeFromBase(path.Stack, baseRef, path.Stack.Base); err != nil {
@@ -2194,16 +2188,13 @@ func (a *App) sync(args []string) error {
 	}
 
 	if opts.dryRun {
-		a.printSyncDryRun(basePlan, appliedBranches, assumedMergedBranches, baseChanges, ops, returnBranch, baseRef)
+		a.printSyncDryRun(fetched, appliedBranches, assumedMergedBranches, baseChanges, ops, returnBranch, baseRef)
 		return nil
 	}
 
-	advanceBase := false
-	if !dryRunFetch {
-		advanceBase, err = a.syncBaseUpdateRequired(selection.Base, current, fetched)
-		if err != nil {
-			return err
-		}
+	advanceBase, err := a.syncBaseUpdateRequired(selection.Base, current, fetched)
+	if err != nil {
+		return err
 	}
 	originalRefs, err := a.syncMutationRefs(current, selection.Base, advanceBase, branches, ops)
 	if err != nil {
@@ -2237,13 +2228,8 @@ func (a *App) sync(args []string) error {
 	}
 	pending.SyncBase = selection.Base
 	pending.SyncBaseUpdate = advanceBase
-	if dryRunFetch {
-		pending.SyncBaseOld = basePlan.Old
-		pending.SyncBaseNew = basePlan.Updated
-	} else {
-		pending.SyncBaseOld = fetched.Old
-		pending.SyncBaseNew = fetched.Updated
-	}
+	pending.SyncBaseOld = fetched.Old
+	pending.SyncBaseNew = fetched.Updated
 	state.Pending = pending
 	if err := a.git.WriteState(state); err != nil {
 		return err
@@ -2903,7 +2889,7 @@ func (a *App) printSyncBaseChanges(changes []BaseChange) {
 	}
 }
 
-func (a *App) printSyncDryRun(base syncBaseDryRun, appliedBranches, assumedMergedBranches []string, changes []BaseChange, ops []RebaseOp, returnBranch, baseRef string) {
+func (a *App) printSyncDryRun(base upstreamUpdate, appliedBranches, assumedMergedBranches []string, changes []BaseChange, ops []RebaseOp, returnBranch, baseRef string) {
 	fmt.Fprintf(a.stdout, "Dry run: sync %s\n", base.Branch)
 	fmt.Fprintf(a.stdout, "  fetch: %s\n", base.UpstreamName())
 	if base.Old == base.Updated {
@@ -2950,90 +2936,8 @@ func (a *App) printSyncDryRun(base syncBaseDryRun, appliedBranches, assumedMerge
 	}
 }
 
-func (a *App) updateTrackParentFromUpstream(base, branch string) error {
-	exists, err := a.git.BranchExists(base)
-	if err != nil {
-		return err
-	}
-	if !exists {
-		return nil
-	}
-
-	remote, merge, err := a.git.Upstream(base)
-	if err != nil {
-		return err
-	}
-	if remote == "" || merge == "" {
-		return nil
-	}
-
-	oldBase, err := a.git.Output("rev-parse", "--verify", "refs/heads/"+base+"^{commit}")
-	if err != nil {
-		return err
-	}
-	if err := a.git.Run("fetch", "--prune", remote); err != nil {
-		return err
-	}
-
-	upstream := base + "@{upstream}"
-	updatedBase, err := a.git.Output("rev-parse", "--verify", upstream+"^{commit}")
-	if err != nil {
-		return err
-	}
-	if oldBase == updatedBase {
-		return nil
-	}
-	ancestor, err := a.isAncestor(oldBase, updatedBase)
-	if err != nil {
-		return err
-	}
-	if !ancestor {
-		return fmt.Errorf("cannot fast-forward %q to %q; resolve the parent branch before tracking", base, upstream)
-	}
-
-	ancestor, err = a.isAncestor(updatedBase, "refs/heads/"+branch)
-	if err != nil {
-		return err
-	}
-	if !ancestor {
-		return nil
-	}
-
-	current, err := a.git.Output("branch", "--show-current")
-	if err != nil {
-		return err
-	}
-	if current == base {
-		return a.git.Run("merge", "--ff-only", updatedBase)
-	}
-
-	checkedOut, err := a.git.BranchCheckedOut(base)
-	if err != nil {
-		return err
-	}
-	if checkedOut {
-		return fmt.Errorf("branch %q is checked out in another worktree; switch that worktree away from the branch before graphene track", base)
-	}
-	return a.git.OutputErr("update-ref", "refs/heads/"+base, updatedBase, oldBase)
-}
-
-func (a *App) updateCurrentBranchFromUpstream(branch, oldHead string) (bool, error) {
-	remote, merge, err := a.git.Upstream(branch)
-	if err != nil {
-		return false, err
-	}
-	if remote == "" || merge == "" {
-		return false, nil
-	}
-	if err := a.git.Run("fetch", remote); err != nil {
-		return false, err
-	}
-
+func (a *App) fastForwardCurrentBranch(branch, oldHead, updatedHead string) (bool, error) {
 	upstream := branch + "@{upstream}"
-	updatedHead, err := a.git.Output("rev-parse", "--verify", upstream+"^{commit}")
-	if err != nil {
-		return false, err
-	}
 	if oldHead == updatedHead {
 		return false, nil
 	}
@@ -3049,32 +2953,12 @@ func (a *App) updateCurrentBranchFromUpstream(branch, oldHead string) (bool, err
 		return false, err
 	}
 	if !ancestor {
-		return false, fmt.Errorf("current branch %q diverged from upstream %q (local %s, upstream %s); reconcile the branch or rerun with --force to restack using local refs only", branch, upstream, shortSyncRef(oldHead), shortSyncRef(updatedHead))
+		return false, fmt.Errorf("current branch %q diverged from upstream %q (local %s, upstream %s); reconcile the branch or rerun without --fetch to restack using local refs only", branch, upstream, shortSyncRef(oldHead), shortSyncRef(updatedHead))
 	}
 	if err := a.git.Run("merge", "--ff-only", updatedHead); err != nil {
 		return false, err
 	}
 	return true, nil
-}
-
-type syncBaseDryRun struct {
-	Branch  string
-	Remote  string
-	Merge   string
-	Old     string
-	Updated string
-}
-
-func (b syncBaseDryRun) UpstreamName() string {
-	if after, ok := strings.CutPrefix(b.Merge, "refs/heads/"); ok {
-		return b.Remote + "/" + after
-	}
-	return b.Remote + " " + b.Merge
-}
-
-type fetchedBase struct {
-	Old     string
-	Updated string
 }
 
 func (a *App) syncBaseAfterFetch(base, upstream, oldBase, updatedBase string) (string, error) {
@@ -3095,35 +2979,6 @@ func (a *App) syncBaseAfterFetch(base, upstream, oldBase, updatedBase string) (s
 	}
 
 	return "", fmt.Errorf("cannot fast-forward %q to %q; resolve the base branch before updating the stack", base, upstream)
-}
-
-func (a *App) fetchBaseUpdate(base string) (fetchedBase, error) {
-	remote, merge, err := a.git.Upstream(base)
-	if err != nil {
-		return fetchedBase{}, err
-	}
-	if remote == "" || merge == "" {
-		return fetchedBase{}, fmt.Errorf("branch %q has no upstream; set one before updating the stack", base)
-	}
-
-	oldBase, err := a.git.Output("rev-parse", "--verify", "refs/heads/"+base+"^{commit}")
-	if err != nil {
-		return fetchedBase{}, err
-	}
-	if err := a.git.Run("fetch", "--prune", remote); err != nil {
-		return fetchedBase{}, err
-	}
-
-	upstream := base + "@{upstream}"
-	updatedBase, err := a.git.Output("rev-parse", "--verify", upstream+"^{commit}")
-	if err != nil {
-		return fetchedBase{}, err
-	}
-	updatedBase, err = a.syncBaseAfterFetch(base, upstream, oldBase, updatedBase)
-	if err != nil {
-		return fetchedBase{}, err
-	}
-	return fetchedBase{Old: oldBase, Updated: updatedBase}, nil
 }
 
 func (a *App) syncUpstreamMissing(branch string, remoteRefExists map[string]bool) (bool, error) {
@@ -3158,7 +3013,7 @@ func (a *App) remoteRefExists(remote, ref string) (bool, error) {
 	return false, err
 }
 
-func (a *App) syncBaseUpdateRequired(base, current string, fetched fetchedBase) (bool, error) {
+func (a *App) syncBaseUpdateRequired(base, current string, fetched upstreamUpdate) (bool, error) {
 	if fetched.Old == fetched.Updated {
 		return false, nil
 	}
@@ -3212,47 +3067,6 @@ func (a *App) ensurePendingSyncBase(pending *Pending) error {
 		return fmt.Errorf("cannot resume sync while base branch %q is checked out in another worktree", pending.SyncBase)
 	}
 	return a.git.OutputErr("update-ref", "refs/heads/"+pending.SyncBase, pending.SyncBaseNew, pending.SyncBaseOld)
-}
-
-func (a *App) fetchSyncBaseDryRun(base string) (string, syncBaseDryRun, error) {
-	remote, merge, err := a.git.Upstream(base)
-	if err != nil {
-		return "", syncBaseDryRun{}, err
-	}
-	if remote == "" || merge == "" {
-		return "", syncBaseDryRun{}, fmt.Errorf("branch %q has no upstream; set one before updating the stack", base)
-	}
-
-	oldBase, err := a.git.Output("rev-parse", "--verify", "refs/heads/"+base+"^{commit}")
-	if err != nil {
-		return "", syncBaseDryRun{}, err
-	}
-	tempRef := fmt.Sprintf("refs/graphene/dry-run/%d-%d", os.Getpid(), time.Now().UnixNano())
-	// Fetch into a private ref so dry-run can inspect the new base without moving local or remote-tracking refs.
-	if err := a.git.OutputErr("fetch", "--no-write-fetch-head", "--refmap=", remote, "+"+merge+":"+tempRef); err != nil {
-		return "", syncBaseDryRun{}, err
-	}
-	updatedBase, refErr := a.git.Output("rev-parse", "--verify", tempRef+"^{commit}")
-	cleanupErr := a.git.OutputErr("update-ref", "-d", tempRef)
-	if refErr != nil {
-		return "", syncBaseDryRun{}, refErr
-	}
-	if cleanupErr != nil {
-		return "", syncBaseDryRun{}, cleanupErr
-	}
-
-	updatedBase, err = a.syncBaseAfterFetch(base, base+"@{upstream}", oldBase, updatedBase)
-	if err != nil {
-		return "", syncBaseDryRun{}, err
-	}
-
-	return updatedBase, syncBaseDryRun{
-		Branch:  base,
-		Remote:  remote,
-		Merge:   merge,
-		Old:     oldBase,
-		Updated: updatedBase,
-	}, nil
 }
 
 func (a *App) switchToBaseOrDetach(base, baseRef string) error {
@@ -3726,7 +3540,7 @@ type deleteOptions struct {
 
 type restackOptions struct {
 	base  string
-	local bool
+	fetch bool
 }
 
 type syncOptions struct {
@@ -3765,27 +3579,24 @@ func parseRestackArgs(args []string) (restackOptions, error) {
 	for arg, ok := cursor.Next(); ok; arg, ok = cursor.Next() {
 		if arg.Positional() {
 			if opts.base != "" {
-				return opts, fmt.Errorf("usage: graphene restack [--force] <base>")
+				return opts, fmt.Errorf("usage: graphene restack [--fetch] <base>")
 			}
 			opts.base = arg.Raw()
 			continue
 		}
 		if flag, ok := arg.Long(); ok {
-			if value, matched, err := flag.Bool("force"); matched {
+			if value, matched, err := flag.Bool("fetch"); matched {
 				if err != nil {
 					return opts, err
 				}
-				opts.local = value
+				opts.fetch = value
 				continue
 			}
 		}
-		if arg.ShortBoolCluster("f", func(flag byte) { opts.local = true }) {
-			continue
-		}
-		return opts, fmt.Errorf("unsupported argument %q; usage: graphene restack [--force] <base>", arg.Raw())
+		return opts, fmt.Errorf("unsupported argument %q; usage: graphene restack [--fetch] <base>", arg.Raw())
 	}
 	if opts.base == "" {
-		return opts, fmt.Errorf("usage: graphene restack [--force] <base>")
+		return opts, fmt.Errorf("usage: graphene restack [--fetch] <base>")
 	}
 	return opts, nil
 }

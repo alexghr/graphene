@@ -525,7 +525,7 @@ func TestTrackRejectsMultiCommitBranch(t *testing.T) {
 	}
 }
 
-func TestTrackDoesNotFastForwardParentOutsideBranchHistory(t *testing.T) {
+func TestTrackDoesNotFetchOrAdvanceParent(t *testing.T) {
 	t.Parallel()
 	repo := newTestRepo(t)
 
@@ -542,7 +542,7 @@ func TestTrackDoesNotFastForwardParentOutsideBranchHistory(t *testing.T) {
 	}
 
 	other := cloneConfiguredRepo(t, remote, "next")
-	updatedParent := commitFile(t, other, "base.txt", "base update\n", "Base update")
+	commitFile(t, other, "base.txt", "base update\n", "Base update")
 	runGit(t, other, "push", "origin", "next")
 
 	code, _, stderr := repo.runGraphene(t, "track", "--parent", "next")
@@ -558,8 +558,8 @@ func TestTrackDoesNotFastForwardParentOutsideBranchHistory(t *testing.T) {
 	if got := runGit(t, repo.dir, "rev-parse", "next"); got != oldParent {
 		t.Fatalf("next moved from %s to %s", oldParent, got)
 	}
-	if got := runGit(t, repo.dir, "rev-parse", "origin/next"); got != updatedParent {
-		t.Fatalf("origin/next = %s, want %s", got, updatedParent)
+	if got := runGit(t, repo.dir, "rev-parse", "origin/next"); got != oldParent {
+		t.Fatalf("origin/next = %s, want %s", got, oldParent)
 	}
 	state := readState(t, repo.dir)
 	if len(state.Stacks) != 0 {
@@ -567,7 +567,7 @@ func TestTrackDoesNotFastForwardParentOutsideBranchHistory(t *testing.T) {
 	}
 }
 
-func TestTrackFastForwardsParentFromUpstream(t *testing.T) {
+func TestTrackRequiresExplicitParentUpdate(t *testing.T) {
 	t.Parallel()
 	repo := newTestRepo(t)
 
@@ -598,13 +598,17 @@ func TestTrackFastForwardsParentFromUpstream(t *testing.T) {
 		t.Fatalf("feature parent = %s, want %s", featureParent, originParent)
 	}
 
-	// Regression for https://github.com/alexghr/graphene/issues/14.
-	expectGrapheneOK(t, repo, "track", "--parent", "merge-train/spartan", "ag/fix-partial-epoch-job")
-
-	localParent := runGit(t, repo.dir, "rev-parse", "merge-train/spartan")
-	if localParent != originParent {
-		t.Fatalf("local parent = %s, want %s", localParent, originParent)
+	runGit(t, repo.dir, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "offline.git"))
+	code, _, stderr := repo.runGraphene(t, "track", "--parent", "merge-train/spartan", "ag/fix-partial-epoch-job")
+	if code == 0 || !strings.Contains(stderr, "contains 2 commits") {
+		t.Fatalf("track with stale local parent: code %d, stderr %q", code, stderr)
 	}
+	localParent := runGit(t, repo.dir, "rev-parse", "merge-train/spartan")
+	if localParent != oldParent {
+		t.Fatalf("local parent = %s, want %s", localParent, oldParent)
+	}
+	runGit(t, repo.dir, "update-ref", "refs/heads/merge-train/spartan", originParent, oldParent)
+	expectGrapheneOK(t, repo, "track", "--parent", "merge-train/spartan", "ag/fix-partial-epoch-job")
 	state := readState(t, repo.dir)
 	want := []Stack{{Base: "merge-train/spartan", Branches: []string{"ag/fix-partial-epoch-job"}}}
 	if !reflect.DeepEqual(state.Stacks, want) {
@@ -1634,13 +1638,13 @@ func TestRestackReportsDivergedCurrentUpstream(t *testing.T) {
 	runGit(t, repo.dir, "commit", "-m", "Target")
 	runGit(t, repo.dir, "switch", "stack/one")
 
-	code, _, stderr := repo.runGraphene(t, "restack", "target")
+	code, _, stderr := repo.runGraphene(t, "restack", "--fetch", "target")
 	if code == 0 {
 		t.Fatal("graphene restack unexpectedly succeeded")
 	}
 	for _, want := range []string{
 		`current branch "stack/one" diverged from upstream "stack/one@{upstream}"`,
-		"rerun with --force",
+		"rerun without --fetch",
 	} {
 		if !strings.Contains(stderr, want) {
 			t.Fatalf("stderr = %q, want it to contain %q", stderr, want)
@@ -1654,7 +1658,7 @@ func TestRestackReportsDivergedCurrentUpstream(t *testing.T) {
 	}
 }
 
-func TestRestackLocalSkipsCurrentUpstreamFetch(t *testing.T) {
+func TestRestackDefaultsToLocalRefs(t *testing.T) {
 	t.Parallel()
 	repo, remote := newTestRepoWithOrigin(t)
 	createStackBranch(t, repo, "one.txt", "one\n", "One")
@@ -1678,7 +1682,8 @@ func TestRestackLocalSkipsCurrentUpstreamFetch(t *testing.T) {
 	runGit(t, repo.dir, "commit", "-m", "Target")
 	runGit(t, repo.dir, "switch", "stack/one")
 
-	expectGrapheneOK(t, repo, "restack", "--force", "target")
+	runGit(t, repo.dir, "remote", "set-url", "origin", filepath.Join(t.TempDir(), "offline.git"))
+	expectGrapheneOK(t, repo, "restack", "target")
 
 	assertBranchParent(t, repo.dir, "stack/one", "target")
 	if got := runGit(t, repo.dir, "rev-parse", "origin/stack/one"); got != originOneBefore {
@@ -1751,9 +1756,9 @@ func TestSyncRebasesCurrentBranchAndDeletesAppliedIntermediateBranches(t *testin
 	}
 
 	main := runGit(t, repo.dir, "rev-parse", "main")
-	originMain := runGit(t, repo.dir, "rev-parse", "origin/main")
-	if main != originMain {
-		t.Fatalf("main = %s, want origin/main %s", main, originMain)
+	upstreamMain := runGit(t, remote, "rev-parse", "main")
+	if main != upstreamMain {
+		t.Fatalf("main = %s, want upstream main %s", main, upstreamMain)
 	}
 	if refExists(t, repo.dir, "refs/heads/stack/one") {
 		t.Fatal("stack/one still exists")
@@ -1806,9 +1811,9 @@ func TestSyncFromBaseRebasesDescendantStack(t *testing.T) {
 	expectGrapheneOK(t, repo, "sync")
 
 	main := runGit(t, repo.dir, "rev-parse", "main")
-	originMain := runGit(t, repo.dir, "rev-parse", "origin/main")
-	if main != originMain {
-		t.Fatalf("main = %s, want origin/main %s", main, originMain)
+	upstreamMain := runGit(t, remote, "rev-parse", "main")
+	if main != upstreamMain {
+		t.Fatalf("main = %s, want upstream main %s", main, upstreamMain)
 	}
 	parentOne := runGit(t, repo.dir, "rev-parse", "stack/one^")
 	if parentOne != main {
@@ -1859,9 +1864,9 @@ func TestSyncAllFromBaseRebasesSiblingAndNestedStacks(t *testing.T) {
 	expectGrapheneOK(t, repo, "sync", "--all")
 
 	main := runGit(t, repo.dir, "rev-parse", "main")
-	originMain := runGit(t, repo.dir, "rev-parse", "origin/main")
-	if main != originMain {
-		t.Fatalf("main = %s, want origin/main %s", main, originMain)
+	upstreamMain := runGit(t, remote, "rev-parse", "main")
+	if main != upstreamMain {
+		t.Fatalf("main = %s, want upstream main %s", main, upstreamMain)
 	}
 	parentOne := runGit(t, repo.dir, "rev-parse", "stack/one^")
 	if parentOne != main {
@@ -2010,8 +2015,8 @@ func TestSyncDoesNotProbeAppliedBranchUpstream(t *testing.T) {
 	if refExists(t, repo.dir, "refs/heads/stack/one") {
 		t.Fatal("stack/one still exists")
 	}
-	if got, want := runGit(t, repo.dir, "rev-parse", "main"), runGit(t, repo.dir, "rev-parse", "origin/main"); got != want {
-		t.Fatalf("main = %s, want origin/main %s", got, want)
+	if got, want := runGit(t, repo.dir, "rev-parse", "main"), runGit(t, remote, "rev-parse", "main"); got != want {
+		t.Fatalf("main = %s, want upstream main %s", got, want)
 	}
 	if state := readState(t, repo.dir); len(state.Stacks) != 0 {
 		t.Fatalf("stacks = %#v, want empty", state.Stacks)
@@ -2173,9 +2178,9 @@ func TestSyncFromBaseDeletesAppliedIntermediateBranches(t *testing.T) {
 	}
 
 	main := runGit(t, repo.dir, "rev-parse", "main")
-	originMain := runGit(t, repo.dir, "rev-parse", "origin/main")
-	if main != originMain {
-		t.Fatalf("main = %s, want origin/main %s", main, originMain)
+	upstreamMain := runGit(t, remote, "rev-parse", "main")
+	if main != upstreamMain {
+		t.Fatalf("main = %s, want upstream main %s", main, upstreamMain)
 	}
 	if refExists(t, repo.dir, "refs/heads/stack/one") {
 		t.Fatal("stack/one still exists")
@@ -2348,8 +2353,8 @@ func TestSyncRebasesSurvivingStackSuffixAfterDeletingNestedPath(t *testing.T) {
 	expectGrapheneOK(t, repo, "sync")
 
 	main := runGit(t, repo.dir, "rev-parse", "main")
-	if got := runGit(t, repo.dir, "rev-parse", "origin/main"); got != main {
-		t.Fatalf("origin/main = %s, want main %s", got, main)
+	if got := runGit(t, remote, "rev-parse", "main"); got != main {
+		t.Fatalf("upstream main = %s, want main %s", got, main)
 	}
 	for _, branch := range []string{"stack/one", "stack/two", "stack/leaf"} {
 		if refExists(t, repo.dir, "refs/heads/"+branch) {
@@ -2419,8 +2424,11 @@ func TestSyncRetargetPlanFailureDoesNotAdvanceBaseOrCreatePending(t *testing.T) 
 	if !strings.Contains(stderr, `cannot safely sync duplicate parent change for "stack/child"`) {
 		t.Fatalf("stderr = %q", stderr)
 	}
-	if got := runGit(t, repo.dir, "rev-parse", "origin/main"); got != newMain {
-		t.Fatalf("origin/main = %s, want fetched main %s", got, newMain)
+	if got := runGit(t, repo.dir, "rev-parse", "refs/graphene/fetch/main"); got != newMain {
+		t.Fatalf("fetched main = %s, want %s", got, newMain)
+	}
+	if got := runGit(t, repo.dir, "rev-parse", "origin/main"); got != oldMain {
+		t.Fatalf("origin/main changed from %s to %s", oldMain, got)
 	}
 	if got := runGit(t, repo.dir, "rev-parse", "main"); got != oldMain {
 		t.Fatalf("main changed from %s to %s after planning failed", oldMain, got)
@@ -2503,16 +2511,16 @@ func TestSyncUsesFetchedBaseWhenBaseCheckedOutInAnotherWorktree(t *testing.T) {
 	expectGrapheneOK(t, repo, "sync")
 
 	main := runGit(t, repo.dir, "rev-parse", "main")
-	originMain := runGit(t, repo.dir, "rev-parse", "origin/main")
-	if main == originMain {
+	upstreamMain := runGit(t, remote, "rev-parse", "main")
+	if main == upstreamMain {
 		t.Fatalf("main was updated while checked out in another worktree")
 	}
 	if status := runGit(t, baseWorktree, "status", "--porcelain"); status != "" {
 		t.Fatalf("base worktree status = %q, want clean", status)
 	}
 	parentOne := runGit(t, repo.dir, "rev-parse", "stack/one^")
-	if parentOne != originMain {
-		t.Fatalf("stack/one parent = %s, want origin/main %s", parentOne, originMain)
+	if parentOne != upstreamMain {
+		t.Fatalf("stack/one parent = %s, want upstream main %s", parentOne, upstreamMain)
 	}
 	if got := currentBranch(t, repo.dir); got != "stack/two" {
 		t.Fatalf("branch = %q, want stack/two", got)
@@ -2632,9 +2640,9 @@ func TestSyncAllRejectsCheckedOutStackUnlessForced(t *testing.T) {
 	}
 
 	main := runGit(t, repo.dir, "rev-parse", "main")
-	originMain := runGit(t, repo.dir, "rev-parse", "origin/main")
-	if main != originMain {
-		t.Fatalf("main = %s, want origin/main %s", main, originMain)
+	upstreamMain := runGit(t, remote, "rev-parse", "main")
+	if main != upstreamMain {
+		t.Fatalf("main = %s, want upstream main %s", main, upstreamMain)
 	}
 	parentOne := runGit(t, repo.dir, "rev-parse", "stack/one^")
 	if parentOne != oldMain {
@@ -2686,9 +2694,9 @@ func TestSyncDeletesAppliedStackWhenBaseCheckedOutInAnotherWorktree(t *testing.T
 		t.Fatalf("branch = %q, want detached HEAD", got)
 	}
 	head := runGit(t, repo.dir, "rev-parse", "HEAD")
-	originMain := runGit(t, repo.dir, "rev-parse", "origin/main")
-	if head != originMain {
-		t.Fatalf("HEAD = %s, want origin/main %s", head, originMain)
+	upstreamMain := runGit(t, remote, "rev-parse", "main")
+	if head != upstreamMain {
+		t.Fatalf("HEAD = %s, want upstream main %s", head, upstreamMain)
 	}
 	if refExists(t, repo.dir, "refs/heads/stack/one") {
 		t.Fatal("stack/one still exists")
@@ -2734,9 +2742,9 @@ func TestSyncLastAppliedBranchDeletesStack(t *testing.T) {
 		t.Fatalf("branch = %q, want main", got)
 	}
 	main := runGit(t, repo.dir, "rev-parse", "main")
-	originMain := runGit(t, repo.dir, "rev-parse", "origin/main")
-	if main != originMain {
-		t.Fatalf("main = %s, want origin/main %s", main, originMain)
+	upstreamMain := runGit(t, remote, "rev-parse", "main")
+	if main != upstreamMain {
+		t.Fatalf("main = %s, want upstream main %s", main, upstreamMain)
 	}
 	for _, branch := range []string{"stack/one", "stack/two"} {
 		if refExists(t, repo.dir, "refs/heads/"+branch) {

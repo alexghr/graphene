@@ -270,7 +270,7 @@ func (a *App) usage(w io.Writer) {
   graphene sync [-a|--all] [--dry-run] [--force] [--assume-merged]
   graphene send [options] [remote]
   graphene sendf [options] [remote]
-  graphene restack [-f|--force] <base>
+  graphene restack [--fetch] <base>
   graphene go <up|down|top|bottom> [number]
   graphene graph [-s|--stack]
   graphene skill [--codex|--claude|--out <path>]
@@ -378,7 +378,9 @@ options:
   -s, --stack  delete the named branch and all tracked descendants`,
 		"track": `usage: graphene track (--parent|--base) <base> [branch]
 
-Record an existing one-commit branch in the Graphene stack graph.
+Record an existing one-commit branch in the Graphene stack graph using local refs only.
+
+This does not fetch or advance the parent branch. Update a stale local parent explicitly before tracking.
 
 When branch is omitted, Graphene tracks the current branch. If the branch is already the base of child stacks, the first child path is folded into the new stack path.
 
@@ -394,6 +396,9 @@ Graphene reuses the current branch for HEAD. Intermediate commits reuse a single
 
 Fetch the stack base, drop already-applied branches on the current path, and restack affected children.
 
+Fetching caches only the base's upstream in a private Graphene ref; it does not update remote-tracking refs or tags.
+Dry-run also contacts the remote and downloads objects into that cache, but does not move local branches or change stack state.
+
 From an untracked stack base, --all syncs every stack descendant of the current branch.
 
 Branches detected as already applied upstream are removed from Graphene state and deleted locally.
@@ -401,7 +406,7 @@ If configured upstreams disappeared for branches whose patches are not applied t
 
 options:
   -a, --all           sync every stack descendant from the current base branch
-  -n, --dry-run       show the planned fetch, deletions, retargets, and rebases without changing refs or state
+  -n, --dry-run       fetch and show planned changes without moving local branches or changing stack state
   -f, --force         sync safe stacks even when skipped stacks checked out elsewhere would become stale
       --assume-merged treat consecutive missing upstream branches as merged and delete them`,
 		"send": `usage: graphene send [options] [remote]
@@ -420,14 +425,14 @@ options:
       --remote <remote>  push to this remote
   -s, --stack            push the current dependency path and descendants
   -n, --dry-run          show what would be pushed without updating refs or upstreams`,
-		"restack": `usage: graphene restack [-f|--force] <base>
+		"restack": `usage: graphene restack [--fetch] <base>
 
 Move the current branch onto another local branch, then restack dependent branches.
 
-By default, Graphene fetches the current branch's upstream and fast-forwards the current branch when possible before restacking.
+Uses local refs by default. With --fetch, fetch only the current branch's upstream into a private Graphene ref and fast-forward the current branch when possible before restacking.
 
 options:
-  -f, --force  restack using local refs only; do not fetch or fast-forward the current branch`,
+      --fetch  fetch the current branch's upstream before restacking`,
 		"go": `usage: graphene go <up|down|top|bottom> [number]
 
 Switch to another branch in the tracked stack graph.

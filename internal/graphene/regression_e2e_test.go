@@ -138,7 +138,7 @@ func TestRegressionRestackUpdatesCurrentBranchFromUpstream(t *testing.T) {
 	runGit(t, repo.dir, "commit", "-m", "Target")
 
 	runGit(t, repo.dir, "switch", "stack/one")
-	expectGrapheneOK(t, repo, "restack", "target")
+	expectGrapheneOK(t, repo, "restack", "--fetch", "target")
 
 	if !refFileExists(t, repo.dir, "stack/one:remote-one.txt") {
 		t.Fatal("restack did not incorporate the upstream stack/one update")
