@@ -1,6 +1,7 @@
 { pkgs, lib, config, inputs, ... }:
 let
   pkgs-unstable = import inputs.nixpkgs-unstable { system = pkgs.stdenv.system; };
+  agents = import inputs.agents { inherit pkgs; };
   version = lib.removeSuffix "\n" (builtins.readFile ./VERSION);
   lint = pkgs.writeShellApplication {
     name = "graphene-lint";
@@ -37,8 +38,8 @@ in
     packages = with pkgs;
       [
         git
-        pkgs-unstable.codex
         pkgs-unstable.gh
+        agents.codex
       ];
 
     languages.go = {
