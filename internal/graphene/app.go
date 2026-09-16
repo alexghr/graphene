@@ -339,8 +339,8 @@ options:
       --claude      install to ~/.claude/skills/graphene-stacked-prs/SKILL.md
       --out <path>  write SKILL.md to this path; use - for stdout`,
 		"completion": "usage: graphene completion <bash|zsh>\n\nWrite the completion script for Bash or Zsh to stdout.",
-		"continue":   "usage: graphene continue\n\nContinue the current Git rebase and any queued Graphene restacks.",
-		"abort":      "usage: graphene abort\n\nAbort the current Git rebase and clear queued Graphene restacks.",
+		"continue":   "usage: graphene continue\n\nContinue the current Git rebase and any queued Graphene restacks.\n\nFor a snapshot-backed restack, resolve and stage conflicts before continuing. If a Git step was interrupted without a recorded result, abort and rerun the operation.",
+		"abort":      "usage: graphene abort\n\nAbort the current Git rebase and clear queued Graphene restacks.\n\nFor a snapshot-backed restack, restore the original branch tips, worktree and stack metadata, including branches already rebased. Run abort from the original worktree; an interrupted rollback can be retried. The branch involved in an ambiguous Git step is rolled back to its saved tip.",
 		"config": `usage: graphene config <get|set|unset> [--global|--local] <key> [value]
 
 Read and write Graphene settings in Git config. Keys may be written with or without the graphene. prefix.
@@ -430,6 +430,8 @@ options:
 Move the current branch onto another local branch, then restack dependent branches.
 
 Uses local refs by default. With --fetch, fetch only the current branch's upstream into a private Graphene ref and fast-forward the current branch when possible before restacking.
+
+Each affected branch is rebased separately; unrelated branch pointers stay in place. A snapshot is saved before changing branches or files. Resolve normal conflicts with continue, or use abort to restore the entire restack. Ambiguous interruptions require abort and rerun.
 
 options:
       --fetch  fetch the current branch's upstream before restacking`,

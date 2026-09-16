@@ -16,6 +16,7 @@ type Stack struct {
 }
 
 type Pending struct {
+	Recovery       *recoveryState    `json:"recovery,omitempty"`
 	Operation      string            `json:"operation"`
 	Worktree       string            `json:"worktree,omitempty"`
 	Branch         string            `json:"branch,omitempty"`

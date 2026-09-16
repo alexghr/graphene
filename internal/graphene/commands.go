@@ -941,119 +941,6 @@ func (a *App) amend(args []string) error {
 	return a.runPendingRebases(state)
 }
 
-func (a *App) restack(args []string) error {
-	opts, err := parseRestackArgs(args)
-	if err != nil {
-		return err
-	}
-	base := opts.base
-
-	current, err := a.git.CurrentBranch()
-	if err != nil {
-		return err
-	}
-	state, err := a.git.ReadState()
-	if err != nil {
-		return err
-	}
-	if state.Pending != nil {
-		return fmt.Errorf("pending rebase exists; use graphene continue or graphene abort")
-	}
-	if err := a.validateRestackBase(base); err != nil {
-		return err
-	}
-
-	oldBase, ok := BaseBranch(state, current)
-	if !ok {
-		return fmt.Errorf("branch %q is not in a graphene stack", current)
-	}
-	nextState, _, ok := ReparentBranch(state, current, base)
-	if !ok {
-		return fmt.Errorf("cannot restack %q onto %q", current, base)
-	}
-
-	dirty, err := a.git.HasTrackedChanges()
-	if err != nil {
-		return err
-	}
-	if dirty {
-		return fmt.Errorf("tracked changes would prevent restack; stash or commit them before graphene restack")
-	}
-
-	oldRefs := a.stateRefs(state)
-	oldHead, err := a.git.Head()
-	if err != nil {
-		return err
-	}
-	oldRefs[current] = oldHead
-
-	baseRef, err := a.git.Output("rev-parse", "--verify", base+"^{commit}")
-	if err != nil {
-		return err
-	}
-
-	headUpdated := false
-	if opts.fetch {
-		fetched, err := a.fetchUpstream(current)
-		if err != nil {
-			return err
-		}
-		headUpdated, err = a.fastForwardCurrentBranch(current, oldHead, fetched.Updated)
-		if err != nil {
-			return err
-		}
-	}
-	oldBaseRef := oldRefs[oldBase]
-	if oldBaseRef == "" {
-		oldBaseRef, err = a.git.Output("rev-parse", "--verify", oldBase+"^{commit}")
-		if err != nil {
-			return err
-		}
-	}
-
-	if oldBaseRef == baseRef && !headUpdated {
-		return a.git.WriteState(nextState)
-	}
-
-	var ops []RebaseOp
-	if oldBaseRef != baseRef {
-		ops = append(ops, RebaseOp{
-			Onto:     base,
-			Upstream: oldBaseRef,
-			Top:      current,
-		})
-	}
-	if oldBaseRef != baseRef || headUpdated {
-		restackOps, err := RestackOpsAfterRewrite(nextState, current, oldRefs)
-		if err != nil {
-			return err
-		}
-		ops = append(ops, restackOps...)
-	}
-	if err := a.validateRebaseOpsUpdateable("restack", current, nextState, oldRefs, ops); err != nil {
-		return err
-	}
-	if len(ops) == 0 {
-		return a.git.WriteState(nextState)
-	}
-
-	pending, err := a.pendingForCurrentWorktree(Pending{
-		Operation:    "restack",
-		Branch:       current,
-		ReturnBranch: current,
-		Queue:        ops,
-		NextStacks:   nextState.Stacks,
-	})
-	if err != nil {
-		return err
-	}
-	state.Pending = pending
-	if err := a.git.WriteState(state); err != nil {
-		return err
-	}
-	return a.runPendingRebases(state)
-}
-
 func (a *App) continueRebase(args []string) error {
 	if len(args) != 0 {
 		return fmt.Errorf("graphene continue does not accept arguments")
@@ -1062,6 +949,9 @@ func (a *App) continueRebase(args []string) error {
 	state, err := a.git.ReadState()
 	if err != nil {
 		return err
+	}
+	if state.Pending != nil && state.Pending.Recovery != nil {
+		return a.continueSnapshotRestack(state)
 	}
 	if state.Pending == nil {
 		inProgress, err := a.git.RebaseInProgress()
@@ -1271,6 +1161,9 @@ func (a *App) abortRebase(args []string) error {
 	if err != nil {
 		return err
 	}
+	if state.Pending != nil && state.Pending.Recovery != nil {
+		return a.abortSnapshotRestack(state)
+	}
 	inProgress, err := a.git.RebaseInProgress()
 	if err != nil {
 		return err
@@ -1412,7 +1305,7 @@ func (a *App) forget(args []string) error {
 	if err != nil {
 		return err
 	}
-	if state.Pending != nil && !opts.force {
+	if state.Pending != nil && (state.Pending.Recovery != nil || !opts.force) {
 		return fmt.Errorf("pending rebase exists; use graphene continue or graphene abort")
 	}
 
@@ -2705,6 +2598,11 @@ func pendingAffectedBranches(state State) map[string]bool {
 	}
 
 	pending := state.Pending
+	if pending.Recovery != nil {
+		for branch := range pending.Recovery.Expected {
+			add(branch)
+		}
+	}
 	for _, branch := range []string{pending.Branch, pending.ReturnBranch, pending.Top} {
 		add(branch)
 		addStack(branch)
@@ -2936,7 +2834,7 @@ func (a *App) printSyncDryRun(base upstreamUpdate, appliedBranches, assumedMerge
 	}
 }
 
-func (a *App) fastForwardCurrentBranch(branch, oldHead, updatedHead string) (bool, error) {
+func (a *App) currentBranchNeedsFastForward(branch, oldHead, updatedHead string) (bool, error) {
 	upstream := branch + "@{upstream}"
 	if oldHead == updatedHead {
 		return false, nil
@@ -2954,9 +2852,6 @@ func (a *App) fastForwardCurrentBranch(branch, oldHead, updatedHead string) (boo
 	}
 	if !ancestor {
 		return false, fmt.Errorf("current branch %q diverged from upstream %q (local %s, upstream %s); reconcile the branch or rerun without --fetch to restack using local refs only", branch, upstream, shortSyncRef(oldHead), shortSyncRef(updatedHead))
-	}
-	if err := a.git.Run("merge", "--ff-only", updatedHead); err != nil {
-		return false, err
 	}
 	return true, nil
 }
