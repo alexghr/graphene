@@ -951,7 +951,7 @@ func (a *App) continueRebase(args []string) error {
 		return err
 	}
 	if state.Pending != nil && state.Pending.Recovery != nil {
-		return a.continueSnapshotRestack(state)
+		return a.continueSnapshotRebases(state)
 	}
 	if state.Pending == nil {
 		inProgress, err := a.git.RebaseInProgress()
@@ -1162,7 +1162,7 @@ func (a *App) abortRebase(args []string) error {
 		return err
 	}
 	if state.Pending != nil && state.Pending.Recovery != nil {
-		return a.abortSnapshotRestack(state)
+		return a.abortSnapshotRebases(state)
 	}
 	inProgress, err := a.git.RebaseInProgress()
 	if err != nil {
@@ -1763,7 +1763,6 @@ type syncPath struct {
 	Stack              Stack
 	BranchLimit        int
 	CurrentBranchIndex int
-	SkipTops           []string
 }
 
 func syncSelectionForCurrent(state State, current string) (syncSelection, bool) {
@@ -1789,33 +1788,11 @@ func syncSelectionForCurrent(state State, current string) (syncSelection, bool) 
 				Stack:              Stack{Base: base, Branches: branches},
 				BranchLimit:        len(branches),
 				CurrentBranchIndex: len(branches) - 1,
-				SkipTops:           stackTopsInBranches(state, branches),
 			}},
 		}, true
 	}
 
 	return syncSelectionForBase(state, current)
-}
-
-func stackTopsInBranches(state State, branches []string) []string {
-	included := map[string]bool{}
-	for _, branch := range branches {
-		included[branch] = true
-	}
-
-	seen := map[string]bool{}
-	var tops []string
-	for _, stack := range state.Stacks {
-		if len(stack.Branches) == 0 {
-			continue
-		}
-		top := stack.Branches[len(stack.Branches)-1]
-		if included[top] && !seen[top] {
-			tops = append(tops, top)
-			seen[top] = true
-		}
-	}
-	return tops
 }
 
 func syncSelectionForBase(state State, current string) (syncSelection, bool) {
@@ -1897,6 +1874,10 @@ func (a *App) sync(args []string) error {
 		return fmt.Errorf("pending rebase exists; use graphene continue or graphene abort")
 	}
 
+	if err := a.git.requireNoGitOperation(); err != nil {
+		return err
+	}
+
 	var selection syncSelection
 	var ok bool
 	if opts.all {
@@ -1951,7 +1932,10 @@ func (a *App) sync(args []string) error {
 		}
 	}
 
-	oldRefs := a.stateRefs(state)
+	oldRefs, err := a.git.snapshotBranchRefs()
+	if err != nil {
+		return err
+	}
 	var branches []string
 	var appliedBranches []string
 	var assumedMergedBranches []string
@@ -2002,226 +1986,22 @@ func (a *App) sync(args []string) error {
 
 	returnBranch := selection.ReturnBranch(firstRemaining)
 
-	var ops []RebaseOp
-	var rewritten []string
-	rewrittenSet := map[string]bool{}
-	markRewritten := func(branches []string) {
-		for _, branch := range branches {
-			if branch == "" || rewrittenSet[branch] {
-				continue
-			}
-			rewritten = append(rewritten, branch)
-			rewrittenSet[branch] = true
-		}
-	}
-	skipTops := map[string]bool{}
-	for _, path := range selection.Paths {
-		first := firstRemaining[path.StackIndex]
-		stack := path.Stack
-		if first >= len(stack.Branches) {
-			continue
-		}
-		predecessor := stack.Base
-		if first > 0 {
-			predecessor = stack.Branches[first-1]
-		}
-		upstream := oldRefs[predecessor]
-		if upstream == "" {
-			return fmt.Errorf("missing old ref for %q", predecessor)
-		}
-		if first == 0 && predecessor == stack.Base {
-			upstream, err = a.syncBaseUpstream(baseRef, stack, oldRefs)
-			if err != nil {
-				return err
-			}
-			if upstream == baseRef {
-				continue
-			}
-		}
-
-		topIndex := path.BranchLimit - 1
-		if path.CurrentBranchIndex >= 0 && first > path.CurrentBranchIndex {
-			topIndex = len(stack.Branches) - 1
-		}
-		top := stack.Branches[topIndex]
-		ops = append(ops, RebaseOp{
-			Onto:     baseRef,
-			Upstream: upstream,
-			Top:      top,
-		})
-		markRewritten(stack.Branches[first : topIndex+1])
-		if topIndex == len(stack.Branches)-1 {
-			skipTops[top] = true
-		}
-		for _, skipTop := range path.SkipTops {
-			skipTops[skipTop] = true
-		}
-	}
-
-	retarget, err := a.planSyncRetargets(state, nextState, baseChanges, oldRefs, selection.Base, baseRef, rewrittenSet)
+	ops, err := a.planSnapshotSync(state, nextState, selection, oldRefs, baseRef)
 	if err != nil {
 		return err
 	}
-	ops = append(ops, retarget.Ops...)
-	markRewritten(retarget.Branches)
-	for _, op := range retarget.Ops {
-		skipTops[op.Top] = true
+	if returnBranch == "" && len(ops) > 0 {
+		returnBranch = ops[0].Top
 	}
-	if returnBranch == "" {
-		returnBranch = retarget.FirstBranch
-	}
-
-	restackOps, err := RestackOpsAfterRewrites(nextState, rewritten, oldRefs, skipTops)
-	if err != nil {
-		return err
-	}
-	ops = append(ops, restackOps...)
-	if err := a.validateRebaseOpsUpdateable("sync", current, nextState, oldRefs, ops); err != nil {
-		return err
-	}
-
 	if opts.dryRun {
 		a.printSyncDryRun(fetched, appliedBranches, assumedMergedBranches, baseChanges, ops, returnBranch, baseRef)
 		return nil
 	}
-
-	advanceBase, err := a.syncBaseUpdateRequired(selection.Base, current, fetched)
-	if err != nil {
-		return err
+	pending := &Pending{
+		Operation: "sync", Branch: current, ReturnBranch: returnBranch,
+		Queue: ops, Branches: branches, NextStacks: nextState.Stacks, BaseChanges: baseChanges,
 	}
-	originalRefs, err := a.syncMutationRefs(current, selection.Base, advanceBase, branches, ops)
-	if err != nil {
-		return err
-	}
-
-	pendingReturnBranch := returnBranch
-	pendingReturnRef := ""
-	if pendingReturnBranch == "" {
-		pendingReturnBranch = selection.Base
-		pendingReturnRef, err = a.git.Output("rev-parse", "--verify", baseRef+"^{commit}")
-		if err != nil {
-			return err
-		}
-	}
-
-	pending, err := a.pendingForCurrentWorktree(Pending{
-		Operation:      "sync",
-		Branch:         current,
-		ReturnBranch:   pendingReturnBranch,
-		ReturnRef:      pendingReturnRef,
-		Queue:          ops,
-		Branches:       branches,
-		NextStacks:     nextState.Stacks,
-		BaseChanges:    baseChanges,
-		OriginalRefs:   originalRefs,
-		OriginalStacks: cloneStacks(state.Stacks),
-	})
-	if err != nil {
-		return err
-	}
-	pending.SyncBase = selection.Base
-	pending.SyncBaseUpdate = advanceBase
-	pending.SyncBaseOld = fetched.Old
-	pending.SyncBaseNew = fetched.Updated
-	state.Pending = pending
-	if err := a.git.WriteState(state); err != nil {
-		return err
-	}
-	if len(ops) == 0 {
-		return a.finishPendingRebases(state)
-	}
-	return a.runPendingRebases(state)
-}
-
-type syncRetargetPlan struct {
-	Ops         []RebaseOp
-	Branches    []string
-	FirstBranch string
-}
-
-// planSyncRetargets requires every logical parent change to have a matching,
-// disjoint Git rewrite before sync can commit the planned state.
-func (a *App) planSyncRetargets(before, after State, changes []BaseChange, oldRefs map[string]string, base, baseRef string, alreadyRewritten map[string]bool) (syncRetargetPlan, error) {
-	changed := map[string]bool{}
-	for _, change := range changes {
-		if changed[change.Branch] {
-			return syncRetargetPlan{}, fmt.Errorf("cannot safely sync duplicate parent change for %q", change.Branch)
-		}
-		changed[change.Branch] = true
-	}
-
-	covered := map[string]bool{}
-	for branch, rewritten := range alreadyRewritten {
-		if rewritten {
-			covered[branch] = true
-		}
-	}
-
-	var plan syncRetargetPlan
-	for _, change := range changes {
-		if change.NewBase != base {
-			return syncRetargetPlan{}, fmt.Errorf("cannot safely sync parent change for %q from %q to %q", change.Branch, change.OldBase, change.NewBase)
-		}
-		if covered[change.Branch] {
-			continue
-		}
-
-		loc, ok := after.BranchLocation(change.Branch)
-		if !ok {
-			return syncRetargetPlan{}, fmt.Errorf("missing retargeted branch %q from planned state", change.Branch)
-		}
-		stack, ok := after.StackAt(loc.StackIndex)
-		if !ok || loc.BranchIndex != 0 || stack.Base != change.NewBase {
-			return syncRetargetPlan{}, fmt.Errorf("cannot safely sync non-prefix parent change for %q", change.Branch)
-		}
-
-		parent := change.OldBase
-		for i, branch := range stack.Branches {
-			if covered[branch] {
-				return syncRetargetPlan{}, fmt.Errorf("cannot safely sync overlapping rewrite for %q", branch)
-			}
-			if i > 0 {
-				if changed[branch] {
-					return syncRetargetPlan{}, fmt.Errorf("cannot safely sync multiple parent changes in stack containing %q", change.Branch)
-				}
-			}
-			oldParent, ok := BaseBranch(before, branch)
-			if !ok || oldParent != parent {
-				return syncRetargetPlan{}, fmt.Errorf("cannot safely sync non-linear retargeted stack at %q", branch)
-			}
-			parent = branch
-		}
-
-		upstream := oldRefs[change.OldBase]
-		if upstream == "" {
-			return syncRetargetPlan{}, fmt.Errorf("missing old ref for %q", change.OldBase)
-		}
-		retargeted := Stack{Base: change.OldBase, Branches: stack.Branches}
-		if err := a.validateStackShapeFromBase(retargeted, upstream, change.OldBase); err != nil {
-			return syncRetargetPlan{}, err
-		}
-
-		top := stack.Branches[len(stack.Branches)-1]
-		plan.Ops = append(plan.Ops, RebaseOp{
-			Onto:     baseRef,
-			Upstream: upstream,
-			Top:      top,
-		})
-		plan.Branches = append(plan.Branches, stack.Branches...)
-		if plan.FirstBranch == "" {
-			plan.FirstBranch = change.Branch
-		}
-		for _, branch := range stack.Branches {
-			covered[branch] = true
-		}
-	}
-
-	for _, change := range changes {
-		if !covered[change.Branch] {
-			return syncRetargetPlan{}, fmt.Errorf("sync plan does not rewrite retargeted branch %q", change.Branch)
-		}
-	}
-	return plan, nil
+	return a.startSnapshotSync(state, pending, fetched, oldRefs)
 }
 
 type syncSkippedPath struct {
@@ -2823,7 +2603,11 @@ func (a *App) printSyncDryRun(base upstreamUpdate, appliedBranches, assumedMerge
 	} else {
 		fmt.Fprintln(a.stdout, "  rebase:")
 		for _, op := range ops {
-			fmt.Fprintf(a.stdout, "    git rebase --update-refs --onto %s %s %s\n", shortSyncRef(op.Onto), shortSyncRef(op.Upstream), op.Top)
+			onto := op.Onto
+			if onto == base.Branch {
+				onto = baseRef
+			}
+			fmt.Fprintf(a.stdout, "    git rebase --no-update-refs --onto %s %s %s\n", shortSyncRef(onto), shortSyncRef(op.Upstream), op.Top)
 		}
 	}
 
@@ -2908,20 +2692,6 @@ func (a *App) remoteRefExists(remote, ref string) (bool, error) {
 	return false, err
 }
 
-func (a *App) syncBaseUpdateRequired(base, current string, fetched upstreamUpdate) (bool, error) {
-	if fetched.Old == fetched.Updated {
-		return false, nil
-	}
-	if base == current {
-		return true, nil
-	}
-	checkedOut, err := a.git.BranchCheckedOut(base)
-	if err != nil {
-		return false, err
-	}
-	return !checkedOut, nil
-}
-
 func (a *App) ensurePendingSyncBase(pending *Pending) error {
 	if pending == nil || pending.Operation != "sync" || pending.SyncBase == "" {
 		return nil
@@ -3002,7 +2772,7 @@ func (a *App) deleteBranchRefs(branches []string, originalRefs map[string]string
 
 func (a *App) deleteBranchConfigs(branches []string) error {
 	for _, branch := range branches {
-		pattern := "^branch[.]" + regexp.QuoteMeta(branch) + "[.]"
+		pattern := "^branch[.]" + regexp.QuoteMeta(branch) + "[.][^.]+$"
 		_, err := a.git.Output("config", "--local", "--get-regexp", pattern)
 		if isGitExit(err, 1) {
 			continue
@@ -3048,20 +2818,6 @@ func (a *App) validateStackShapeFromBase(stack Stack, baseRef, baseName string) 
 		parentName = branch
 	}
 	return nil
-}
-
-func (a *App) syncBaseUpstream(baseRef string, stack Stack, oldRefs map[string]string) (string, error) {
-	if len(stack.Branches) == 0 {
-		return oldRefs[stack.Base], nil
-	}
-	ancestor, err := a.isAncestor(baseRef, stack.Branches[0])
-	if err != nil {
-		return "", err
-	}
-	if ancestor {
-		return baseRef, nil
-	}
-	return oldRefs[stack.Base], nil
 }
 
 func (a *App) validateRebaseOpsUpdateable(operation, current string, state State, oldRefs map[string]string, ops []RebaseOp) error {
@@ -3226,76 +2982,6 @@ func (a *App) stateRefs(state State) map[string]string {
 		}
 	}
 	return refs
-}
-
-func (a *App) localBranchRefs() (map[string]string, error) {
-	branches, err := a.git.LocalBranches()
-	if err != nil {
-		return nil, err
-	}
-	refs := make(map[string]string, len(branches))
-	for _, branch := range branches {
-		ref, err := a.git.Output("rev-parse", "--verify", "refs/heads/"+branch+"^{commit}")
-		if err != nil {
-			return nil, err
-		}
-		refs[branch] = ref
-	}
-	return refs, nil
-}
-
-// --update-refs also moves untracked local branches whose tips are in a rebase
-// range. Snapshot exactly those refs so abort does not touch unrelated branches.
-func (a *App) syncMutationRefs(current, base string, advanceBase bool, deleted []string, ops []RebaseOp) (map[string]string, error) {
-	localRefs, err := a.localBranchRefs()
-	if err != nil {
-		return nil, err
-	}
-	affected := map[string]string{}
-	add := func(branch string) {
-		if ref := localRefs[branch]; ref != "" {
-			affected[branch] = ref
-		}
-	}
-	if advanceBase {
-		add(base)
-	}
-	for _, branch := range deleted {
-		add(branch)
-	}
-
-	checkedOut := map[string]bool{}
-	for _, op := range ops {
-		add(op.Top)
-		out, err := a.git.Output("rev-list", op.Upstream+".."+op.Top)
-		if err != nil {
-			return nil, err
-		}
-		commits := map[string]bool{}
-		for commit := range strings.FieldsSeq(out) {
-			commits[commit] = true
-		}
-		for branch, ref := range localRefs {
-			if !commits[ref] || branch == op.Top {
-				continue
-			}
-			if branch != current {
-				isCheckedOut, ok := checkedOut[branch]
-				if !ok {
-					isCheckedOut, err = a.git.BranchCheckedOut(branch)
-					if err != nil {
-						return nil, err
-					}
-					checkedOut[branch] = isCheckedOut
-				}
-				if isCheckedOut {
-					continue
-				}
-			}
-			add(branch)
-		}
-	}
-	return affected, nil
 }
 
 func (a *App) trackedBranchRefs(state State) map[string]string {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -12,6 +13,7 @@ const (
 	recoveryApplying = "applying"
 	recoveryConflict = "conflict"
 	recoveryAborting = "aborting"
+	recoveryDeleting = "deleting"
 )
 
 type recoveryState struct {
@@ -24,7 +26,7 @@ type recoveryState struct {
 	Onto        string            `json:"onto,omitempty"`
 }
 
-func (a *App) loadRestackSnapshot(p *Pending) (operationSnapshot, error) {
+func (a *App) loadRebaseSnapshot(p *Pending) (operationSnapshot, error) {
 	r := p.Recovery
 	snapshot, err := a.git.readSnapshot(r.Snapshot)
 	if err != nil {
@@ -37,27 +39,31 @@ func (a *App) loadRestackSnapshot(p *Pending) (operationSnapshot, error) {
 	if worktree != snapshot.Worktree {
 		return snapshot, fmt.Errorf("resume this operation from its original worktree %s", snapshot.Worktree)
 	}
-	if p.Operation != "restack" || p.Branch != snapshot.Branch || p.ReturnBranch != snapshot.Branch || r.Expected[p.Branch] == "" || r.BaseHead == "" || snapshot.Refs[r.Base] != r.BaseHead {
-		return snapshot, fmt.Errorf("invalid pending restack recovery state")
+	_, ownsOriginal := r.Expected[p.Branch]
+	if (p.Operation != "restack" && p.Operation != "sync") || p.Branch != snapshot.Branch || !ownsOriginal || p.ReturnBranch == "" || r.BaseHead == "" || snapshot.Refs[r.Base] == "" {
+		return snapshot, fmt.Errorf("invalid pending rebase recovery state")
 	}
 	switch r.Phase {
-	case recoveryReady, recoveryApplying, recoveryConflict, recoveryAborting:
+	case recoveryReady, recoveryApplying, recoveryConflict, recoveryAborting, recoveryDeleting:
 	default:
 		return snapshot, fmt.Errorf("unknown recovery phase %q", r.Phase)
 	}
 	for _, op := range p.Queue {
 		if r.Expected[op.Top] == "" || op.Upstream == "" || (op.Onto != r.Base && r.Expected[op.Onto] == "") {
-			return snapshot, fmt.Errorf("invalid pending restack queue")
+			return snapshot, fmt.Errorf("invalid pending rebase queue")
 		}
 	}
 	return snapshot, nil
 }
 
-func activeRestackBranch(p *Pending) string {
+func activeRebaseBranch(p *Pending) string {
 	if p.Recovery.Phase == recoveryReady {
 		return ""
 	}
 	if p.Recovery.FastForward != "" {
+		if p.Operation == "sync" {
+			return p.Recovery.Base
+		}
 		return p.Branch
 	}
 	if p.Recovery.Onto != "" && len(p.Queue) > 0 {
@@ -66,7 +72,7 @@ func activeRestackBranch(p *Pending) string {
 	return ""
 }
 
-func (a *App) checkRestackRefs(p *Pending, snapshot operationSnapshot, abort bool) error {
+func (a *App) checkRebaseRefs(p *Pending, snapshot operationSnapshot, abort bool) error {
 	r := p.Recovery
 	refs, err := a.git.snapshotBranchRefs()
 	if err != nil {
@@ -80,20 +86,22 @@ func (a *App) checkRestackRefs(p *Pending, snapshot operationSnapshot, abort boo
 	if err != nil {
 		return err
 	}
-	active := activeRestackBranch(p)
-	if !abort && refs[r.Base] != r.BaseHead {
-		return fmt.Errorf("restack target %q moved; use graphene abort and rerun", r.Base)
+	active := activeRebaseBranch(p)
+	baseExpected := snapshot.Refs[r.Base]
+	if owned, ok := r.Expected[r.Base]; ok {
+		baseExpected = owned
 	}
-	if current != "" && r.Expected[current] == "" {
-		return fmt.Errorf("switch back to an operation branch before continuing or aborting restack")
+	if !abort && refs[r.Base] != baseExpected {
+		return fmt.Errorf("rebase target %q moved; use graphene abort and rerun", r.Base)
+	}
+	if _, owned := r.Expected[current]; current != "" && !owned {
+		return fmt.Errorf("switch back to an operation branch before continuing or aborting")
 	}
 	for branch, expected := range r.Expected {
-		if refs[branch] == "" {
-			return fmt.Errorf("operation branch %q is missing", branch)
-		}
 		// Abort explicitly rolls back the active branch even when interruption
 		// made its final tip unknown. Other branches must match a saved tip.
-		if refs[branch] != expected && !(abort && (branch == active || refs[branch] == snapshot.Refs[branch])) {
+		deleting := r.Phase == recoveryDeleting && slices.Contains(p.Branches, branch) && refs[branch] == ""
+		if refs[branch] != expected && !(abort && (branch == active || deleting || refs[branch] == snapshot.Refs[branch])) {
 			return fmt.Errorf("branch %q changed outside the operation; refusing to overwrite it", branch)
 		}
 		if branch == current || (inRebase && branch == active) {
@@ -108,10 +116,10 @@ func (a *App) checkRestackRefs(p *Pending, snapshot operationSnapshot, abort boo
 	return nil
 }
 
-func (a *App) requireRestackRebase(p *Pending) error {
+func (a *App) requireSnapshotRebase(p *Pending) error {
 	r := p.Recovery
 	if r.FastForward != "" || r.Onto == "" || len(p.Queue) == 0 {
-		return fmt.Errorf("Git rebase does not belong to this restack")
+		return fmt.Errorf("Git rebase does not belong to this operation")
 	}
 	dir, err := a.git.GitPath("rebase-merge")
 	if err != nil {
@@ -123,24 +131,24 @@ func (a *App) requireRestackRebase(p *Pending) error {
 	} {
 		data, err := os.ReadFile(filepath.Join(dir, name))
 		if err != nil {
-			return fmt.Errorf("cannot identify restack rebase: %w", err)
+			return fmt.Errorf("cannot identify operation rebase: %w", err)
 		}
 		if strings.TrimSpace(string(data)) != want {
-			return fmt.Errorf("Git rebase %s does not match this restack; refusing to change it", name)
+			return fmt.Errorf("Git rebase %s does not match this operation; refusing to change it", name)
 		}
 	}
 	return nil
 }
 
-func (a *App) continueSnapshotRestack(state State) error {
+func (a *App) continueSnapshotRebases(state State) error {
 	p := state.Pending
-	snapshot, err := a.loadRestackSnapshot(p)
+	snapshot, err := a.loadRebaseSnapshot(p)
 	if err != nil {
 		return err
 	}
 	switch p.Recovery.Phase {
-	case recoveryApplying:
-		return fmt.Errorf("restack was interrupted during a Git step; use graphene abort and rerun")
+	case recoveryApplying, recoveryDeleting:
+		return fmt.Errorf("%s was interrupted during a Git step; use graphene abort and rerun", p.Operation)
 	case recoveryAborting:
 		return fmt.Errorf("rollback is in progress; rerun graphene abort")
 	case recoveryConflict:
@@ -151,32 +159,32 @@ func (a *App) continueSnapshotRestack(state State) error {
 		if !inRebase {
 			return fmt.Errorf("the recorded rebase is no longer active; use graphene abort and rerun")
 		}
-		if err := a.checkRestackRefs(p, snapshot, false); err != nil {
+		if err := a.checkRebaseRefs(p, snapshot, false); err != nil {
 			return err
 		}
-		if err := a.requireRestackRebase(p); err != nil {
+		if err := a.requireSnapshotRebase(p); err != nil {
 			return err
 		}
 		p.Recovery.Phase = recoveryApplying
 		if err := a.git.WriteState(state); err != nil {
 			return err
 		}
-		if err := a.recordRestackResult(state, a.git.Run("rebase", "--continue")); err != nil {
+		if err := a.recordRebaseResult(state, a.git.Run("rebase", "--continue")); err != nil {
 			return err
 		}
 	}
-	return a.runSnapshotRestack(state)
+	return a.runSnapshotRebases(state)
 }
 
-func (a *App) runSnapshotRestack(state State) error {
+func (a *App) runSnapshotRebases(state State) error {
 	p := state.Pending
 	r := p.Recovery
-	snapshot, err := a.loadRestackSnapshot(p)
+	snapshot, err := a.loadRebaseSnapshot(p)
 	if err != nil {
 		return err
 	}
 	for {
-		if err := a.checkRestackRefs(p, snapshot, false); err != nil {
+		if err := a.checkRebaseRefs(p, snapshot, false); err != nil {
 			return err
 		}
 		if err := a.git.requireNoGitOperation(); err != nil {
@@ -187,9 +195,12 @@ func (a *App) runSnapshotRestack(state State) error {
 			return err
 		}
 		if dirty {
-			return fmt.Errorf("tracked changes would prevent restack; resolve them before continuing or use graphene abort")
+			return fmt.Errorf("tracked changes would prevent %s; resolve them before continuing or use graphene abort", p.Operation)
 		}
 		if r.FastForward == "" && len(p.Queue) == 0 {
+			if p.Operation == "sync" {
+				return a.finishSnapshotSync(state)
+			}
 			if err := a.git.Run("switch", p.ReturnBranch); err != nil {
 				return err
 			}
@@ -202,14 +213,22 @@ func (a *App) runSnapshotRestack(state State) error {
 		}
 		var args []string
 		if r.FastForward != "" {
+			branch := p.Branch
+			if p.Operation == "sync" {
+				branch = r.Base
+			}
 			current, err := a.git.CurrentBranch()
 			if err != nil {
 				return err
 			}
-			if current != p.Branch {
-				return fmt.Errorf("switch to %q before continuing its fast-forward", p.Branch)
+			if current == branch {
+				args = []string{"merge", "--ff-only", "--no-autostash", r.FastForward}
+			} else {
+				if err := a.git.requireSnapshotBranchAvailable(branch); err != nil {
+					return err
+				}
+				args = []string{"update-ref", "refs/heads/" + branch, r.FastForward, r.Expected[branch]}
 			}
-			args = []string{"merge", "--ff-only", "--no-autostash", r.FastForward}
 		} else {
 			op := p.Queue[0]
 			r.Onto = r.Expected[op.Onto]
@@ -224,18 +243,18 @@ func (a *App) runSnapshotRestack(state State) error {
 		if err := a.git.WriteState(state); err != nil {
 			return err
 		}
-		if err := a.recordRestackResult(state, a.git.Run(args...)); err != nil {
+		if err := a.recordRebaseResult(state, a.git.Run(args...)); err != nil {
 			return err
 		}
 	}
 }
 
-func (a *App) recordRestackResult(state State, gitErr error) error {
+func (a *App) recordRebaseResult(state State, gitErr error) error {
 	p := state.Pending
 	r := p.Recovery
 	if gitErr != nil {
 		unmerged, err := a.git.Output("ls-files", "--unmerged", "--", ":/")
-		if err == nil && unmerged != "" && a.requireRestackRebase(p) == nil {
+		if err == nil && unmerged != "" && a.requireSnapshotRebase(p) == nil {
 			r.Phase = recoveryConflict
 			if err := a.git.WriteState(state); err != nil {
 				return err
@@ -247,7 +266,7 @@ func (a *App) recordRestackResult(state State, gitErr error) error {
 	if err := a.git.requireNoGitOperation(); err != nil {
 		return err
 	}
-	branch := activeRestackBranch(p)
+	branch := activeRebaseBranch(p)
 	updated, err := a.git.Output("rev-parse", "--verify", "refs/heads/"+branch+"^{commit}")
 	if err != nil {
 		return err
@@ -266,14 +285,14 @@ func (a *App) recordRestackResult(state State, gitErr error) error {
 	return a.git.WriteState(state)
 }
 
-func (a *App) abortSnapshotRestack(state State) error {
+func (a *App) abortSnapshotRebases(state State) error {
 	p := state.Pending
 	r := p.Recovery
-	snapshot, err := a.loadRestackSnapshot(p)
+	snapshot, err := a.loadRebaseSnapshot(p)
 	if err != nil {
 		return err
 	}
-	if err := a.checkRestackRefs(p, snapshot, true); err != nil {
+	if err := a.checkRebaseRefs(p, snapshot, true); err != nil {
 		return err
 	}
 	inRebase, err := a.git.RebaseInProgress()
@@ -281,11 +300,20 @@ func (a *App) abortSnapshotRestack(state State) error {
 		return err
 	}
 	if inRebase {
-		if err := a.requireRestackRebase(p); err != nil {
+		if err := a.requireSnapshotRebase(p); err != nil {
 			return err
 		}
 	}
-	active := activeRestackBranch(p)
+	active := activeRebaseBranch(p)
+	if r.Phase == recoveryDeleting {
+		refs, err := a.git.snapshotBranchRefs()
+		if err != nil {
+			return err
+		}
+		for _, branch := range p.Branches {
+			r.Expected[branch] = refs[branch]
+		}
+	}
 	if active == "" {
 		r.FastForward = ""
 		r.Onto = ""

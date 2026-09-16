@@ -339,8 +339,8 @@ options:
       --claude      install to ~/.claude/skills/graphene-stacked-prs/SKILL.md
       --out <path>  write SKILL.md to this path; use - for stdout`,
 		"completion": "usage: graphene completion <bash|zsh>\n\nWrite the completion script for Bash or Zsh to stdout.",
-		"continue":   "usage: graphene continue\n\nContinue the current Git rebase and any queued Graphene restacks.\n\nFor a snapshot-backed restack, resolve and stage conflicts before continuing. If a Git step was interrupted without a recorded result, abort and rerun the operation.",
-		"abort":      "usage: graphene abort\n\nAbort the current Git rebase and clear queued Graphene restacks.\n\nFor a snapshot-backed restack, restore the original branch tips, worktree and stack metadata, including branches already rebased. Run abort from the original worktree; an interrupted rollback can be retried. The branch involved in an ambiguous Git step is rolled back to its saved tip.",
+		"continue":   "usage: graphene continue\n\nContinue the current Git rebase and any queued Graphene restacks.\n\nFor snapshot-backed restack and sync operations, resolve and stage conflicts before continuing. If a Git step was interrupted without a recorded result, abort and rerun the operation.",
+		"abort":      "usage: graphene abort\n\nAbort the current Git rebase and clear queued Graphene restacks.\n\nFor snapshot-backed restack and sync operations, restore the original branch tips, worktree and stack metadata, including branches already rebased or deleted and any base fast-forward. Run abort from the original worktree; an interrupted rollback can be retried. The branch involved in an ambiguous Git step is rolled back to its saved tip.",
 		"config": `usage: graphene config <get|set|unset> [--global|--local] <key> [value]
 
 Read and write Graphene settings in Git config. Keys may be written with or without the graphene. prefix.
@@ -403,6 +403,8 @@ From an untracked stack base, --all syncs every stack descendant of the current 
 
 Branches detected as already applied upstream are removed from Graphene state and deleted locally.
 If configured upstreams disappeared for branches whose patches are not applied to the base, sync stops without changing local branches or Graphene state. Verify every branch shown by --dry-run --assume-merged before using the flag for a real sync.
+
+Sync saves a snapshot before changing local branches. Resolve normal rebase conflicts with continue, or use abort to restore the base, rebased branches, deleted branches and stack metadata. Ambiguous interruptions require abort and rerun. Unrelated branch pointers stay in place.
 
 options:
   -a, --all           sync every stack descendant from the current base branch

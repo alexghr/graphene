@@ -1954,7 +1954,7 @@ func TestSyncDryRunPrintsPlanWithoutChangingRefsOrState(t *testing.T) {
 		"  fetch: origin/main\n",
 		"  delete applied branches:\n    stack/one\n",
 		"  retarget existing PRs:\n    stack/two: stack/one -> main\n",
-		"  rebase:\n    git rebase --update-refs --onto ",
+		"  rebase:\n    git rebase --no-update-refs --onto ",
 		" stack/two\n",
 		"  return: main\n",
 	} {
@@ -2337,7 +2337,7 @@ func TestSyncRebasesSurvivingStackSuffixAfterDeletingNestedPath(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("graphene sync --dry-run exited %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
-	if !strings.Contains(stdout, "git rebase --update-refs --onto") || !strings.Contains(stdout, " stack/child-two") {
+	if !strings.Contains(stdout, "git rebase --no-update-refs --onto") || !strings.Contains(stdout, " stack/child-two") {
 		t.Fatalf("stdout = %q, want surviving suffix rebase", stdout)
 	}
 	if got := runGit(t, repo.dir, "rev-parse", "stack/child"); got != childBefore {
@@ -2421,7 +2421,7 @@ func TestSyncRetargetPlanFailureDoesNotAdvanceBaseOrCreatePending(t *testing.T) 
 	if code == 0 {
 		t.Fatal("graphene sync --all unexpectedly succeeded")
 	}
-	if !strings.Contains(stderr, `cannot safely sync duplicate parent change for "stack/child"`) {
+	if !strings.Contains(stderr, `duplicate branch "stack/child" in stack state`) {
 		t.Fatalf("stderr = %q", stderr)
 	}
 	if got := runGit(t, repo.dir, "rev-parse", "refs/graphene/fetch/main"); got != newMain {
@@ -2799,8 +2799,8 @@ func TestSyncAbortRestoresCompletedRebases(t *testing.T) {
 	if got := runGit(t, repo.dir, "rev-parse", "stack/one"); got == originalRefs["stack/one"] {
 		t.Fatal("first stack rebase did not complete before the conflict")
 	}
-	if got := runGit(t, repo.dir, "rev-parse", "local/bookmark"); got == originalRefs["local/bookmark"] {
-		t.Fatal("untracked local bookmark did not move with the first completed rebase")
+	if got := runGit(t, repo.dir, "rev-parse", "local/bookmark"); got != originalRefs["local/bookmark"] {
+		t.Fatal("untracked local bookmark moved with the first completed rebase")
 	}
 	state := readState(t, repo.dir)
 	if state.Pending == nil || state.Pending.Operation != "sync" {

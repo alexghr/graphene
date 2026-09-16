@@ -125,5 +125,5 @@ func (a *App) restack(args []string) error {
 	if err := a.git.WriteState(state); err != nil {
 		return err
 	}
-	return a.runSnapshotRestack(state)
+	return a.runSnapshotRebases(state)
 }

@@ -134,7 +134,7 @@ func TestRestackAbortRefusesBeforeMutation(t *testing.T) {
 				if code == 0 {
 					t.Fatalf("expected another conflicting rebase: %s", stderr)
 				}
-				want = "does not match this restack"
+				want = "does not match this operation"
 			}
 			beforeRefs := runGit(t, repo.dir, "show-ref")
 			beforeStatus := runGit(t, repo.dir, "status", "--porcelain")

@@ -1,6 +1,6 @@
 # Recovery snapshots
 
-Restack uses these snapshot and rollback primitives. Other commands still use
+Restack and sync use these snapshot and rollback primitives. Other commands still use
 their existing recovery paths; their integration is tracked in the local plan.
 
 A snapshot saves local branch tips and Graphene's stack metadata. Operations
@@ -39,7 +39,7 @@ its pending operation; the snapshot alone cannot infer that after a crash.
 
 ## Scope
 
-Restack persists a ready, applying, conflict or aborting phase. Each Git mutation
+Restack and sync persist a ready, applying, conflict or aborting phase. Each Git mutation
 starts with an applying record and ends with a saved result. Only a recorded
 conflict whose Git rebase metadata matches the queued operation may continue.
 An applying record left after interruption requires abort and rerun. Abort may
@@ -47,11 +47,21 @@ restore that active branch from an unknown tip; other owned branches must match
 their recorded or already-restored tips. This deliberately does not distinguish
 an interrupted Git rewrite from a later manual edit to that same active branch.
 
-Restack rebases branches individually with automatic ref updates disabled.
+Both commands rebase branches individually with automatic ref updates disabled.
 It freezes the source boundaries and target commit, checks branch tips between
 steps, and retains commits that become empty. Completed branches and stack
 metadata are restored together on abort. Backups are removed only after the
 final or restored stack metadata has been persisted.
+
+Sync freezes the fetched base tip before advancing any local branch. A base
+checked out in another worktree stays untouched; affected branches rebase onto
+the fetched commit. Applied branches remain until all rebases finish, then one
+ref transaction deletes them after a persisted deleting phase. An interrupted
+deletion requires abort and rerun; abort accepts either the saved tips or missing
+refs for those planned deletions. A recorded deletion can continue to finalization.
+Branch configuration is kept until the final stack metadata is saved, so abort
+restores upstreams as well as deleted branches. Interrupted configuration cleanup
+can leave unused entries after successful sync.
 
 Worktree snapshots preserve Git file content, staging and nonignored untracked
 files. They are not filesystem archives: ignored files, timestamps and arbitrary
