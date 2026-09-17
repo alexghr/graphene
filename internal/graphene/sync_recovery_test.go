@@ -12,15 +12,41 @@ func TestSyncSiblingAfterBaseAdvances(t *testing.T) {
 	t.Parallel()
 	repo, remote := newTestRepoWithOrigin(t)
 	createStackBranch(t, repo, "one.txt", "one\n", "One")
+	createStackBranch(t, repo, "one-child.txt", "one child\n", "One child")
+	runGit(t, repo.dir, "push", "-u", "origin", "stack/one", "stack/one-child")
 	runGit(t, repo.dir, "switch", "main")
 	createStackBranch(t, repo, "two.txt", "two\n", "Two")
+	createStackBranch(t, repo, "two-child.txt", "two child\n", "Two child")
+	runGit(t, repo.dir, "push", "-u", "origin", "stack/two", "stack/two-child")
+	two := runGit(t, repo.dir, "rev-parse", "stack/two")
+	twoChild := runGit(t, repo.dir, "rev-parse", "stack/two-child")
+	before := readState(t, repo.dir)
 	actor := cloneConfiguredRepo(t, remote, "main")
-	commitFile(t, actor, "base.txt", "base\n", "Advance main")
+	base := commitFile(t, actor, "base.txt", "base\n", "Advance main")
 	runGit(t, actor, "push", "origin", "main")
-	for _, branch := range []string{"stack/one", "stack/two"} {
-		runGit(t, repo.dir, "switch", branch)
-		expectGrapheneOK(t, repo, "sync")
-		assertBranchParent(t, repo.dir, branch, "main")
+
+	runGit(t, repo.dir, "switch", "stack/one-child")
+	expectGrapheneOK(t, repo, "sync")
+	if got := runGit(t, repo.dir, "rev-parse", "main"); got != base {
+		t.Fatalf("first sync left main at %s, want %s", got, base)
+	}
+	if runGit(t, repo.dir, "rev-parse", "stack/two") != two || runGit(t, repo.dir, "rev-parse", "stack/two-child") != twoChild {
+		t.Fatal("first sync moved the other stack")
+	}
+	one := runGit(t, repo.dir, "rev-parse", "stack/one")
+	oneChild := runGit(t, repo.dir, "rev-parse", "stack/one-child")
+
+	runGit(t, repo.dir, "switch", "stack/two-child")
+	expectGrapheneOK(t, repo, "sync")
+	for _, root := range []string{"stack/one", "stack/two"} {
+		assertBranchParent(t, repo.dir, root, "main")
+		assertBranchParent(t, repo.dir, root+"-child", root)
+	}
+	if runGit(t, repo.dir, "rev-parse", "stack/one") != one || runGit(t, repo.dir, "rev-parse", "stack/one-child") != oneChild {
+		t.Fatal("second sync moved the first stack")
+	}
+	if after := readState(t, repo.dir); !reflect.DeepEqual(after.Stacks, before.Stacks) || after.Pending != nil {
+		t.Fatalf("sync changed stack metadata or left a pending operation: %#v", after)
 	}
 }
 

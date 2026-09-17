@@ -1913,7 +1913,16 @@ func (a *App) sync(args []string) error {
 		return nil
 	}
 
-	fetched, err := a.fetchUpstream(selection.Base)
+	cfg, err := a.loadConfig()
+	if err != nil {
+		return err
+	}
+	remoteRefs := &syncFetchCache{
+		Prefix:  BranchName(cfg.BranchPrefix, ""),
+		Fetched: map[string]map[string]bool{},
+		Listed:  map[string]map[string]bool{},
+	}
+	fetched, err := a.fetchUpstreamWithCache(selection.Base, remoteRefs)
 	if err != nil {
 		return err
 	}
@@ -1940,7 +1949,6 @@ func (a *App) sync(args []string) error {
 	var appliedBranches []string
 	var assumedMergedBranches []string
 	var ambiguousBranches []string
-	remoteRefExists := map[string]bool{}
 	firstRemaining := map[int]int{}
 	for _, path := range selection.Paths {
 		applied, err := a.appliedPrefixBranches(baseRef, path.Stack.Branches[:path.BranchLimit], oldRefs)
@@ -1952,7 +1960,7 @@ func (a *App) sync(args []string) error {
 		remaining := path.Stack.Branches[len(applied):path.BranchLimit]
 		var missing []string
 		for _, branch := range remaining {
-			upstreamMissing, err := a.syncUpstreamMissing(branch, remoteRefExists)
+			upstreamMissing, err := a.syncUpstreamMissing(branch, remoteRefs)
 			if err != nil {
 				return err
 			}
@@ -2660,7 +2668,7 @@ func (a *App) syncBaseAfterFetch(base, upstream, oldBase, updatedBase string) (s
 	return "", fmt.Errorf("cannot fast-forward %q to %q; resolve the base branch before updating the stack", base, upstream)
 }
 
-func (a *App) syncUpstreamMissing(branch string, remoteRefExists map[string]bool) (bool, error) {
+func (a *App) syncUpstreamMissing(branch string, cache *syncFetchCache) (bool, error) {
 	remote, merge, err := a.git.Upstream(branch)
 	if err != nil {
 		return false, err
@@ -2669,27 +2677,35 @@ func (a *App) syncUpstreamMissing(branch string, remoteRefExists map[string]bool
 		return false, nil
 	}
 
-	key := remote + "\x00" + merge
-	exists, ok := remoteRefExists[key]
+	if cache.Fetched[remote][merge] {
+		return false, nil
+	}
+	if !strings.HasPrefix(merge, "refs/heads/"+cache.Prefix) {
+		refs, ok := cache.Listed[remote]
+		if !ok {
+			out, err := a.git.Output("ls-remote", "--refs", "--", remote)
+			if err != nil {
+				return false, err
+			}
+			refs = map[string]bool{}
+			for line := range strings.SplitSeq(out, "\n") {
+				if _, ref, ok := strings.Cut(line, "\t"); ok {
+					refs[ref] = true
+				}
+			}
+			cache.Listed[remote] = refs
+		}
+		return !refs[merge], nil
+	}
+	refs, ok := cache.Fetched[remote]
 	if !ok {
-		exists, err = a.remoteRefExists(remote, merge)
+		refs, err = a.fetchRemoteBranches(remote, cache.Prefix)
 		if err != nil {
 			return false, err
 		}
-		remoteRefExists[key] = exists
+		cache.Fetched[remote] = refs
 	}
-	return !exists, nil
-}
-
-func (a *App) remoteRefExists(remote, ref string) (bool, error) {
-	_, err := a.git.Output("ls-remote", "--exit-code", remote, ref)
-	if err == nil {
-		return true, nil
-	}
-	if isGitExit(err, 2) {
-		return false, nil
-	}
-	return false, err
+	return !refs[merge], nil
 }
 
 func (a *App) ensurePendingSyncBase(pending *Pending) error {

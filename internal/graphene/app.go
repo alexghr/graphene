@@ -396,8 +396,7 @@ Graphene reuses the current branch for HEAD. Intermediate commits reuse a single
 
 Fetch the stack base, drop already-applied branches on the current path, and restack affected children.
 
-Fetching caches only the base's upstream in a private Graphene ref; it does not update remote-tracking refs or tags.
-Dry-run also contacts the remote and downloads objects into that cache, but does not move local branches or change stack state.
+Dry-run also contacts the remote and downloads objects, but does not move local branches or change stack state.
 
 From an untracked stack base, --all syncs every stack descendant of the current branch.
 
