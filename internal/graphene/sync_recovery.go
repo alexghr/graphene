@@ -36,21 +36,20 @@ func (a *App) planSnapshotSync(before, after State, selection syncSelection, ref
 		if refs[branch] == "" || upstream == "" {
 			return fmt.Errorf("missing local branch or parent for %q", branch)
 		}
-		if parent == selection.Base {
-			based, err := a.isAncestor(baseHead, refs[branch])
+		if parent == selection.Base && !before.ContainsBranch(parent) {
+			var err error
+			upstream, err = a.git.Output("merge-base", baseHead, refs[branch])
 			if err != nil {
 				return err
 			}
-			if based {
-				upstream = baseHead
+		} else {
+			ancestor, err := a.isAncestor(upstream, refs[branch])
+			if err != nil {
+				return err
 			}
-		}
-		ancestor, err := a.isAncestor(upstream, refs[branch])
-		if err != nil {
-			return err
-		}
-		if !ancestor {
-			return fmt.Errorf("parent %q is not an ancestor of %q; repair the stack before syncing", parent, branch)
+			if !ancestor {
+				return fmt.Errorf("parent %q is not an ancestor of %q; repair the stack before syncing", parent, branch)
+			}
 		}
 		if err := a.validateStackShapeFromBase(Stack{Branches: []string{branch}}, upstream, parent); err != nil {
 			return err

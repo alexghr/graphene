@@ -24,8 +24,7 @@ func (a *App) restack(args []string) error {
 	if err := a.validateRestackBase(opts.base); err != nil {
 		return err
 	}
-	oldBase, ok := BaseBranch(state, current)
-	if !ok {
+	if !state.ContainsBranch(current) {
 		return fmt.Errorf("branch %q is not in a graphene stack", current)
 	}
 	nextState, _, ok := ReparentBranch(State{Stacks: cloneStacks(state.Stacks)}, current, opts.base)
@@ -60,10 +59,6 @@ func (a *App) restack(args []string) error {
 			r.FastForward = fetched.Updated
 		}
 	}
-	if refs[oldBase] == r.BaseHead && r.FastForward == "" {
-		return a.git.WriteState(nextState)
-	}
-
 	graph := newStackGraph(nextState)
 	var queue []RebaseOp
 	var visit func(string) error
@@ -80,16 +75,37 @@ func (a *App) restack(args []string) error {
 		if refs[branch] == "" || refs[parent] == "" {
 			return fmt.Errorf("missing local branch or parent for %q", branch)
 		}
-		ancestor, err := a.isAncestor(refs[parent], refs[branch])
-		if err != nil {
-			return err
+		upstream := refs[parent]
+		if !state.ContainsBranch(parent) {
+			var err error
+			upstream, err = a.git.Output("merge-base", upstream, refs[branch])
+			if err != nil {
+				return err
+			}
+		} else {
+			ancestor, err := a.isAncestor(upstream, refs[branch])
+			if err != nil {
+				return err
+			}
+			if !ancestor {
+				return fmt.Errorf("parent %q is not an ancestor of %q; repair the stack before restacking", parent, branch)
+			}
 		}
-		if !ancestor {
-			return fmt.Errorf("parent %q is not an ancestor of %q; repair the stack before restacking", parent, branch)
+		if branch == current && r.FastForward != "" {
+			count, err := a.commitCount(upstream, r.FastForward)
+			if err != nil {
+				return err
+			}
+			if count > 1 {
+				return fmt.Errorf("fetched branch %q contains %d commits on top of %q; Graphene expects one commit per stack branch. squash or drop the extra commits before restacking with --fetch", branch, count, parent)
+			}
 		}
 		r.Expected[branch] = refs[branch]
-		if branch != current || refs[oldBase] != r.BaseHead {
-			queue = append(queue, RebaseOp{Top: branch, Upstream: refs[parent], Onto: graph.parent[branch]})
+		if branch == current && upstream == r.BaseHead && r.FastForward == "" {
+			return nil
+		}
+		if branch != current || upstream != r.BaseHead {
+			queue = append(queue, RebaseOp{Top: branch, Upstream: upstream, Onto: graph.parent[branch]})
 		}
 		for _, child := range graph.children[branch] {
 			if err := visit(child); err != nil {
@@ -100,6 +116,9 @@ func (a *App) restack(args []string) error {
 	}
 	if err := visit(current); err != nil {
 		return err
+	}
+	if len(queue) == 0 && r.FastForward == "" {
+		return a.git.WriteState(nextState)
 	}
 	id, err := a.git.captureSnapshot(true)
 	if err != nil {

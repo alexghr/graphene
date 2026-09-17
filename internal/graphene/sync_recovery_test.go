@@ -8,6 +8,22 @@ import (
 	"testing"
 )
 
+func TestSyncSiblingAfterBaseAdvances(t *testing.T) {
+	t.Parallel()
+	repo, remote := newTestRepoWithOrigin(t)
+	createStackBranch(t, repo, "one.txt", "one\n", "One")
+	runGit(t, repo.dir, "switch", "main")
+	createStackBranch(t, repo, "two.txt", "two\n", "Two")
+	actor := cloneConfiguredRepo(t, remote, "main")
+	commitFile(t, actor, "base.txt", "base\n", "Advance main")
+	runGit(t, actor, "push", "origin", "main")
+	for _, branch := range []string{"stack/one", "stack/two"} {
+		runGit(t, repo.dir, "switch", branch)
+		expectGrapheneOK(t, repo, "sync")
+		assertBranchParent(t, repo.dir, branch, "main")
+	}
+}
+
 func assertSyncRestored(t *testing.T, repo testRepo, original State, refs, branch string) {
 	t.Helper()
 	if got := readState(t, repo.dir); !reflect.DeepEqual(got, original) {

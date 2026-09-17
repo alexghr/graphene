@@ -238,14 +238,33 @@ func TestRestackRetriesInterruptedAbort(t *testing.T) {
 	}
 }
 
+func TestRestackAfterBaseAdvances(t *testing.T) {
+	for _, target := range []string{"main", "target"} {
+		t.Run(target, func(t *testing.T) {
+			t.Parallel()
+			repo := newTestRepo(t)
+			createStackBranch(t, repo, "one.txt", "one\n", "One")
+			createStackBranch(t, repo, "two.txt", "two\n", "Two")
+			runGit(t, repo.dir, "switch", "-c", "target", "main")
+			commitFile(t, repo.dir, "target.txt", "target\n", "Target")
+			runGit(t, repo.dir, "switch", "main")
+			commitFile(t, repo.dir, "base.txt", "base\n", "Advance main")
+			runGit(t, repo.dir, "switch", "stack/one")
+			expectGrapheneOK(t, repo, "restack", target)
+			assertBranchParent(t, repo.dir, "stack/one", target)
+			assertBranchParent(t, repo.dir, "stack/two", "stack/one")
+		})
+	}
+}
+
 func TestRestackContinueCommitFailureRequiresAbort(t *testing.T) {
 	t.Parallel()
 	repo, original, refs := restackConflict(t)
 	writeExecutable(t, filepath.Join(repo.dir, ".git", "hooks", "prepare-commit-msg"), "#!/bin/sh\nexit 1\n")
 	writeFile(t, repo.dir, "file.txt", "resolved\n")
 	runGit(t, repo.dir, "add", "file.txt")
-	if code, _, _ := repo.runGraphene(t, "continue"); code == 0 {
-		t.Fatal("continue ignored the failed commit hook")
+	if code, _, stderr := repo.runGraphene(t, "continue"); code == 0 || !strings.Contains(stderr, "abort and rerun") {
+		t.Fatalf("continue after failed commit hook: %d, %s", code, stderr)
 	}
 	if code, _, stderr := repo.runGraphene(t, "continue"); code == 0 || !strings.Contains(stderr, "interrupted during a Git step") {
 		t.Fatalf("continue after failed commit: %d, %s", code, stderr)
@@ -282,13 +301,16 @@ func TestRestackKilledAfterRewriteCanAbort(t *testing.T) {
 }
 
 func TestRestackSnapshotsBeforeFastForward(t *testing.T) {
-	for _, action := range []string{"abort", "preflight"} {
+	for _, action := range []string{"abort", "continue", "preflight"} {
 		t.Run(action, func(t *testing.T) {
 			t.Parallel()
 			repo, remote := newTestRepoWithOrigin(t)
 			createStackBranch(t, repo, "one.txt", "one\n", "One")
 			createStackBranch(t, repo, "two.txt", "two\n", "Two")
 			expectGrapheneOK(t, repo, "send", "origin")
+			// The original branch commit is now in main; the fetched tip adds one new commit.
+			runGit(t, repo.dir, "switch", "main")
+			runGit(t, repo.dir, "merge", "--ff-only", "stack/one")
 			oldOne := runGit(t, repo.dir, "rev-parse", "stack/one")
 			other := cloneConfiguredRepo(t, remote, "stack/one")
 			remoteOne := commitFile(t, other, "file.txt", "upstream\n", "Upstream")
@@ -312,6 +334,14 @@ func TestRestackSnapshotsBeforeFastForward(t *testing.T) {
 			} else {
 				if state.Pending == nil || state.Pending.Recovery == nil || state.Pending.Recovery.Expected["stack/one"] != remoteOne {
 					t.Fatalf("fast-forward was not recorded: %#v, stderr %s", state.Pending, stderr)
+				}
+				if action == "continue" {
+					writeFile(t, repo.dir, "file.txt", "resolved\n")
+					runGit(t, repo.dir, "add", "file.txt")
+					expectGrapheneOK(t, repo, "continue")
+					assertBranchParent(t, repo.dir, "stack/one", "target")
+					assertBranchParent(t, repo.dir, "stack/two", "stack/one")
+					return
 				}
 				expectGrapheneOK(t, repo, "abort")
 			}

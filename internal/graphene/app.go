@@ -235,7 +235,7 @@ func (a *App) Run(args []string) int {
 
 	var gitErr *GitError
 	var aliasErr *shellAliasError
-	if !(errors.As(err, &gitErr) && gitErr.Streamed) && !errors.As(err, &aliasErr) {
+	if !(errors.As(err, &gitErr) && gitErr.Streamed && err == gitErr) && !errors.As(err, &aliasErr) {
 		fmt.Fprintln(a.stderr, err)
 	}
 	return errorExitCode(err)

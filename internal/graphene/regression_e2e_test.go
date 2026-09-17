@@ -117,8 +117,7 @@ func TestRegressionSquashUsesRenderedParentAcrossNestedStacks(t *testing.T) {
 	}
 }
 
-// Regression for https://github.com/alexghr/graphene/issues/13.
-func TestRegressionRestackUpdatesCurrentBranchFromUpstream(t *testing.T) {
+func TestRegressionRestackRejectsMultiCommitUpstream(t *testing.T) {
 	t.Parallel()
 	repo, remote := newTestRepoWithOrigin(t)
 	createStackBranch(t, repo, "one.txt", "one\n", "One")
@@ -138,10 +137,16 @@ func TestRegressionRestackUpdatesCurrentBranchFromUpstream(t *testing.T) {
 	runGit(t, repo.dir, "commit", "-m", "Target")
 
 	runGit(t, repo.dir, "switch", "stack/one")
-	expectGrapheneOK(t, repo, "restack", "--fetch", "target")
-
-	if !refFileExists(t, repo.dir, "stack/one:remote-one.txt") {
-		t.Fatal("restack did not incorporate the upstream stack/one update")
+	refs := runGit(t, repo.dir, "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads")
+	state := readState(t, repo.dir)
+	if code, _, stderr := repo.runGraphene(t, "restack", "--fetch", "target"); code == 0 || !strings.Contains(stderr, "contains 2 commits") {
+		t.Fatalf("restack with multi-commit upstream: %d, %s", code, stderr)
+	}
+	if got := runGit(t, repo.dir, "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads"); got != refs {
+		t.Fatal("refused restack moved local branches")
+	}
+	if got := readState(t, repo.dir); !reflect.DeepEqual(got, state) {
+		t.Fatalf("refused restack changed metadata: %#v", got)
 	}
 }
 
