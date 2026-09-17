@@ -81,7 +81,7 @@ func TestSyncSnapshotConflict(t *testing.T) {
 			runGit(t, repo.dir, "switch", "stack/one")
 			actor := cloneConfiguredRepo(t, remote, "main")
 			commitFile(t, actor, "one.txt", "one\n", "Merged one")
-			commitFile(t, actor, "file.txt", "remote\n", "Conflicting base")
+			fetchedBase := commitFile(t, actor, "file.txt", "remote\n", "Conflicting base")
 			runGit(t, actor, "push", "origin", "main")
 			original := readState(t, repo.dir)
 			refs := runGit(t, repo.dir, "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads")
@@ -133,6 +133,9 @@ func TestSyncSnapshotConflict(t *testing.T) {
 				}
 			}
 			assertRestackSnapshotRemoved(t, repo, id)
+			if got := runGit(t, repo.dir, "rev-parse", "origin/main"); got != fetchedBase {
+				t.Fatalf("recovery changed fetched upstream: %s, want %s", got, fetchedBase)
+			}
 		})
 	}
 }

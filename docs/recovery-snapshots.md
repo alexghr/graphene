@@ -65,6 +65,10 @@ Branch configuration is kept until the final stack metadata is saved, so abort
 restores upstreams as well as deleted branches. Interrupted configuration cleanup
 can leave unused entries after successful sync.
 
+Sync and restack with `--fetch` refresh the selected upstream's remote-tracking
+ref as well as the private recovery ref. These updates also occur during sync
+dry-runs and are not rolled back by abort.
+
 Worktree snapshots preserve Git file content, staging and nonignored untracked
 files. They are not filesystem archives: ignored files, timestamps and arbitrary
 file permissions are not backed up. Unrelated untracked files are left in place;

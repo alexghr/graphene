@@ -1916,7 +1916,7 @@ func TestSyncAllFromUntrackedNonBaseNamesValidBases(t *testing.T) {
 	}
 }
 
-func TestSyncDryRunPrintsPlanWithoutChangingRefsOrState(t *testing.T) {
+func TestSyncDryRunPrintsPlanWithoutChangingLocalBranchesOrState(t *testing.T) {
 	t.Parallel()
 	repo := newTestRepo(t)
 
@@ -1940,7 +1940,7 @@ func TestSyncDryRunPrintsPlanWithoutChangingRefsOrState(t *testing.T) {
 
 	runGit(t, repo.dir, "checkout", "main")
 	mainBefore := runGit(t, repo.dir, "rev-parse", "main")
-	originMainBefore := runGit(t, repo.dir, "rev-parse", "origin/main")
+	remoteMain := runGit(t, remote, "rev-parse", "main")
 	oneBefore := runGit(t, repo.dir, "rev-parse", "stack/one")
 	twoBefore := runGit(t, repo.dir, "rev-parse", "stack/two")
 	stateBefore := readState(t, repo.dir)
@@ -1966,8 +1966,8 @@ func TestSyncDryRunPrintsPlanWithoutChangingRefsOrState(t *testing.T) {
 	if got := runGit(t, repo.dir, "rev-parse", "main"); got != mainBefore {
 		t.Fatalf("main changed from %s to %s", mainBefore, got)
 	}
-	if got := runGit(t, repo.dir, "rev-parse", "origin/main"); got != originMainBefore {
-		t.Fatalf("origin/main changed from %s to %s", originMainBefore, got)
+	if got := runGit(t, repo.dir, "rev-parse", "origin/main"); got != remoteMain {
+		t.Fatalf("origin/main = %s, want fetched commit %s", got, remoteMain)
 	}
 	if got := runGit(t, repo.dir, "rev-parse", "stack/one"); got != oneBefore {
 		t.Fatalf("stack/one changed from %s to %s", oneBefore, got)
@@ -2427,8 +2427,8 @@ func TestSyncRetargetPlanFailureDoesNotAdvanceBaseOrCreatePending(t *testing.T) 
 	if got := runGit(t, repo.dir, "rev-parse", "refs/graphene/fetch/main"); got != newMain {
 		t.Fatalf("fetched main = %s, want %s", got, newMain)
 	}
-	if got := runGit(t, repo.dir, "rev-parse", "origin/main"); got != oldMain {
-		t.Fatalf("origin/main changed from %s to %s", oldMain, got)
+	if got := runGit(t, repo.dir, "rev-parse", "origin/main"); got != newMain {
+		t.Fatalf("origin/main = %s, want fetched commit %s", got, newMain)
 	}
 	if got := runGit(t, repo.dir, "rev-parse", "main"); got != oldMain {
 		t.Fatalf("main changed from %s to %s after planning failed", oldMain, got)
@@ -2620,8 +2620,8 @@ func TestSyncAllRejectsCheckedOutStackUnlessForced(t *testing.T) {
 	if got := runGit(t, repo.dir, "rev-parse", "main"); got != oldMain {
 		t.Fatalf("main changed from %s to %s", oldMain, got)
 	}
-	if got := runGit(t, repo.dir, "rev-parse", "origin/main"); got != oldMain {
-		t.Fatalf("origin/main changed from %s to %s", oldMain, got)
+	if got, want := runGit(t, repo.dir, "rev-parse", "origin/main"), runGit(t, remote, "rev-parse", "main"); got != want {
+		t.Fatalf("origin/main = %s, want fetched commit %s", got, want)
 	}
 	if got := runGit(t, repo.dir, "rev-parse", "stack/two^"); got != beforeTwoParent {
 		t.Fatalf("stack/two parent changed from %s to %s", beforeTwoParent, got)

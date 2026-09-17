@@ -65,6 +65,17 @@ func (a *App) fetchUpstreamWithCache(branch string, cache *syncFetchCache) (upst
 	if err != nil {
 		return upstreamUpdate{}, err
 	}
+	tracking, err := a.git.Output("for-each-ref", "--format=%(upstream)", "refs/heads/"+branch)
+	if err != nil {
+		return upstreamUpdate{}, err
+	}
+	// Upstream mappings can target local branches. Refresh only remote-tracking
+	// refs, without following symbolic refs that could point at local branches.
+	if strings.HasPrefix(tracking, "refs/remotes/") {
+		if err := a.git.OutputErr("update-ref", "--no-deref", tracking, updated); err != nil {
+			return upstreamUpdate{}, err
+		}
+	}
 	return upstreamUpdate{
 		Branch: branch, Remote: remote, Merge: merge, Old: old, Updated: updated,
 	}, nil

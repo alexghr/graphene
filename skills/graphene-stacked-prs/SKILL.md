@@ -93,7 +93,7 @@ graphene sendf --dry-run
 
 `graphene sync` can run from a tracked stack branch. It can also run from a stack base such as `main`; from a base branch, it syncs all stacks recorded with that exact base branch name.
 
-Use `graphene sync -a` or `graphene sync --all` when intentionally syncing every descendant from the current untracked base branch. Use `graphene sync --dry-run` or `graphene sync -a --dry-run` to fetch and preview deletions, retargets, and rebases without moving local branches or changing Graphene state. Dry-run still contacts the remote, downloads objects, and updates private fetch refs. Sync fetches the base upstream and branches under the configured `branchPrefix` (default `stack/*`) once per needed remote, reusing the cache across selected stacks. An empty prefix matches all branches. Upstreams outside the prefix still work, but require an additional remote listing, cached per remote for that sync. Remote-tracking refs and tags stay unchanged; fetching other stacks' branches into the private cache does not move their local branch pointers.
+Use `graphene sync -a` or `graphene sync --all` when intentionally syncing every descendant from the current untracked base branch. Use `graphene sync --dry-run` or `graphene sync -a --dry-run` to fetch and preview deletions, retargets, and rebases without moving local branches or changing Graphene state. Dry-run still contacts the remote, downloads objects, and updates private fetch refs and the base's remote-tracking ref. Sync fetches the base upstream and branches under the configured `branchPrefix` (default `stack/*`) once per needed remote, reusing the cache across selected stacks. An empty prefix matches all branches. Upstreams outside the prefix still work, but require an additional remote listing, cached per remote for that sync. Other remote-tracking refs and tags stay unchanged; fetching other stacks' branches into the private cache does not move their local branch pointers.
 
 If sync reports that configured upstreams for unapplied branches no longer exist, run `graphene sync --dry-run --assume-merged` and verify every listed PR was merged before using the flag for a real sync. A missing remote ref alone is not merge evidence, so do not use this flag only to get past the safety check.
 
@@ -107,7 +107,7 @@ Move the current branch and its descendants onto a local branch:
 graphene restack <local-base>
 ```
 
-Restack uses local refs by default. Use `graphene restack --fetch <local-base>` only when you also intend to fetch the current branch's upstream before restacking. This fetches the current branch, not the target base. Diverged upstreams and fetched tips that would introduce extra commits are rejected before local branches change.
+Restack uses local refs by default. Use `graphene restack --fetch <local-base>` only when you also intend to fetch the current branch's upstream before restacking. This fetches the current branch and refreshes its remote-tracking ref; it does not fetch the target base. Diverged upstreams and fetched tips that would introduce extra commits are rejected before local branches change.
 
 Only `sync` and `restack --fetch` fetch Git objects. `track` records an existing branch using local refs and does not advance its parent. Use `sync` to update a stack against its upstream base.
 
@@ -192,7 +192,7 @@ graphene abort
 
 Sync and restack save a snapshot before changing local branches. Their `abort` restores the original branch tips, stack metadata, index and worktree content, including completed rebases, base fast-forwards and branches deleted by sync. Run recovery from the worktree where the operation started.
 
-The worktree snapshot covers Git file content and nonignored untracked files; ignored files and filesystem metadata are not backed up.
+The worktree snapshot covers Git file content and nonignored untracked files; ignored files and filesystem metadata are not backed up. Abort keeps the latest fetched remote-tracking refs.
 
 If Graphene reports an interrupted Git step with an unknown result, use `graphene abort` and rerun the original command. Do not guess whether the step completed or bypass the pending operation with manual ref/state edits. If rollback itself is interrupted, retry `graphene abort`.
 

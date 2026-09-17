@@ -88,7 +88,7 @@ func TestSyncFetchIgnoresConfiguredRefspecsAndTags(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	refs := runGit(t, repo.dir, "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads", "refs/remotes", "refs/tags")
+	refs := runGit(t, repo.dir, "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads", "refs/tags")
 	state := readState(t, repo.dir)
 
 	other := cloneConfiguredRepo(t, remote, "main")
@@ -96,7 +96,7 @@ func TestSyncFetchIgnoresConfiguredRefspecsAndTags(t *testing.T) {
 	runGit(t, other, "tag", "remote-tag")
 	runGit(t, other, "push", "origin", "main", "refs/tags/remote-tag")
 
-	// A plain fetch would move a local branch, update origin/main and alter tags.
+	// A plain fetch would also move a local branch and alter tags.
 	runGit(t, repo.dir, "config", "--add", "remote.origin.fetch", "+refs/heads/main:refs/heads/victim")
 	runGit(t, repo.dir, "config", "remote.origin.prune", "true")
 	runGit(t, repo.dir, "config", "remote.origin.pruneTags", "true")
@@ -106,8 +106,11 @@ func TestSyncFetchIgnoresConfiguredRefspecsAndTags(t *testing.T) {
 	if got := runGit(t, repo.dir, "rev-parse", "refs/graphene/fetch/main"); got != newMain {
 		t.Fatalf("fetched commit = %s, want %s", got, newMain)
 	}
-	if got := runGit(t, repo.dir, "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads", "refs/remotes", "refs/tags"); got != refs {
-		t.Fatalf("fetch moved refs outside its private cache:\nbefore:\n%s\nafter:\n%s", refs, got)
+	if got := runGit(t, repo.dir, "rev-parse", "main@{upstream}"); got != newMain {
+		t.Fatalf("remote-tracking commit = %s, want %s", got, newMain)
+	}
+	if got := runGit(t, repo.dir, "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads", "refs/tags"); got != refs {
+		t.Fatalf("fetch moved local branches or tags:\nbefore:\n%s\nafter:\n%s", refs, got)
 	}
 	after, err := os.ReadFile(fetchHeadPath)
 	if err != nil || !bytes.Equal(after, fetchHead) {
@@ -118,6 +121,34 @@ func TestSyncFetchIgnoresConfiguredRefspecsAndTags(t *testing.T) {
 	}
 	if got := readState(t, repo.dir); !reflect.DeepEqual(got, state) {
 		t.Fatalf("dry run changed stack state: %#v", got)
+	}
+	expectGrapheneOK(t, repo, "sync")
+	if got := runGit(t, repo.dir, "rev-list", "--left-right", "--count", "main...main@{upstream}"); got != "0\t0" {
+		t.Fatalf("main ahead/behind its upstream after sync = %s, want 0/0", got)
+	}
+}
+
+func TestSyncFetchRespectsUpstreamDestination(t *testing.T) {
+	for _, destination := range []string{"refs/remotes/custom/main", "refs/heads/victim"} {
+		t.Run(destination, func(t *testing.T) {
+			t.Parallel()
+			repo, remote := newTestRepoWithOrigin(t)
+			old := runGit(t, repo.dir, "rev-parse", "main")
+			runGit(t, repo.dir, "update-ref", destination, old)
+			runGit(t, repo.dir, "config", "--replace-all", "remote.origin.fetch", "+refs/heads/main:"+destination)
+			createStackBranch(t, repo, "one.txt", "one\n", "One")
+			other := cloneConfiguredRepo(t, remote, "main")
+			updated := commitFile(t, other, "base.txt", "updated\n", "Update main")
+			runGit(t, other, "push", "origin", "main")
+			expectGrapheneOK(t, repo, "sync", "--dry-run")
+			want := old
+			if strings.HasPrefix(destination, "refs/remotes/") {
+				want = updated
+			}
+			if got := runGit(t, repo.dir, "rev-parse", destination); got != want {
+				t.Fatalf("fetch destination %s = %s, want %s", destination, got, want)
+			}
+		})
 	}
 }
 
@@ -136,7 +167,6 @@ func TestSyncFetchPrefixLeavesOtherStackUntouched(t *testing.T) {
 			runGit(t, repo.dir, "push", "-u", "origin", two)
 			twoHead := runGit(t, repo.dir, "rev-parse", two)
 			before := readState(t, repo.dir)
-			tracking := runGit(t, repo.dir, "for-each-ref", "--format=%(refname) %(objectname)", "refs/remotes")
 
 			other := cloneConfiguredRepo(t, remote, "main")
 			runGit(t, other, "checkout", "-b", "unrelated")
@@ -160,8 +190,11 @@ func TestSyncFetchPrefixLeavesOtherStackUntouched(t *testing.T) {
 			if after := readState(t, repo.dir); !reflect.DeepEqual(after.Stacks, before.Stacks) {
 				t.Fatalf("sync changed stack metadata: before %#v, after %#v", before.Stacks, after.Stacks)
 			}
-			if got := runGit(t, repo.dir, "for-each-ref", "--format=%(refname) %(objectname)", "refs/remotes"); got != tracking {
-				t.Fatalf("sync changed remote-tracking refs: %s", got)
+			if got := runGit(t, repo.dir, "rev-parse", "main@{upstream}"); got != base {
+				t.Fatalf("base remote-tracking commit = %s, want %s", got, base)
+			}
+			if got := runGit(t, repo.dir, "rev-parse", two+"@{upstream}"); got != twoHead {
+				t.Fatalf("sync changed the other stack's remote-tracking ref: %s", got)
 			}
 			git := Git{Dir: repo.dir}
 			err := git.OutputErr("cat-file", "-e", unrelated)
