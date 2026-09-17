@@ -11,6 +11,7 @@ Graphene is a small Go CLI for managing stacked PR branches.
 - The installable agent skill is embedded from `skills/graphene-stacked-prs/SKILL.md`; keep it aligned with CLI behavior.
 - Prefer the Go standard library. Ask before adding dependencies.
 - Production binaries are built with Nix through `devenv.nix`.
+- For release notes, follow [the release notes guide](docs/release-notes.md).
 
 ## Commands
 
