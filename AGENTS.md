@@ -7,6 +7,8 @@ Graphene is a small Go CLI for managing stacked PR branches.
 - Entry point: `cmd/graphene/main.go`.
 - Core code: `internal/graphene`.
 - State is stored in `<git-common-dir>/graphene/state.json`; legacy local Git config under `graphene.state` is migrated automatically.
+- For sync/restack recovery changes, read [the snapshot contract](docs/recovery-snapshots.md).
+- The installable agent skill is embedded from `skills/graphene-stacked-prs/SKILL.md`; keep it aligned with CLI behavior.
 - Prefer the Go standard library. Ask before adding dependencies.
 - Production binaries are built with Nix through `devenv.nix`.
 

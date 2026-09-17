@@ -1,7 +1,7 @@
 # Recovery snapshots
 
 Restack and sync use these snapshot and rollback primitives. Other commands still use
-their existing recovery paths; their integration is tracked in the local plan.
+their existing recovery paths.
 
 A snapshot saves local branch tips and Graphene's stack metadata. Operations
 that change files can also save the original Git index and a worktree tree.
@@ -39,17 +39,19 @@ its pending operation; the snapshot alone cannot infer that after a crash.
 
 ## Scope
 
-Restack and sync persist a ready, applying, conflict or aborting phase. Each Git mutation
-starts with an applying record and ends with a saved result. Only a recorded
-conflict whose Git rebase metadata matches the queued operation may continue.
+Restack and sync persist a ready, applying, conflict or aborting phase. Each
+fast-forward or rebase starts with an applying record and ends with a saved result.
+An active rebase may continue only after a recorded conflict and when its Git
+metadata matches the queued operation. Recorded successful steps can resume
+without replaying them.
 An applying record left after interruption requires abort and rerun. Abort may
 restore that active branch from an unknown tip; other owned branches must match
 their recorded or already-restored tips. This deliberately does not distinguish
 an interrupted Git rewrite from a later manual edit to that same active branch.
 
 Both commands rebase branches individually with automatic ref updates disabled.
-It freezes the source boundaries and target commit, checks branch tips between
-steps, and retains commits that become empty. Completed branches and stack
+They freeze the source boundaries and target commit, check branch tips between
+steps, and retain commits that become empty. Completed branches and stack
 metadata are restored together on abort. Backups are removed only after the
 final or restored stack metadata has been persisted.
 
@@ -71,6 +73,6 @@ directory/file collisions that could lose them block rollback.
 Submodules, split indexes, unmerged entries, skip-worktree and assume-unchanged
 flags, custom filters and working-tree encodings are rejected for worktree
 snapshots. Branch configuration, reflogs and remote-tracking refs are outside this
-snapshot format. Later command layers must account for any changes they make to
-those. Interrupted capture or cleanup can leave unused backup artifacts, but
+snapshot format. Commands that change those must account for them separately.
+Interrupted capture or cleanup can leave unused backup artifacts, but
 does not move working branches.

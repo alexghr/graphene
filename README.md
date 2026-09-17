@@ -1,6 +1,8 @@
 # graphene
 
-This is a vibe-coded CLI tool to create stacked PRs.
+Graphene is a CLI tool to create and manage stacked Git branches. It works with any Git remote and automatically generates GitHub links for opening pull requests against the correct base branches.
+
+All state is kept local, in the .git folder in plain text files.
 
 ## Requirements
 
