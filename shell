@@ -2,4 +2,14 @@
 
 set -euo pipefail
 
-exec ./devenv shell --quiet --no-reload -- $@
+DEVENV_PROFILE=${DEVENV_PROFILE:-}
+
+if [[ -z "$DEVENV_PROFILE" ]]; then
+  if [[ "${CI:-}" == "true" || "${CI:-}" == "1" ]]; then
+    DEVENV_PROFILE=ci
+  else
+    DEVENV_PROFILE=dev
+  fi
+fi
+
+exec ./devenv shell --profile "$DEVENV_PROFILE" --quiet --no-reload -- "$@"

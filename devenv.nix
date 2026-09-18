@@ -1,7 +1,6 @@
 { pkgs, lib, config, inputs, ... }:
 let
   pkgs-unstable = import inputs.nixpkgs-unstable { system = pkgs.stdenv.system; };
-  agents = import inputs.agents { inherit pkgs; };
   version = lib.removeSuffix "\n" (builtins.readFile ./VERSION);
   lint = pkgs.writeShellApplication {
     name = "graphene-lint";
@@ -35,23 +34,42 @@ let
   };
 in
   {
-    packages = with pkgs;
-      [
-        git
-        pkgs-unstable.gh
-        agents.codex
-      ];
+    profiles = {
+      # Keep development-only tools out of the closure materialized in CI.
+      dev.module =
+        let
+          agents = import inputs.agents { inherit pkgs; };
+        in
+          { pkgs, ... }:
+          {
+            languages.go.enable = true;
 
-    languages.go = {
-      enable = true;
+            packages = [
+              pkgs.git
+              pkgs-unstable.gh
+              agents.codex
+            ];
+          };
+      ci.module = { pkgs, ... }: {
+        packages = [
+          pkgs.git
+          pkgs.go
+        ];
+        env.GOTOOLCHAIN = "local";
+      };
     };
 
-    scripts = {};
-
     scripts = {
-      graphene-test.exec = "go test -parallel 8 ./...";
-      graphene-build.exec = "go build -o bin/graphene ./cmd/graphene";
-      graphene-lint.exec = "${lint}/bin/graphene-lint";
+      p-test.exec = "go test -parallel 8 ./...";
+      p-build.exec = "go build -o bin/graphene ./cmd/graphene";
+      p-lint.exec = "${lint}/bin/graphene-lint";
+      p-ci.exec = ''
+        set -euo pipefail
+
+        p-lint
+        p-test
+        p-build
+      '';
     };
 
     outputs = {
@@ -78,7 +96,7 @@ in
         '';
         checkPhase = ''
           runHook preCheck
-          graphene-lint
+          ${lint}/bin/graphene-lint
           go test -parallel 8 ./...
           runHook postCheck
         '';

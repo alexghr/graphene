@@ -16,8 +16,9 @@ Graphene is a small Go CLI for managing stacked PR branches.
 ## Commands
 
 - Test: `go test ./...`
-- Devenv test script: `./devenv shell graphene-test`
-- Local binary script: `./devenv shell graphene-build`
+- Devenv CI script: `./shell p-ci`
+- Devenv test script: `./shell p-test`
+- Local binary script: `./shell p-build`
 - Production build: `./devenv build`
 
 ## Code Style

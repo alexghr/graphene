@@ -9,24 +9,43 @@ on:
 
 jobs:
   ci:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-26.04
+    env:
+      GOCACHE: ${{ github.workspace }}/.cache/go-build
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+      - name: Cache Go build artifacts
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: ${{ env.GOCACHE }}
+          key: go-build-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('devenv.lock', 'go.mod') }}-${{ github.sha }}
+          restore-keys: |
+            go-build-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('devenv.lock', 'go.mod') }}-
 
       - uses: cachix/install-nix-action@ab739621df7a23f52766f9ccc97f38da6b7af14f
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
 
-      - name: Lint
-        run: |
-          ./devenv shell --quiet --no-reload -- graphene-lint
+      - name: Cache Nix store
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7.0.2
+        with:
+          primary-key: nix-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.nix', 'devenv.lock', 'devenv.yaml', 'devenv', 'shell', '.github/workflows/ci.yml') }}
+          restore-prefixes-first-match: nix-v2-${{ runner.os }}-${{ runner.arch }}-
+          paths: ~/.cache/nix
 
-      - name: Test
-        run: |
-          ./devenv shell --quiet --no-reload -- graphene-test
+      - uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71 # v17
+        with:
+          name: devenv
 
-      - name: Build
+      - name: Materialize devenv shell
+        run: ./shell true
+
+      - name: Lint, test, and build
+        run: ./shell p-ci
+
+      - name: Build package
         id: build
         run: |
           ./devenv build --quiet outputs.graphene > out.json
