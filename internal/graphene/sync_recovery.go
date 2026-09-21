@@ -83,9 +83,9 @@ func (a *App) planSnapshotSync(before, after State, selection syncSelection, ref
 	return queue, nil
 }
 
-func (a *App) startSnapshotSync(state State, p *Pending, fetched upstreamUpdate, refs map[string]string) error {
+func (a *App) startSnapshotSync(state State, p *Pending, fetched upstreamUpdate, refs map[string]string, acceptRisk bool) error {
 	base, current := fetched.Branch, p.Branch
-	r := &recoveryState{Phase: recoveryReady, Base: base, BaseHead: fetched.Updated, Expected: map[string]string{current: refs[current]}}
+	r := &recoveryState{Phase: recoveryReady, Base: base, BaseHead: fetched.Updated, Expected: map[string]string{current: refs[current]}, AcceptRisk: acceptRisk}
 	baseAvailable := base == current
 	if !baseAvailable {
 		checkedOut, err := a.git.BranchCheckedOut(base)
@@ -116,6 +116,16 @@ func (a *App) startSnapshotSync(state State, p *Pending, fetched upstreamUpdate,
 			}
 		}
 	}
+	p.Recovery = r
+	if p.ReturnBranch == "" {
+		p.ReturnBranch = base
+		if !baseAvailable {
+			p.ReturnRef = fetched.Updated
+		}
+	}
+	if err := a.preflightRebaseRepositories(p, "HEAD", true); err != nil {
+		return err
+	}
 	id, err := a.git.captureSnapshot(true)
 	if err != nil {
 		return err
@@ -134,13 +144,6 @@ func (a *App) startSnapshotSync(state State, p *Pending, fetched upstreamUpdate,
 		}
 	}
 	p.Worktree = snapshot.Worktree
-	p.Recovery = r
-	if p.ReturnBranch == "" {
-		p.ReturnBranch = base
-		if !baseAvailable {
-			p.ReturnRef = fetched.Updated
-		}
-	}
 	state.Pending = p
 	if err := a.git.WriteState(state); err != nil {
 		return err
@@ -152,10 +155,10 @@ func (a *App) finishSnapshotSync(state State) error {
 	p := state.Pending
 	r := p.Recovery
 	if p.ReturnRef != "" {
-		if err := a.git.Run("switch", "--detach", p.ReturnRef); err != nil {
+		if err := a.git.runWithoutSubmodules("switch", "--detach", p.ReturnRef); err != nil {
 			return err
 		}
-	} else if err := a.git.Run("switch", p.ReturnBranch); err != nil {
+	} else if err := a.git.runWithoutSubmodules("switch", p.ReturnBranch); err != nil {
 		return err
 	}
 	var edits []snapshotRefEdit

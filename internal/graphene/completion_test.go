@@ -38,6 +38,8 @@ func TestCompletionStaticGrammar(t *testing.T) {
 		{name: "optional value flag", line: "graphene new --g", want: []string{"--gpg-sign"}},
 		{name: "remote flag", line: "graphene send --r", want: []string{"--remote"}},
 		{name: "explicit deleted-upstream policy", line: "graphene sync --ass", want: []string{"--assume-merged"}},
+		{name: "sync risk acceptance", line: "graphene sync --acc", want: []string{"--accept-risk"}},
+		{name: "restack risk acceptance", line: "graphene restack --acc", want: []string{"--accept-risk"}},
 		{name: "escaped whitespace groups a value", line: `graphene new --message hello\ world --b`, want: []string{"--base", "--branch"}},
 		{name: "help flag", line: "graphene delete -h", want: []string{"-h"}},
 		{name: "parser-only negations stay hidden", line: "graphene sync --no-"},

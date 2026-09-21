@@ -24,6 +24,7 @@ type recoveryState struct {
 	BaseHead    string            `json:"baseHead"`
 	FastForward string            `json:"fastForward,omitempty"`
 	Onto        string            `json:"onto,omitempty"`
+	AcceptRisk  bool              `json:"acceptRisk,omitempty"`
 }
 
 func (a *App) loadRebaseSnapshot(p *Pending) (operationSnapshot, error) {
@@ -165,11 +166,14 @@ func (a *App) continueSnapshotRebases(state State) error {
 		if err := a.requireSnapshotRebase(p); err != nil {
 			return err
 		}
+		if err := a.preflightRebaseRepositories(p, snapshot.IndexTree, true); err != nil {
+			return err
+		}
 		p.Recovery.Phase = recoveryApplying
 		if err := a.git.WriteState(state); err != nil {
 			return err
 		}
-		if err := a.recordRebaseResult(state, a.git.Run("rebase", "--continue")); err != nil {
+		if err := a.recordRebaseResult(state, a.git.runWithoutSubmodules("rebase", "--continue")); err != nil {
 			return err
 		}
 	}
@@ -190,18 +194,21 @@ func (a *App) runSnapshotRebases(state State) error {
 		if err := a.git.requireNoGitOperation(); err != nil {
 			return err
 		}
-		dirty, err := a.git.HasTrackedChanges()
+		dirty, err := a.git.hasParentTrackedChanges()
 		if err != nil {
 			return err
 		}
 		if dirty {
 			return fmt.Errorf("tracked changes would prevent %s; resolve them before continuing or use graphene abort", p.Operation)
 		}
+		if err := a.preflightRebaseRepositories(p, snapshot.IndexTree, false); err != nil {
+			return err
+		}
 		if r.FastForward == "" && len(p.Queue) == 0 {
 			if p.Operation == "sync" {
 				return a.finishSnapshotSync(state)
 			}
-			if err := a.git.Run("switch", p.ReturnBranch); err != nil {
+			if err := a.git.runWithoutSubmodules("switch", p.ReturnBranch); err != nil {
 				return err
 			}
 			state.Stacks = p.NextStacks
@@ -243,7 +250,7 @@ func (a *App) runSnapshotRebases(state State) error {
 		if err := a.git.WriteState(state); err != nil {
 			return err
 		}
-		if err := a.recordRebaseResult(state, a.git.Run(args...)); err != nil {
+		if err := a.recordRebaseResult(state, a.git.runWithoutSubmodules(args...)); err != nil {
 			return err
 		}
 	}
@@ -305,6 +312,13 @@ func (a *App) abortSnapshotRebases(state State) error {
 		}
 	}
 	active := activeRebaseBranch(p)
+	trees := []string{snapshot.WorktreeTree}
+	if inRebase {
+		trees = append(trees, r.Expected[active])
+	}
+	if err := a.git.checkNestedRepositories(snapshot.IndexTree, trees...); err != nil {
+		return err
+	}
 	if r.Phase == recoveryDeleting {
 		refs, err := a.git.snapshotBranchRefs()
 		if err != nil {
@@ -323,7 +337,7 @@ func (a *App) abortSnapshotRebases(state State) error {
 		return err
 	}
 	if inRebase {
-		if err := a.git.Run("rebase", "--abort"); err != nil {
+		if err := a.git.runWithoutSubmodules("rebase", "--abort"); err != nil {
 			return err
 		}
 	}

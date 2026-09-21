@@ -194,6 +194,10 @@ Sync and restack save a snapshot before changing local branches. Their `abort` r
 
 The worktree snapshot covers Git file content and nonignored untracked files; ignored files and filesystem metadata are not backed up. Abort keeps the latest fetched remote-tracking refs.
 
+Submodules are saved as the commits recorded in the parent index. Sync, restack, continue and abort do not recursively update submodule checkouts or nested repositories/worktrees. Their contents, staging and local edits are outside the parent snapshot. Untracked nested repositories need no ignore entry. Dirty submodules or different checkout commits do not block sync/restack, but staged gitlink changes in the parent do. Updating submodule checkouts remains an explicit `git submodule update` action.
+
+If destination paths or paths touched by replayed commits overlap a nested repository, Graphene warns and refuses. Sync dry-run shows these warnings. Move that repository or worktree aside, or use `sync --accept-risk` / `restack --accept-risk <base>` only when the user accepts possible loss of nested files or local edits; abort cannot restore those contents. Acceptance persists for that pending operation's continue calls only. This conservative check does not simulate Git merges. `--force` does not accept this risk, and `--accept-risk` does not bypass other safeguards or abort collision checks. A refused abort keeps its pending operation and snapshot.
+
 If Graphene reports an interrupted Git step with an unknown result, use `graphene abort` and rerun the original command. Do not guess whether the step completed or bypass the pending operation with manual ref/state edits. If rollback itself is interrupted, retry `graphene abort`.
 
 These snapshot guarantees apply to sync and restack; do not assume other commands have the same recovery behavior.

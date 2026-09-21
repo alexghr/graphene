@@ -1895,7 +1895,7 @@ func (a *App) sync(args []string) error {
 		return fmt.Errorf("branch %q is not in a graphene stack", current)
 	}
 
-	dirty, err := a.git.HasTrackedChanges()
+	dirty, err := a.git.hasParentTrackedChanges()
 	if err != nil {
 		return err
 	}
@@ -2001,15 +2001,21 @@ func (a *App) sync(args []string) error {
 	if returnBranch == "" && len(ops) > 0 {
 		returnBranch = ops[0].Top
 	}
-	if opts.dryRun {
-		a.printSyncDryRun(fetched, appliedBranches, assumedMergedBranches, baseChanges, ops, returnBranch, baseRef)
-		return nil
-	}
 	pending := &Pending{
 		Operation: "sync", Branch: current, ReturnBranch: returnBranch,
 		Queue: ops, Branches: branches, NextStacks: nextState.Stacks, BaseChanges: baseChanges,
 	}
-	return a.startSnapshotSync(state, pending, fetched, oldRefs)
+	if opts.dryRun {
+		a.printSyncDryRun(fetched, appliedBranches, assumedMergedBranches, baseChanges, ops, returnBranch, baseRef)
+		pending.Recovery = &recoveryState{Base: selection.Base, BaseHead: baseRef, Expected: oldRefs}
+		risks, err := a.rebaseRepositoryRisks(pending, "HEAD")
+		if err != nil {
+			return err
+		}
+		a.warnNestedRepositoryRisks(risks)
+		return nil
+	}
+	return a.startSnapshotSync(state, pending, fetched, oldRefs, opts.acceptRisk)
 }
 
 type syncSkippedPath struct {
@@ -3136,8 +3142,9 @@ type deleteOptions struct {
 }
 
 type restackOptions struct {
-	base  string
-	fetch bool
+	base       string
+	fetch      bool
+	acceptRisk bool
 }
 
 type syncOptions struct {
@@ -3145,6 +3152,7 @@ type syncOptions struct {
 	dryRun       bool
 	force        bool
 	assumeMerged bool
+	acceptRisk   bool
 }
 
 func parseNewArgs(args []string) (commitOptions, error) {
@@ -3176,12 +3184,19 @@ func parseRestackArgs(args []string) (restackOptions, error) {
 	for arg, ok := cursor.Next(); ok; arg, ok = cursor.Next() {
 		if arg.Positional() {
 			if opts.base != "" {
-				return opts, fmt.Errorf("usage: graphene restack [--fetch] <base>")
+				return opts, fmt.Errorf("usage: graphene restack [--fetch] [--accept-risk] <base>")
 			}
 			opts.base = arg.Raw()
 			continue
 		}
 		if flag, ok := arg.Long(); ok {
+			if value, matched, err := flag.Bool("accept-risk"); matched {
+				if err != nil {
+					return opts, err
+				}
+				opts.acceptRisk = value
+				continue
+			}
 			if value, matched, err := flag.Bool("fetch"); matched {
 				if err != nil {
 					return opts, err
@@ -3190,10 +3205,10 @@ func parseRestackArgs(args []string) (restackOptions, error) {
 				continue
 			}
 		}
-		return opts, fmt.Errorf("unsupported argument %q; usage: graphene restack [--fetch] <base>", arg.Raw())
+		return opts, fmt.Errorf("unsupported argument %q; usage: graphene restack [--fetch] [--accept-risk] <base>", arg.Raw())
 	}
 	if opts.base == "" {
-		return opts, fmt.Errorf("usage: graphene restack [--fetch] <base>")
+		return opts, fmt.Errorf("usage: graphene restack [--fetch] [--accept-risk] <base>")
 	}
 	return opts, nil
 }
@@ -3203,10 +3218,17 @@ func parseSyncArgs(args []string) (syncOptions, error) {
 	cursor := flagparse.New(args)
 	for arg, ok := cursor.Next(); ok; arg, ok = cursor.Next() {
 		if arg.Positional() {
-			return opts, fmt.Errorf("unsupported argument %q; supported sync options are -a/--all, -n/--dry-run, -f/--force, and --assume-merged", arg.Raw())
+			return opts, fmt.Errorf("unsupported argument %q; supported sync options are -a/--all, -n/--dry-run, -f/--force, --assume-merged, and --accept-risk", arg.Raw())
 		}
 		if flag, ok := arg.Long(); ok {
 			switch {
+			case flag.Name() == "accept-risk" || flag.Name() == "no-accept-risk":
+				value, _, err := flag.Bool("accept-risk")
+				if err != nil {
+					return opts, err
+				}
+				opts.acceptRisk = value
+				continue
 			case flag.Name() == "all":
 				if flag.HasValue() {
 					break
@@ -3248,7 +3270,7 @@ func parseSyncArgs(args []string) (syncOptions, error) {
 		}) {
 			continue
 		}
-		return opts, fmt.Errorf("unsupported argument %q; supported sync options are -a/--all, -n/--dry-run, -f/--force, and --assume-merged", arg.Raw())
+		return opts, fmt.Errorf("unsupported argument %q; supported sync options are -a/--all, -n/--dry-run, -f/--force, --assume-merged, and --accept-risk", arg.Raw())
 	}
 	return opts, nil
 }

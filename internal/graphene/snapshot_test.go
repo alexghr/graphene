@@ -300,7 +300,7 @@ func TestSnapshotRefsWithoutWorktree(t *testing.T) {
 }
 
 func TestSnapshotRejectsUnsupportedIndex(t *testing.T) {
-	for _, scenario := range []string{"split index", "skip worktree", "submodule", "filter"} {
+	for _, scenario := range []string{"split index", "skip worktree", "assume unchanged", "unmerged", "filter"} {
 		t.Run(scenario, func(t *testing.T) {
 			t.Parallel()
 			repo := newTestRepo(t)
@@ -311,11 +311,17 @@ func TestSnapshotRejectsUnsupportedIndex(t *testing.T) {
 				wantError = "split indexes"
 			case "skip worktree":
 				runGit(t, repo.dir, "update-index", "--skip-worktree", "file.txt")
-				wantError = "normal index"
-			case "submodule":
-				head := runGit(t, repo.dir, "rev-parse", "HEAD")
-				runGit(t, repo.dir, "update-index", "--add", "--cacheinfo", "160000,"+head+",module")
-				wantError = "normal index"
+				wantError = `"file.txt": skip-worktree`
+			case "assume unchanged":
+				runGit(t, repo.dir, "update-index", "--assume-unchanged", "file.txt")
+				wantError = `"file.txt": assume-unchanged`
+			case "unmerged":
+				blob := runGit(t, repo.dir, "rev-parse", "HEAD:file.txt")
+				g := Git{Dir: repo.dir}
+				if _, err := g.outputWithInput(strings.NewReader("100644 "+blob+" 1\tfile.txt\n"), "update-index", "--index-info"); err != nil {
+					t.Fatal(err)
+				}
+				wantError = `"file.txt": unmerged`
 			case "filter":
 				writeFile(t, repo.dir, ".gitattributes", "untracked filter=custom\n")
 				writeFile(t, repo.dir, "untracked", "content\n")

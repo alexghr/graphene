@@ -267,10 +267,10 @@ func (a *App) usage(w io.Writer) {
   graphene delete [-s|--stack] [branch]
   graphene track (--parent|--base) <base> [branch]
   graphene import <base>
-  graphene sync [-a|--all] [--dry-run] [--force] [--assume-merged]
+  graphene sync [-a|--all] [--dry-run] [--force] [--assume-merged] [--accept-risk]
   graphene send [options] [remote]
   graphene sendf [options] [remote]
-  graphene restack [--fetch] <base>
+  graphene restack [--fetch] [--accept-risk] <base>
   graphene go <up|down|top|bottom> [number]
   graphene graph [-s|--stack]
   graphene skill [--codex|--claude|--out <path>]
@@ -392,7 +392,7 @@ options:
 Create or reuse one branch per commit from the local base branch to HEAD, then record the path as a Graphene stack.
 
 Graphene reuses the current branch for HEAD. Intermediate commits reuse a single existing local branch when one points at that commit; otherwise Graphene creates a branch from the commit subject using branchPrefix.`,
-		"sync": `usage: graphene sync [-a|--all] [--dry-run] [--force] [--assume-merged]
+		"sync": `usage: graphene sync [-a|--all] [--dry-run] [--force] [--assume-merged] [--accept-risk]
 
 Fetch the stack base, drop already-applied branches on the current path, and restack affected children.
 
@@ -405,11 +405,16 @@ If configured upstreams disappeared for branches whose patches are not applied t
 
 Sync saves a snapshot before changing local branches. Resolve normal rebase conflicts with continue, or use abort to restore the base, rebased branches, deleted branches and stack metadata. Ambiguous interruptions require abort and rerun. Unrelated branch pointers stay in place.
 
+Submodule commits recorded in the parent are preserved; submodule checkouts and nested repositories/worktrees are not recursively updated. Dirty submodules are allowed, but staged parent changes (including submodule commit changes) must be committed or stashed first. Nested repositories need no ignore entry. Update submodule checkouts explicitly with git submodule update.
+
+If destination or replayed paths overlap a nested repository, sync warns and stops. Dry-run shows these warnings without requiring acceptance. --accept-risk allows possible overwrites for this operation, including continue; nested files or local edits may be lost and abort cannot restore them. This conservative check does not simulate Git merges. Other safeguards, including abort collision checks, remain enabled.
+
 options:
   -a, --all           sync every stack descendant from the current base branch
   -n, --dry-run       fetch and show planned changes without moving local branches or changing stack state
   -f, --force         sync safe stacks even when skipped stacks checked out elsewhere would become stale
-      --assume-merged treat consecutive missing upstream branches as merged and delete them`,
+      --assume-merged treat consecutive missing upstream branches as merged and delete them
+      --accept-risk   acknowledge possible overwrites in nested repositories/worktrees/submodules`,
 		"send": `usage: graphene send [options] [remote]
 
 Push the current branch and its dependency path, then print pull request URLs.
@@ -426,7 +431,7 @@ options:
       --remote <remote>  push to this remote
   -s, --stack            push the current dependency path and descendants
   -n, --dry-run          show what would be pushed without updating refs or upstreams`,
-		"restack": `usage: graphene restack [--fetch] <base>
+		"restack": `usage: graphene restack [--fetch] [--accept-risk] <base>
 
 Move the current branch onto another local branch, then restack dependent branches.
 
@@ -434,8 +439,13 @@ Uses local refs by default. With --fetch, fetch only the current branch's upstre
 
 Each affected branch is rebased separately; unrelated branch pointers stay in place. A snapshot is saved before changing branches or files. Resolve normal conflicts with continue, or use abort to restore the entire restack. Ambiguous interruptions require abort and rerun.
 
+Submodule commits recorded in the parent are preserved; submodule checkouts and nested repositories/worktrees are not recursively updated. Dirty submodules are allowed, but staged parent changes (including submodule commit changes) must be committed or stashed first. Nested repositories need no ignore entry. Update submodule checkouts explicitly with git submodule update.
+
+If destination or replayed paths overlap a nested repository, restack warns and stops. --accept-risk allows possible overwrites for this operation, including continue; nested files or local edits may be lost and abort cannot restore them. This conservative check does not simulate Git merges. Other safeguards, including abort collision checks, remain enabled.
+
 options:
-      --fetch  fetch the current branch's upstream before restacking`,
+      --fetch        fetch the current branch's upstream before restacking
+      --accept-risk  acknowledge possible overwrites in nested repositories/worktrees/submodules`,
 		"go": `usage: graphene go <up|down|top|bottom> [number]
 
 Switch to another branch in the tracked stack graph.

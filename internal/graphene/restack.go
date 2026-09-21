@@ -31,7 +31,7 @@ func (a *App) restack(args []string) error {
 	if !ok {
 		return fmt.Errorf("cannot restack %q onto %q", current, opts.base)
 	}
-	dirty, err := a.git.HasTrackedChanges()
+	dirty, err := a.git.hasParentTrackedChanges()
 	if err != nil {
 		return err
 	}
@@ -44,7 +44,7 @@ func (a *App) restack(args []string) error {
 	}
 	r := &recoveryState{
 		Phase: recoveryReady, Base: opts.base, BaseHead: refs[opts.base],
-		Expected: map[string]string{},
+		Expected: map[string]string{}, AcceptRisk: opts.acceptRisk,
 	}
 	if opts.fetch {
 		fetched, err := a.fetchUpstream(current)
@@ -120,6 +120,13 @@ func (a *App) restack(args []string) error {
 	if len(queue) == 0 && r.FastForward == "" {
 		return a.git.WriteState(nextState)
 	}
+	p := &Pending{
+		Operation: "restack", Branch: current,
+		ReturnBranch: current, Queue: queue, NextStacks: nextState.Stacks, Recovery: r,
+	}
+	if err := a.preflightRebaseRepositories(p, "HEAD", true); err != nil {
+		return err
+	}
 	id, err := a.git.captureSnapshot(true)
 	if err != nil {
 		return err
@@ -137,10 +144,8 @@ func (a *App) restack(args []string) error {
 			return fmt.Errorf("branch %q changed while preparing restack; retry", branch)
 		}
 	}
-	state.Pending = &Pending{
-		Operation: "restack", Worktree: snapshot.Worktree, Branch: current,
-		ReturnBranch: current, Queue: queue, NextStacks: nextState.Stacks, Recovery: r,
-	}
+	p.Worktree = snapshot.Worktree
+	state.Pending = p
 	if err := a.git.WriteState(state); err != nil {
 		return err
 	}

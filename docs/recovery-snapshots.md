@@ -74,9 +74,50 @@ files. They are not filesystem archives: ignored files, timestamps and arbitrary
 file permissions are not backed up. Unrelated untracked files are left in place;
 directory/file collisions that could lose them block rollback.
 
-Submodules, split indexes, unmerged entries, skip-worktree and assume-unchanged
+Submodules are preserved as gitlinks: the parent index's recorded commit is saved,
+not the submodule's checked-out commit. Nested repositories and linked worktrees
+are excluded from file capture without requiring ignore entries. Their checkouts,
+indexes and local files are outside the recovery boundary, including changes made
+while an operation is paused. Snapshots do not back up objects inside nested
+repositories.
+
+Sync, restack, continue and abort disable recursive submodule updates. Dirty or
+differently checked-out submodules do not block sync/restack, but staged parent
+changes, including staged gitlink changes, still do. Committed gitlink changes are
+rebased normally; additions do not initialize submodules, and removals leave
+existing checkouts in place. Updating submodule checkouts remains an explicit
+`git submodule update` operation.
+
+Before changing files, recovery checks for nested repository collisions in the
+current index, destination trees, and paths touched by commits to be replayed.
+Git supplies the per-commit paths so temporary additions followed by removals are
+included. A historical upstream boundary is not a destination; a branch already
+contained in its rebase target needs no replay-path scan. This includes ignored
+repositories and repositories created after capture. Gitlink-only changes at an
+existing submodule path are allowed. The check is conservative and does not model
+all paths Git's merge machinery might generate.
+
+Sync and restack warn with the overlapping paths and refuse by default. Their
+`--accept-risk` flag allows these forward-operation overwrites, which may destroy
+nested files or local edits that abort cannot restore. Acceptance is recorded in
+the pending recovery state and applies to subsequent `continue` calls for that
+operation, not future operations. Sync dry-run prints warnings without requiring
+acceptance. `--force` does not accept overwrite risk.
+
+The flag does not bypass snapshot validation, dirty-parent checks, branch/ref
+ownership checks, or rollback protection. Abort checks before invoking Git's
+rebase abort as well as before restoring the snapshot, even after risk acceptance.
+Move an obstructing repository aside and retry; the pending operation and snapshot
+remain available. Existing checks for branches checked out in other worktrees
+still apply, including worktrees nested inside this one.
+
+Split indexes, unmerged entries, skip-worktree and assume-unchanged
 flags, custom filters and working-tree encodings are rejected for worktree
-snapshots. Branch configuration, reflogs and remote-tracking refs are outside this
+snapshots, with paths identified where applicable. Filter and encoding checks
+apply only to parent files being captured. The snapshot format is unchanged;
+existing snapshots remain readable.
+
+Branch configuration, reflogs and remote-tracking refs are outside this
 snapshot format. Commands that change those must account for them separately.
 Interrupted capture or cleanup can leave unused backup artifacts, but
 does not move working branches.

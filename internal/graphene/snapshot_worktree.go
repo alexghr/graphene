@@ -48,7 +48,8 @@ func (g Git) snapshotIndex(index []byte) (Git, func(), error) {
 }
 
 func (g Git) captureSnapshotWorktree(snapshot *operationSnapshot) error {
-	if err := g.requireSnapshotIndex(); err != nil {
+	paths, err := g.snapshotPaths()
+	if err != nil {
 		return err
 	}
 	path, err := g.GitPath("index")
@@ -68,8 +69,15 @@ func (g Git) captureSnapshotWorktree(snapshot *operationSnapshot) error {
 	if err != nil {
 		return err
 	}
-	if err := private.OutputErr("add", "-A", "--", "."); err != nil {
-		return err
+	if len(paths) > 0 {
+		var input bytes.Buffer
+		for _, path := range paths {
+			input.WriteString(":(top,literal)" + path)
+			input.WriteByte(0)
+		}
+		if _, err := private.outputWithInput(&input, "add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"); err != nil {
+			return err
+		}
 	}
 	if err := private.requireSnapshotIndex(); err != nil {
 		return err
@@ -92,57 +100,98 @@ func (g Git) captureSnapshotWorktree(snapshot *operationSnapshot) error {
 }
 
 func (g Git) requireSnapshotIndex() error {
+	_, err := g.snapshotPaths()
+	return err
+}
+
+func (g Git) snapshotPaths() ([]string, error) {
 	root, err := g.Output("rev-parse", "--show-toplevel")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	g.Dir = root
 	shared, err := g.Output("rev-parse", "--shared-index-path")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if shared != "" {
-		return fmt.Errorf("worktree snapshots do not support split indexes; run git update-index --no-split-index first")
+		return nil, fmt.Errorf("worktree snapshots do not support split indexes; run git update-index --no-split-index first")
 	}
 	files, err := g.OutputBytes("ls-files", "--stage", "-v", "-z")
 	if err != nil {
-		return err
+		return nil, err
 	}
-	var paths bytes.Buffer
+	var paths []string
 	for file := range bytes.SplitSeq(files, []byte{0}) {
 		if len(file) == 0 {
 			continue
 		}
-		if file[0] != 'H' || bytes.HasPrefix(file, []byte("H 160000 ")) {
-			return fmt.Errorf("worktree snapshots require a normal index without submodules, unmerged entries, skip-worktree or assume-unchanged flags")
-		}
-		_, path, ok := bytes.Cut(file, []byte{'\t'})
+		header, path, ok := bytes.Cut(file, []byte{'\t'})
 		if !ok {
-			return fmt.Errorf("cannot read snapshot index entry %q", file)
+			return nil, fmt.Errorf("cannot read snapshot index entry %q", file)
 		}
-		paths.Write(path)
-		paths.WriteByte(0)
+		fields := strings.Fields(string(header))
+		if len(fields) != 4 {
+			return nil, fmt.Errorf("cannot read snapshot index entry %q", file)
+		}
+		if fields[3] != "0" {
+			return nil, fmt.Errorf("cannot snapshot %q: unmerged index entry; resolve and stage the conflict first", path)
+		}
+		if file[0] == 'S' || file[0] == 's' {
+			return nil, fmt.Errorf("cannot snapshot %q: skip-worktree flag is set; sparse checkouts are not supported", path)
+		}
+		if file[0] >= 'a' && file[0] <= 'z' {
+			return nil, fmt.Errorf("cannot snapshot %q: assume-unchanged flag is set; clear it before retrying", path)
+		}
+		if file[0] != 'H' {
+			return nil, fmt.Errorf("cannot snapshot %q: unsupported index flag %q", path, file[:1])
+		}
+		if fields[1] != "160000" {
+			paths = append(paths, string(path))
+		}
 	}
 	untracked, err := g.OutputBytes("ls-files", "--others", "--exclude-standard", "-z")
 	if err != nil {
-		return err
+		return nil, err
 	}
-	paths.Write(untracked)
-	attrs, err := g.outputWithInput(&paths, "check-attr", "-z", "--stdin", "filter", "working-tree-encoding")
+	for path := range strings.SplitSeq(string(untracked), "\x00") {
+		// Git lists nested repositories as directories, including unborn repos.
+		if path != "" && !strings.HasSuffix(path, "/") {
+			paths = append(paths, path)
+		}
+	}
+	repositories, err := g.nestedRepositories("")
 	if err != nil {
-		return err
+		return nil, err
+	}
+	var input bytes.Buffer
+	for _, path := range paths {
+		for repository := range repositories {
+			if pathsOverlap(path, repository) {
+				return nil, nestedRepositoryCollision(repository, path)
+			}
+		}
+		input.WriteString(path)
+		input.WriteByte(0)
+	}
+	attrs, err := g.outputWithInput(&input, "check-attr", "-z", "--stdin", "filter", "working-tree-encoding")
+	if err != nil {
+		return nil, err
 	}
 	fields := bytes.Split(attrs, []byte{0})
 	for i := 0; i+2 < len(fields); i += 3 {
 		value := string(fields[i+2])
 		if value != "unspecified" && value != "unset" {
-			return fmt.Errorf("worktree snapshots do not support %s on %q", fields[i+1], fields[i])
+			return nil, fmt.Errorf("worktree snapshots do not support %s on %q", fields[i+1], fields[i])
 		}
 	}
-	return nil
+	return paths, nil
 }
 
 func (g Git) preflightSnapshotWorktree(snapshot operationSnapshot) error {
+	if err := g.checkNestedRepositories(snapshot.IndexTree, snapshot.WorktreeTree); err != nil {
+		return err
+	}
 	if err := g.requireSnapshotIndex(); err != nil {
 		return err
 	}
@@ -180,6 +229,7 @@ func (g Git) preflightSnapshotWorktree(snapshot operationSnapshot) error {
 			return err
 		}
 		for path := range strings.SplitSeq(string(out), "\x00") {
+			path = strings.TrimSuffix(path, "/")
 			if path == "" || owned[path] {
 				continue
 			}
