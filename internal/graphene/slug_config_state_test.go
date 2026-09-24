@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestSlugSubject(t *testing.T) {
+func TestUnitSlugSubject(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		in   string
@@ -24,7 +24,7 @@ func TestSlugSubject(t *testing.T) {
 	}
 }
 
-func TestBranchNameAndCandidate(t *testing.T) {
+func TestUnitBranchNameAndCandidate(t *testing.T) {
 	t.Parallel()
 	if got := BranchName("stack", "fix"); got != "stack/fix" {
 		t.Fatalf("BranchName default = %q", got)
@@ -40,7 +40,7 @@ func TestBranchNameAndCandidate(t *testing.T) {
 	}
 }
 
-func TestStateAddCommit(t *testing.T) {
+func TestUnitStateAddCommit(t *testing.T) {
 	t.Parallel()
 	var state State
 	if err := state.AddCommit("main", "stack/one"); err != nil {
@@ -62,7 +62,7 @@ func TestStateAddCommit(t *testing.T) {
 	}
 }
 
-func TestTrackBranchFoldsExistingChildPath(t *testing.T) {
+func TestUnitTrackBranchFoldsExistingChildPath(t *testing.T) {
 	t.Parallel()
 	state := State{Stacks: []Stack{
 		{Base: "a", Branches: []string{"b"}},
@@ -80,7 +80,7 @@ func TestTrackBranchFoldsExistingChildPath(t *testing.T) {
 	}
 }
 
-func TestTrackBranchAppendsToTrackedTip(t *testing.T) {
+func TestUnitTrackBranchAppendsToTrackedTip(t *testing.T) {
 	t.Parallel()
 	state := State{Stacks: []Stack{
 		{Base: "z", Branches: []string{"x"}},
@@ -99,7 +99,7 @@ func TestTrackBranchAppendsToTrackedTip(t *testing.T) {
 	}
 }
 
-func TestTrackBranchKeepsSiblingChildStacks(t *testing.T) {
+func TestUnitTrackBranchKeepsSiblingChildStacks(t *testing.T) {
 	t.Parallel()
 	state := State{Stacks: []Stack{
 		{Base: "a", Branches: []string{"b"}},
@@ -119,7 +119,7 @@ func TestTrackBranchKeepsSiblingChildStacks(t *testing.T) {
 	}
 }
 
-func TestTrackBranchRejectsCycles(t *testing.T) {
+func TestUnitTrackBranchRejectsCycles(t *testing.T) {
 	t.Parallel()
 	state := State{Stacks: []Stack{
 		{Base: "a", Branches: []string{"b"}},
@@ -130,7 +130,7 @@ func TestTrackBranchRejectsCycles(t *testing.T) {
 	}
 }
 
-func TestBranchesThroughCurrent(t *testing.T) {
+func TestUnitBranchesThroughCurrent(t *testing.T) {
 	t.Parallel()
 	state := State{Stacks: []Stack{
 		{Base: "main", Branches: []string{"a", "b", "c"}},
@@ -155,7 +155,7 @@ func TestBranchesThroughCurrent(t *testing.T) {
 	}
 }
 
-func TestBranchesThroughCurrentAndDescendants(t *testing.T) {
+func TestUnitBranchesThroughCurrentAndDescendants(t *testing.T) {
 	t.Parallel()
 	state := State{Stacks: []Stack{
 		{Base: "main", Branches: []string{"a", "b", "c"}},
@@ -186,7 +186,7 @@ func TestBranchesThroughCurrentAndDescendants(t *testing.T) {
 	}
 }
 
-func TestRemoveStackThroughBranch(t *testing.T) {
+func TestUnitRemoveStackThroughBranch(t *testing.T) {
 	t.Parallel()
 	state := State{Stacks: []Stack{
 		{Base: "main", Branches: []string{"a", "b", "c"}},
@@ -217,7 +217,7 @@ func TestRemoveStackThroughBranch(t *testing.T) {
 	}
 }
 
-func TestReparentBranch(t *testing.T) {
+func TestUnitReparentBranch(t *testing.T) {
 	t.Parallel()
 	state := State{Stacks: []Stack{
 		{Base: "main", Branches: []string{"a", "b", "c"}},
@@ -251,7 +251,7 @@ func TestReparentBranch(t *testing.T) {
 	}
 }
 
-func TestBaseBranch(t *testing.T) {
+func TestUnitBaseBranch(t *testing.T) {
 	t.Parallel()
 	state := State{Stacks: []Stack{
 		{Base: "main", Branches: []string{"a", "b", "c"}},
@@ -278,7 +278,7 @@ func TestBaseBranch(t *testing.T) {
 	}
 }
 
-func TestStackGraphCandidates(t *testing.T) {
+func TestUnitStackGraphCandidates(t *testing.T) {
 	t.Parallel()
 	state := State{Stacks: []Stack{
 		{Base: "main", Branches: []string{"one", "two", "three"}},
@@ -330,7 +330,7 @@ func TestStackGraphCandidates(t *testing.T) {
 	}
 }
 
-func TestParseArgs(t *testing.T) {
+func TestUnitParseArgs(t *testing.T) {
 	t.Parallel()
 	newOpts, err := parseNewArgs([]string{"--branch=feature/exact", "--base=stack/parent", "--message=hi", "--no-edit", "--no-verify", "--gpg-sign=key", "--no-gpg-sign"})
 	if err != nil {
@@ -690,7 +690,7 @@ func TestParseArgs(t *testing.T) {
 	}
 }
 
-func TestParseGitVersion(t *testing.T) {
+func TestUnitParseGitVersion(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		in   string
@@ -717,7 +717,7 @@ func TestParseGitVersion(t *testing.T) {
 	}
 }
 
-func TestRestackOpsAfterRewrite(t *testing.T) {
+func TestUnitRestackOpsAfterRewrite(t *testing.T) {
 	t.Parallel()
 	state := State{Stacks: []Stack{
 		{Base: "main", Branches: []string{"a", "b"}},
@@ -746,7 +746,7 @@ func TestRestackOpsAfterRewrite(t *testing.T) {
 	}
 }
 
-func TestRenderGraphWithPending(t *testing.T) {
+func TestUnitRenderGraphWithPending(t *testing.T) {
 	t.Parallel()
 	state := State{
 		Stacks: []Stack{
@@ -778,7 +778,7 @@ func TestRenderGraphWithPending(t *testing.T) {
 	}
 }
 
-func TestPullRequestURLs(t *testing.T) {
+func TestUnitPullRequestURLs(t *testing.T) {
 	t.Parallel()
 	state := State{Stacks: []Stack{
 		{Base: "main", Branches: []string{"ag/base-change", "ag/head-change"}},
@@ -815,7 +815,7 @@ func TestPullRequestURLs(t *testing.T) {
 	}
 }
 
-func TestPullRequestURLsFromTemplate(t *testing.T) {
+func TestUnitPullRequestURLsFromTemplate(t *testing.T) {
 	t.Parallel()
 	state := State{Stacks: []Stack{
 		{Base: "main", Branches: []string{"ag/base-change", "ag/head-change"}},

@@ -194,6 +194,7 @@ func TestSnapshotRefTransactionIsAtomic(t *testing.T) {
 }
 
 func TestSnapshotRetriesInterruptedRollback(t *testing.T) {
+	t.Parallel()
 	for _, interruptedAfter := range []string{"refs", "worktree"} {
 		t.Run(interruptedAfter, func(t *testing.T) {
 			t.Parallel()
@@ -228,6 +229,7 @@ func TestSnapshotRetriesInterruptedRollback(t *testing.T) {
 }
 
 func TestSnapshotRefusalDoesNotMutate(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"branch drift", "other worktree", "different checkout", "missing backup", "untracked collision", "ignored collision"} {
 		t.Run(scenario, func(t *testing.T) {
 			t.Parallel()
@@ -333,6 +335,7 @@ func TestSnapshotRefsWithoutWorktree(t *testing.T) {
 }
 
 func TestSnapshotRejectsUnsupportedIndex(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"split index", "skip worktree", "assume unchanged", "unmerged", "filter"} {
 		t.Run(scenario, func(t *testing.T) {
 			t.Parallel()

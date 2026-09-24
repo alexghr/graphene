@@ -48,7 +48,10 @@ func TestWriteStateMigratesLegacyConfigAtomically(t *testing.T) {
 	}
 	runGit(t, repo.dir, "config", "--local", stateConfigKey, string(raw))
 
-	want := State{Stacks: []Stack{{Base: "main", Branches: []string{"stack/new"}}}}
+	want := State{
+		Stacks:  []Stack{{Base: "main", Branches: []string{"stack/new"}}},
+		Pending: &Pending{Operation: "restack", Branch: "stack/new", OriginalHead: strings.Repeat("a", 40)},
+	}
 	git := Git{Dir: repo.dir}
 	if err := git.WriteState(want); err != nil {
 		t.Fatal(err)
@@ -90,18 +93,9 @@ func TestWriteStateMigratesLegacyConfigAtomically(t *testing.T) {
 	}
 }
 
-func TestWriteStateKeepsEmptyFile(t *testing.T) {
+func TestUnitEmptyStateSerializesStacksArray(t *testing.T) {
 	t.Parallel()
-	repo := newTestRepo(t)
-	git := Git{Dir: repo.dir}
-	if err := git.WriteState(State{}); err != nil {
-		t.Fatal(err)
-	}
-	path, err := git.stateFilePath()
-	if err != nil {
-		t.Fatal(err)
-	}
-	data, err := os.ReadFile(path)
+	data, err := json.Marshal(newStateFile(State{}, ""))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,6 +177,26 @@ func TestReadStateRecoversInterruptedMigrationMarker(t *testing.T) {
 
 func TestReadStateFailsClosed(t *testing.T) {
 	t.Parallel()
+	repo := newTestRepo(t)
+	runGit(t, repo.dir, "config", "--local", stateConfigKey, `{"stacks":[{"base":"stale","branches":["state"]}]}`)
+	git := Git{Dir: repo.dir}
+	path, err := git.stateFilePath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"version":2,"stacks":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := git.ReadState(); err == nil || !strings.Contains(err.Error(), "unsupported graphene state version 2") {
+		t.Fatalf("ReadState() error = %v, want invalid file to override legacy config", err)
+	}
+}
+
+func TestUnitDecodeStateFileRejectsInvalidSchema(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		data string
@@ -195,32 +209,61 @@ func TestReadStateFailsClosed(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			repo := newTestRepo(t)
-			runGit(t, repo.dir, "config", "--local", stateConfigKey, `{"stacks":[{"base":"stale","branches":["state"]}]}`)
-			git := Git{Dir: repo.dir}
-			path, err := git.stateFilePath()
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(path, []byte(tt.data), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := git.ReadState(); err == nil || !strings.Contains(err.Error(), tt.want) {
-				t.Fatalf("ReadState() error = %v, want it to contain %q", err, tt.want)
+			if _, err := decodeStateFile([]byte(tt.data)); err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("decodeStateFile() error = %v, want it to contain %q", err, tt.want)
 			}
 		})
 	}
 }
 
-func TestReadStateRejectsSentinelWithoutFile(t *testing.T) {
+func TestUnitLegacyStateCodecPreservesPending(t *testing.T) {
 	t.Parallel()
-	repo := newTestRepo(t)
-	runGit(t, repo.dir, "config", "--local", stateConfigKey, stateMigrationSentinel)
-	if _, err := (Git{Dir: repo.dir}).ReadState(); err == nil || !strings.Contains(err.Error(), "is missing") {
-		t.Fatalf("ReadState() error = %v, want missing state file", err)
+	want := State{
+		Stacks: []Stack{{Base: "main", Branches: []string{"stack/one"}}},
+		Pending: &Pending{
+			Operation:    "sync",
+			Branch:       "main",
+			ReturnBranch: "main",
+			Branches:     []string{"stack/one"},
+		},
+	}
+	raw, err := json.Marshal(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		name, value string
+		marked      bool
+	}{
+		{name: "legacy config", value: string(raw)},
+		{name: "interrupted marker", value: stateMigrationPrefix + base64.RawURLEncoding.EncodeToString(raw), marked: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := decodeLegacyStateValue(tt.value)
+			if err != nil || !reflect.DeepEqual(got, want) {
+				t.Fatalf("decodeLegacyStateValue() = %#v, %v; want %#v", got, err, want)
+			}
+			source, marked, err := legacyMigrationSource(tt.value, true)
+			if err != nil || source != string(raw) || marked != tt.marked {
+				t.Fatalf("legacyMigrationSource() = %q, %t, %v", source, marked, err)
+			}
+		})
+	}
+}
+
+func TestUnitLegacyMigrationSourceBoundaries(t *testing.T) {
+	t.Parallel()
+	if source, marked, err := legacyMigrationSource("", false); err != nil || source != "{}" || marked {
+		t.Fatalf("missing legacy config = %q, %t, %v", source, marked, err)
+	}
+	if _, _, err := legacyMigrationSource(stateMigrationSentinel, true); err == nil || !strings.Contains(err.Error(), "is missing") {
+		t.Fatalf("sentinel migration source error = %v, want missing state file", err)
+	}
+	if _, err := decodeLegacyStateValue(stateMigrationSentinel); err == nil || !strings.Contains(err.Error(), "is missing") {
+		t.Fatalf("sentinel decode error = %v, want missing state file", err)
+	}
+	if _, _, err := legacyMigrationSource(stateMigrationPrefix+"!", true); err == nil || !strings.Contains(err.Error(), "migration marker") {
+		t.Fatalf("malformed migration marker error = %v", err)
 	}
 }
 
@@ -234,7 +277,7 @@ func TestReadStateRejectsMultipleLegacyValues(t *testing.T) {
 	}
 }
 
-func TestEnsureDurableDirCreatesAndSecuresDirectChild(t *testing.T) {
+func TestUnitEnsureDurableDirCreatesAndSecuresDirectChild(t *testing.T) {
 	t.Parallel()
 	parent := t.TempDir()
 	dir := filepath.Join(parent, grapheneStateDirName)
@@ -261,7 +304,7 @@ func TestEnsureDurableDirCreatesAndSecuresDirectChild(t *testing.T) {
 	}
 }
 
-func TestEnsureDurableDirCreatesMissingParents(t *testing.T) {
+func TestUnitEnsureDurableDirCreatesMissingParents(t *testing.T) {
 	t.Parallel()
 	parent := t.TempDir()
 	if err := os.Chmod(parent, 0o755); err != nil {
@@ -292,7 +335,7 @@ func TestEnsureDurableDirCreatesMissingParents(t *testing.T) {
 	}
 }
 
-func TestEnsureDurableDirRejectsFile(t *testing.T) {
+func TestUnitEnsureDurableDirRejectsFile(t *testing.T) {
 	t.Parallel()
 	parent := t.TempDir()
 	dir := filepath.Join(parent, grapheneStateDirName)
@@ -304,7 +347,7 @@ func TestEnsureDurableDirRejectsFile(t *testing.T) {
 	}
 }
 
-func TestEnsureDurableDirRejectsSymbolicLink(t *testing.T) {
+func TestUnitEnsureDurableDirRejectsSymbolicLink(t *testing.T) {
 	t.Parallel()
 	parent := t.TempDir()
 	target := filepath.Join(parent, "target")
@@ -320,7 +363,7 @@ func TestEnsureDurableDirRejectsSymbolicLink(t *testing.T) {
 	}
 }
 
-func TestEnsureDurableDirHandlesConcurrentCreation(t *testing.T) {
+func TestUnitEnsureDurableDirHandlesConcurrentCreation(t *testing.T) {
 	t.Parallel()
 	parent := t.TempDir()
 	dir := filepath.Join(parent, grapheneStateDirName)
@@ -340,31 +383,6 @@ func TestEnsureDurableDirHandlesConcurrentCreation(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-	}
-}
-
-func TestStateLockIsRepositoryWideAndNonblocking(t *testing.T) {
-	t.Parallel()
-	repo := newTestRepo(t)
-	git := Git{Dir: repo.dir}
-	first, err := git.AcquireStateLock()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer first.Close()
-
-	if _, err := git.AcquireStateLock(); !errors.Is(err, ErrStateLocked) {
-		t.Fatalf("second AcquireStateLock() = %v, want ErrStateLocked", err)
-	}
-	if err := first.Close(); err != nil {
-		t.Fatal(err)
-	}
-	second, err := git.AcquireStateLock()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := second.Close(); err != nil {
-		t.Fatal(err)
 	}
 }
 

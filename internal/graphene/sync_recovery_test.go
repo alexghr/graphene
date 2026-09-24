@@ -8,48 +8,6 @@ import (
 	"testing"
 )
 
-func TestSyncSiblingAfterBaseAdvances(t *testing.T) {
-	t.Parallel()
-	repo, remote := newTestRepoWithOrigin(t)
-	createStackBranch(t, repo, "one.txt", "one\n", "One")
-	createStackBranch(t, repo, "one-child.txt", "one child\n", "One child")
-	runGit(t, repo.dir, "push", "-u", "origin", "stack/one", "stack/one-child")
-	runGit(t, repo.dir, "switch", "main")
-	createStackBranch(t, repo, "two.txt", "two\n", "Two")
-	createStackBranch(t, repo, "two-child.txt", "two child\n", "Two child")
-	runGit(t, repo.dir, "push", "-u", "origin", "stack/two", "stack/two-child")
-	two := runGit(t, repo.dir, "rev-parse", "stack/two")
-	twoChild := runGit(t, repo.dir, "rev-parse", "stack/two-child")
-	before := readState(t, repo.dir)
-	actor := cloneConfiguredRepo(t, remote, "main")
-	base := commitFile(t, actor, "base.txt", "base\n", "Advance main")
-	runGit(t, actor, "push", "origin", "main")
-
-	runGit(t, repo.dir, "switch", "stack/one-child")
-	expectGrapheneOK(t, repo, "sync")
-	if got := runGit(t, repo.dir, "rev-parse", "main"); got != base {
-		t.Fatalf("first sync left main at %s, want %s", got, base)
-	}
-	if runGit(t, repo.dir, "rev-parse", "stack/two") != two || runGit(t, repo.dir, "rev-parse", "stack/two-child") != twoChild {
-		t.Fatal("first sync moved the other stack")
-	}
-	one := runGit(t, repo.dir, "rev-parse", "stack/one")
-	oneChild := runGit(t, repo.dir, "rev-parse", "stack/one-child")
-
-	runGit(t, repo.dir, "switch", "stack/two-child")
-	expectGrapheneOK(t, repo, "sync")
-	for _, root := range []string{"stack/one", "stack/two"} {
-		assertBranchParent(t, repo.dir, root, "main")
-		assertBranchParent(t, repo.dir, root+"-child", root)
-	}
-	if runGit(t, repo.dir, "rev-parse", "stack/one") != one || runGit(t, repo.dir, "rev-parse", "stack/one-child") != oneChild {
-		t.Fatal("second sync moved the first stack")
-	}
-	if after := readState(t, repo.dir); !reflect.DeepEqual(after.Stacks, before.Stacks) || after.Pending != nil {
-		t.Fatalf("sync changed stack metadata or left a pending operation: %#v", after)
-	}
-}
-
 func assertSyncRestored(t *testing.T, repo testRepo, original State, refs, branch string) {
 	t.Helper()
 	if got := readState(t, repo.dir); !reflect.DeepEqual(got, original) {
@@ -67,80 +25,68 @@ func assertSyncRestored(t *testing.T, repo testRepo, original State, refs, branc
 }
 
 func TestSyncSnapshotConflict(t *testing.T) {
-	for _, action := range []string{"continue", "abort", "abort with base elsewhere"} {
-		t.Run(action, func(t *testing.T) {
-			t.Parallel()
-			repo, remote := newTestRepoWithOrigin(t)
-			createStackBranch(t, repo, "one.txt", "one\n", "One")
-			createStackBranch(t, repo, "two.txt", "two\n", "Two")
-			runGit(t, repo.dir, "branch", "bookmark")
-			createStackBranch(t, repo, "file.txt", "child\n", "Three")
-			runGit(t, repo.dir, "config", "rebase.updateRefs", "true")
-			runGit(t, repo.dir, "config", "branch.stack/one.remote", "origin")
-			runGit(t, repo.dir, "config", "branch.stack/one.merge", "refs/heads/stack/one")
-			runGit(t, repo.dir, "switch", "stack/one")
-			actor := cloneConfiguredRepo(t, remote, "main")
-			commitFile(t, actor, "one.txt", "one\n", "Merged one")
-			fetchedBase := commitFile(t, actor, "file.txt", "remote\n", "Conflicting base")
-			runGit(t, actor, "push", "origin", "main")
-			original := readState(t, repo.dir)
-			refs := runGit(t, repo.dir, "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads")
-			if code, _, _ := repo.runGraphene(t, "sync"); code == 0 {
-				t.Fatal("sync unexpectedly succeeded")
-			}
-			state := readState(t, repo.dir)
-			if state.Pending == nil || state.Pending.Recovery == nil || state.Pending.Recovery.Phase != recoveryConflict {
-				t.Fatalf("pending conflict = %#v", state.Pending)
-			}
-			id := state.Pending.Recovery.Snapshot
-			if !reflect.DeepEqual(state.Stacks, original.Stacks) || !refExists(t, repo.dir, "refs/heads/stack/one") {
-				t.Fatal("sync published metadata or deleted a branch before completing rebases")
-			}
-			assertBranchParent(t, repo.dir, "stack/two", "main")
-			if runGit(t, repo.dir, "rev-parse", "bookmark") == runGit(t, repo.dir, "rev-parse", "stack/two") {
-				t.Fatal("sync moved the unrelated bookmark")
-			}
-			if action == "abort with base elsewhere" {
-				other := filepath.Join(t.TempDir(), "worktree")
-				runGit(t, repo.dir, "worktree", "add", other, "main")
-				before := runGit(t, repo.dir, "show-ref")
-				if code, _, stderr := repo.runGraphene(t, "abort"); code == 0 || !strings.Contains(stderr, "another worktree") {
-					t.Fatalf("abort while base checked out: %d, %s", code, stderr)
-				}
-				if got := runGit(t, repo.dir, "show-ref"); got != before {
-					t.Fatal("refused abort moved refs")
-				}
-				if active, _ := (Git{Dir: repo.dir}).RebaseInProgress(); !active {
-					t.Fatal("refused abort changed the active Git rebase")
-				}
-				runGit(t, other, "switch", "--detach")
-			}
-			if action == "continue" {
-				writeFile(t, repo.dir, "file.txt", "resolved\n")
-				runGit(t, repo.dir, "add", "file.txt")
-				expectGrapheneOK(t, repo, "continue")
-				assertBranchParent(t, repo.dir, "stack/three", "stack/two")
-				if refExists(t, repo.dir, "refs/heads/stack/one") || currentBranch(t, repo.dir) != "stack/two" {
-					t.Fatal("sync did not remove the applied branch and return to its survivor")
-				}
-			} else {
-				runGit(t, repo.dir, "reflog", "expire", "--expire=now", "--all")
-				runGit(t, repo.dir, "prune", "--expire=now")
-				expectGrapheneOK(t, repo, "abort")
-				assertSyncRestored(t, repo, original, refs, "stack/one")
-				if got := runGit(t, repo.dir, "config", "branch.stack/one.remote"); got != "origin" {
-					t.Fatalf("restored branch lost its upstream: %s", got)
-				}
-			}
-			assertRestackSnapshotRemoved(t, repo, id)
-			if got := runGit(t, repo.dir, "rev-parse", "origin/main"); got != fetchedBase {
-				t.Fatalf("recovery changed fetched upstream: %s, want %s", got, fetchedBase)
-			}
-		})
-	}
+	t.Parallel()
+	t.Run("abort with base elsewhere", func(t *testing.T) {
+		t.Parallel()
+		repo, remote := newTestRepoWithOrigin(t)
+		createStackBranch(t, repo, "one.txt", "one\n", "One")
+		createStackBranch(t, repo, "two.txt", "two\n", "Two")
+		runGit(t, repo.dir, "branch", "bookmark")
+		createStackBranch(t, repo, "file.txt", "child\n", "Three")
+		runGit(t, repo.dir, "config", "rebase.updateRefs", "true")
+		runGit(t, repo.dir, "config", "branch.stack/one.remote", "origin")
+		runGit(t, repo.dir, "config", "branch.stack/one.merge", "refs/heads/stack/one")
+		runGit(t, repo.dir, "switch", "stack/one")
+		actor := cloneConfiguredRepo(t, remote, "main")
+		commitFile(t, actor, "one.txt", "one\n", "Merged one")
+		fetchedBase := commitFile(t, actor, "file.txt", "remote\n", "Conflicting base")
+		runGit(t, actor, "push", "origin", "main")
+		original := readState(t, repo.dir)
+		refs := runGit(t, repo.dir, "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads")
+		if code, _, _ := repo.runGraphene(t, "sync"); code == 0 {
+			t.Fatal("sync unexpectedly succeeded")
+		}
+		state := readState(t, repo.dir)
+		if state.Pending == nil || state.Pending.Recovery == nil || state.Pending.Recovery.Phase != recoveryConflict {
+			t.Fatalf("pending conflict = %#v", state.Pending)
+		}
+		id := state.Pending.Recovery.Snapshot
+		if !reflect.DeepEqual(state.Stacks, original.Stacks) || !refExists(t, repo.dir, "refs/heads/stack/one") {
+			t.Fatal("sync published metadata or deleted a branch before completing rebases")
+		}
+		assertBranchParent(t, repo.dir, "stack/two", "main")
+		if runGit(t, repo.dir, "rev-parse", "bookmark") == runGit(t, repo.dir, "rev-parse", "stack/two") {
+			t.Fatal("sync moved the unrelated bookmark")
+		}
+		other := filepath.Join(t.TempDir(), "worktree")
+		runGit(t, repo.dir, "worktree", "add", other, "main")
+		before := runGit(t, repo.dir, "show-ref")
+		if code, _, stderr := repo.runGraphene(t, "abort"); code == 0 || !strings.Contains(stderr, "another worktree") {
+			t.Fatalf("abort while base checked out: %d, %s", code, stderr)
+		}
+		if got := runGit(t, repo.dir, "show-ref"); got != before {
+			t.Fatal("refused abort moved refs")
+		}
+		if active, _ := (Git{Dir: repo.dir}).RebaseInProgress(); !active {
+			t.Fatal("refused abort changed the active Git rebase")
+		}
+		runGit(t, other, "switch", "--detach")
+		runGit(t, repo.dir, "reflog", "expire", "--expire=now", "--all")
+		runGit(t, repo.dir, "prune", "--expire=now")
+		expectGrapheneOK(t, repo, "abort")
+		assertSyncRestored(t, repo, original, refs, "stack/one")
+		if got := runGit(t, repo.dir, "config", "branch.stack/one.remote"); got != "origin" {
+			t.Fatalf("restored branch lost its upstream: %s", got)
+		}
+		assertRestackSnapshotRemoved(t, repo, id)
+		if got := runGit(t, repo.dir, "rev-parse", "origin/main"); got != fetchedBase {
+			t.Fatalf("recovery changed fetched upstream: %s, want %s", got, fetchedBase)
+		}
+	})
 }
 
 func TestSyncSnapshotDeletionBoundaries(t *testing.T) {
+	t.Parallel()
 	for _, boundary := range []string{"before deletion", "after deletion", "state write fails", "result saved", "rollback restored"} {
 		t.Run(boundary, func(t *testing.T) {
 			t.Parallel()

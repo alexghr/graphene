@@ -128,7 +128,8 @@ func TestAcceptedRiskPersistsButAbortStillProtectsRepositories(t *testing.T) {
 	}
 }
 
-func TestAcceptRiskParsing(t *testing.T) {
+func TestUnitAcceptRiskParsing(t *testing.T) {
+	t.Parallel()
 	for _, flags := range [][]string{{"--accept-risk"}, {"--accept-risk=true"}, {"--accept-risk", "--no-accept-risk"}, {"--accept-risk=false"}} {
 		want := len(flags) == 1 && flags[0] != "--accept-risk=false"
 		sync, err := parseSyncArgs(flags)

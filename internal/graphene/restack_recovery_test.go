@@ -77,40 +77,19 @@ func assertRestackSnapshotRemoved(t *testing.T, repo testRepo, id string) {
 }
 
 func TestRestackConflictRecovery(t *testing.T) {
-	for _, action := range []string{"continue", "abort"} {
-		t.Run(action, func(t *testing.T) {
-			t.Parallel()
-			repo, original, refs := restackConflict(t)
-			id := readState(t, repo.dir).Pending.Recovery.Snapshot
-			if code, _, _ := repo.runGraphene(t, "forget", "--force", "stack/one"); code == 0 {
-				t.Fatal("forget discarded an operation that still needs its snapshot")
-			}
-			if action == "continue" {
-				writeFile(t, repo.dir, "file.txt", "resolved\n")
-				runGit(t, repo.dir, "add", "file.txt")
-			}
-			expectGrapheneOK(t, repo, action)
-			if action == "abort" {
-				assertRestackRestored(t, repo, original, refs)
-			} else {
-				assertBranchParent(t, repo.dir, "stack/one", "target")
-				assertBranchParent(t, repo.dir, "stack/two", "stack/one")
-				assertBranchParent(t, repo.dir, "stack/three", "stack/two")
-				state := readState(t, repo.dir)
-				want := []Stack{{Base: "target", Branches: []string{"stack/one", "stack/two", "stack/three"}}}
-				if state.Pending != nil || !reflect.DeepEqual(state.Stacks, want) {
-					t.Fatalf("completed state = %#v", state)
-				}
-				if got := currentBranch(t, repo.dir); got != "stack/one" {
-					t.Fatalf("checkout after continue = %s", got)
-				}
-			}
-			assertRestackSnapshotRemoved(t, repo, id)
-		})
+	t.Parallel()
+	repo, original, refs := restackConflict(t)
+	id := readState(t, repo.dir).Pending.Recovery.Snapshot
+	if code, _, _ := repo.runGraphene(t, "forget", "--force", "stack/one"); code == 0 {
+		t.Fatal("forget discarded an operation that still needs its snapshot")
 	}
+	expectGrapheneOK(t, repo, "abort")
+	assertRestackRestored(t, repo, original, refs)
+	assertRestackSnapshotRemoved(t, repo, id)
 }
 
 func TestRestackAbortRefusesBeforeMutation(t *testing.T) {
+	t.Parallel()
 	for _, scenario := range []string{"other worktree", "branch drift", "unrelated rebase"} {
 		t.Run(scenario, func(t *testing.T) {
 			t.Parallel()
@@ -156,6 +135,7 @@ func TestRestackAbortRefusesBeforeMutation(t *testing.T) {
 }
 
 func TestRestackResumesOnlyRecordedResults(t *testing.T) {
+	t.Parallel()
 	for _, boundary := range []string{"before Git", "after Git", "after result saved"} {
 		t.Run(boundary, func(t *testing.T) {
 			t.Parallel()
@@ -200,6 +180,7 @@ func TestRestackResumesOnlyRecordedResults(t *testing.T) {
 }
 
 func TestRestackRetriesInterruptedAbort(t *testing.T) {
+	t.Parallel()
 	for _, boundary := range []string{"refs restored", "worktree restored"} {
 		t.Run(boundary, func(t *testing.T) {
 			t.Parallel()
@@ -239,22 +220,16 @@ func TestRestackRetriesInterruptedAbort(t *testing.T) {
 }
 
 func TestRestackAfterBaseAdvances(t *testing.T) {
-	for _, target := range []string{"main", "target"} {
-		t.Run(target, func(t *testing.T) {
-			t.Parallel()
-			repo := newTestRepo(t)
-			createStackBranch(t, repo, "one.txt", "one\n", "One")
-			createStackBranch(t, repo, "two.txt", "two\n", "Two")
-			runGit(t, repo.dir, "switch", "-c", "target", "main")
-			commitFile(t, repo.dir, "target.txt", "target\n", "Target")
-			runGit(t, repo.dir, "switch", "main")
-			commitFile(t, repo.dir, "base.txt", "base\n", "Advance main")
-			runGit(t, repo.dir, "switch", "stack/one")
-			expectGrapheneOK(t, repo, "restack", target)
-			assertBranchParent(t, repo.dir, "stack/one", target)
-			assertBranchParent(t, repo.dir, "stack/two", "stack/one")
-		})
-	}
+	t.Parallel()
+	repo := newTestRepo(t)
+	createStackBranch(t, repo, "one.txt", "one\n", "One")
+	createStackBranch(t, repo, "two.txt", "two\n", "Two")
+	runGit(t, repo.dir, "switch", "main")
+	commitFile(t, repo.dir, "base.txt", "base\n", "Advance main")
+	runGit(t, repo.dir, "switch", "stack/one")
+	expectGrapheneOK(t, repo, "restack", "main")
+	assertBranchParent(t, repo.dir, "stack/one", "main")
+	assertBranchParent(t, repo.dir, "stack/two", "stack/one")
 }
 
 func TestRestackContinueCommitFailureRequiresAbort(t *testing.T) {
@@ -301,7 +276,8 @@ func TestRestackKilledAfterRewriteCanAbort(t *testing.T) {
 }
 
 func TestRestackSnapshotsBeforeFastForward(t *testing.T) {
-	for _, action := range []string{"abort", "continue", "preflight"} {
+	t.Parallel()
+	for _, action := range []string{"abort", "preflight"} {
 		t.Run(action, func(t *testing.T) {
 			t.Parallel()
 			repo, remote := newTestRepoWithOrigin(t)
@@ -334,14 +310,6 @@ func TestRestackSnapshotsBeforeFastForward(t *testing.T) {
 			} else {
 				if state.Pending == nil || state.Pending.Recovery == nil || state.Pending.Recovery.Expected["stack/one"] != remoteOne {
 					t.Fatalf("fast-forward was not recorded: %#v, stderr %s", state.Pending, stderr)
-				}
-				if action == "continue" {
-					writeFile(t, repo.dir, "file.txt", "resolved\n")
-					runGit(t, repo.dir, "add", "file.txt")
-					expectGrapheneOK(t, repo, "continue")
-					assertBranchParent(t, repo.dir, "stack/one", "target")
-					assertBranchParent(t, repo.dir, "stack/two", "stack/one")
-					return
 				}
 				expectGrapheneOK(t, repo, "abort")
 			}

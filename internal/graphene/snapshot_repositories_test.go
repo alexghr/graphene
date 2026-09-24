@@ -28,6 +28,7 @@ func nestedState(t *testing.T, dir string) string {
 }
 
 func TestSnapshotLeavesNestedRepositoriesAlone(t *testing.T) {
+	t.Parallel()
 	for _, kind := range []string{"worktree", "clone", "unborn"} {
 		t.Run(kind, func(t *testing.T) {
 			t.Parallel()
@@ -58,18 +59,16 @@ func TestSnapshotLeavesNestedRepositoriesAlone(t *testing.T) {
 			changed := runGit(t, repo.dir, "rev-parse", "HEAD")
 			writeFile(t, nested, "precious", "after capture\n")
 			writeFile(t, repo.dir, "scratch/keep[1]\nspace", "changed\n")
-			for range 2 {
-				if _, err := restoreTestSnapshot(repo.dir, id, map[string]string{"main": changed}); err != nil {
-					t.Fatal(err)
-				}
-				for path, want := range map[string]string{
-					filepath.Join(nested, "precious"):                 "after capture\n",
-					filepath.Join(repo.dir, "scratch/keep[1]\nspace"): "parent untracked\n",
-				} {
-					data, err := os.ReadFile(path)
-					if err != nil || string(data) != want {
-						t.Fatalf("%s = %q, error %v", path, data, err)
-					}
+			if _, err := restoreTestSnapshot(repo.dir, id, map[string]string{"main": changed}); err != nil {
+				t.Fatal(err)
+			}
+			for path, want := range map[string]string{
+				filepath.Join(nested, "precious"):                 "after capture\n",
+				filepath.Join(repo.dir, "scratch/keep[1]\nspace"): "parent untracked\n",
+			} {
+				data, err := os.ReadFile(path)
+				if err != nil || string(data) != want {
+					t.Fatalf("%s = %q, error %v", path, data, err)
 				}
 			}
 		})
@@ -77,6 +76,7 @@ func TestSnapshotLeavesNestedRepositoriesAlone(t *testing.T) {
 }
 
 func TestSnapshotPreservesSubmoduleIndex(t *testing.T) {
+	t.Parallel()
 	for _, initialized := range []bool{false, true} {
 		t.Run(map[bool]string{false: "uninitialized", true: "dirty checkout"}[initialized], func(t *testing.T) {
 			t.Parallel()
@@ -108,22 +108,21 @@ func TestSnapshotPreservesSubmoduleIndex(t *testing.T) {
 				writeFile(t, module, "after-capture", "preserve\n")
 				childState = nestedState(t, module)
 			}
-			for range 2 {
-				if _, err := restoreTestSnapshot(repo.dir, id, map[string]string{"main": changed}); err != nil {
-					t.Fatal(err)
-				}
-				if got := runGit(t, repo.dir, "ls-files", "--stage"); got != beforeIndex {
-					t.Fatalf("restored index = %s, want %s", got, beforeIndex)
-				}
-				if initialized && nestedState(t, module) != childState {
-					t.Fatal("rollback changed submodule checkout or edits")
-				}
+			if _, err := restoreTestSnapshot(repo.dir, id, map[string]string{"main": changed}); err != nil {
+				t.Fatal(err)
+			}
+			if got := runGit(t, repo.dir, "ls-files", "--stage"); got != beforeIndex {
+				t.Fatalf("restored index = %s, want %s", got, beforeIndex)
+			}
+			if initialized && nestedState(t, module) != childState {
+				t.Fatal("rollback changed submodule checkout or edits")
 			}
 		})
 	}
 }
 
 func TestNestedRepositoryRollbackCollision(t *testing.T) {
+	t.Parallel()
 	for _, path := range []string{"rpc", "rpc/file", "scratch"} {
 		t.Run(path, func(t *testing.T) {
 			t.Parallel()

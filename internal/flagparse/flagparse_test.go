@@ -8,7 +8,7 @@ import (
 	"github.com/alexghr/graphene/internal/flagparse"
 )
 
-func TestParserInterspersedFlagsAndTerminator(t *testing.T) {
+func TestUnitParserInterspersedFlagsAndTerminator(t *testing.T) {
 	t.Parallel()
 	parser := flagparse.New([]string{"branch", "--stack", "--", "--literal", "-x"})
 	var got []struct {
@@ -39,7 +39,7 @@ func TestParserInterspersedFlagsAndTerminator(t *testing.T) {
 	}
 }
 
-func TestParserValueValidation(t *testing.T) {
+func TestUnitParserValueValidation(t *testing.T) {
 	t.Parallel()
 	parser := flagparse.New([]string{"value", "-flag"})
 	got, err := parser.Value(flagparse.AcceptNonFlag, errors.New("missing value"))
@@ -54,7 +54,7 @@ func TestParserValueValidation(t *testing.T) {
 	}
 }
 
-func TestParserOptionalPositionalValue(t *testing.T) {
+func TestUnitParserOptionalPositionalValue(t *testing.T) {
 	t.Parallel()
 	parser := flagparse.New([]string{"up", "2", "-x"})
 	if _, ok := parser.Next(); !ok {
@@ -69,7 +69,7 @@ func TestParserOptionalPositionalValue(t *testing.T) {
 	}
 }
 
-func TestLongFlagAndBoolValue(t *testing.T) {
+func TestUnitLongFlagAndBoolValue(t *testing.T) {
 	t.Parallel()
 	parser := flagparse.New([]string{"--stack=false", "--no-stack"})
 	arg, ok := parser.Next()
@@ -105,7 +105,7 @@ func TestLongFlagAndBoolValue(t *testing.T) {
 	}
 }
 
-func TestShortFlags(t *testing.T) {
+func TestUnitShortFlags(t *testing.T) {
 	t.Parallel()
 	var seen []byte
 	parser := flagparse.New([]string{"-sn", "-c3"})

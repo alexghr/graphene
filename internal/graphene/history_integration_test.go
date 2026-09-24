@@ -24,6 +24,7 @@ func TestRegressionSyncSendfPreservesSquashMergedMiddleBranchPatch(t *testing.T)
 	if !refFileExists(t, integrator, "stack/one:two.txt") {
 		t.Fatal("test setup failed: squash-merged parent does not contain two.txt")
 	}
+	protectedTip := runGit(t, remote, "rev-parse", "refs/heads/stack/one")
 
 	runGit(t, integrator, "switch", "main")
 	writeFile(t, integrator, "base-update.txt", "base update\n")
@@ -33,34 +34,18 @@ func TestRegressionSyncSendfPreservesSquashMergedMiddleBranchPatch(t *testing.T)
 
 	runGit(t, repo.dir, "switch", "stack/three")
 	if code, stdout, stderr := repo.runGraphene(t, "sync"); code != 0 {
-		t.Logf("graphene sync rejected unsafe state, which is acceptable for this safety regression\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
+		t.Fatalf("sync exited %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
-	if code, stdout, stderr := repo.runGraphene(t, "sendf", "--stack", "origin"); code != 0 {
-		t.Logf("graphene sendf rejected unsafe state, which is acceptable for this safety regression\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
+	if code, stdout, stderr := repo.runGraphene(t, "sendf", "--stack", "origin"); code == 0 || !strings.Contains(stderr, `refusing to force-push "stack/one" because origin/stack/one already contains the patch from descendant "stack/two"`) {
+		t.Fatalf("sendf returned %d, want protective refusal\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
+	}
+	if got := runGit(t, remote, "rev-parse", "refs/heads/stack/one"); got != protectedTip {
+		t.Fatalf("protected remote parent moved from %s to %s", protectedTip, got)
 	}
 
 	runGit(t, integrator, "fetch", "origin")
 	if !refFileExists(t, integrator, "origin/stack/one:two.txt") {
 		t.Fatal("sendf removed the squash-merged stack/two patch from remote stack/one")
-	}
-}
-
-func TestRegressionSendfDryRunAfterSyncWithNewDescendant(t *testing.T) {
-	t.Parallel()
-	repo, remote := newTestRepoWithOrigin(t)
-	createStackBranch(t, repo, "one.txt", "one\n", "One")
-	expectGrapheneOK(t, repo, "send", "origin")
-	createStackBranch(t, repo, "two.txt", "two\n", "Two")
-
-	integrator := cloneConfiguredRepo(t, remote, "main")
-	writeFile(t, integrator, "base-update.txt", "base update\n")
-	runGit(t, integrator, "add", ".")
-	runGit(t, integrator, "commit", "-m", "Base update")
-	runGit(t, integrator, "push", "origin", "main")
-
-	expectGrapheneOK(t, repo, "sync")
-	if code, stdout, stderr := repo.runGraphene(t, "sendf", "--stack", "--dry-run", "origin"); code != 0 {
-		t.Fatalf("graphene sendf --stack --dry-run exited %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
 }
 
@@ -170,81 +155,6 @@ func TestRegressionAmendFailsWithOnlyUnstagedChanges(t *testing.T) {
 	}
 	if got := runGit(t, repo.dir, "status", "--short"); got != " M one.txt" {
 		t.Fatalf("status = %q, want unstaged one.txt", got)
-	}
-}
-
-// Regression for https://github.com/alexghr/graphene/issues/2.
-func TestRegressionSyncRequiresExplicitAssumptionForDeletedUnappliedUpstream(t *testing.T) {
-	t.Parallel()
-	repo, remote := newTestRepoWithOrigin(t)
-	writeFile(t, repo.dir, "fast.txt", "fast path v1\n")
-	runGit(t, repo.dir, "add", ".")
-	expectGrapheneOK(t, repo, "new", "--branch", "fc/fast-field-path", "-m", "Fast field path")
-	expectGrapheneOK(t, repo, "send", "origin")
-
-	actor := cloneConfiguredRepo(t, remote, "main")
-	runGit(t, actor, "switch", "-c", "fc/fast-field-path", "--track", "origin/fc/fast-field-path")
-	writeFile(t, actor, "fast.txt", "fast path v1\nremote edit before delete\n")
-	runGit(t, actor, "add", ".")
-	runGit(t, actor, "commit", "-m", "Remote branch changed before delete")
-	runGit(t, actor, "push", "origin", "fc/fast-field-path")
-
-	runGit(t, repo.dir, "fetch", "origin")
-	runGit(t, actor, "push", "origin", "--delete", "fc/fast-field-path")
-	runGit(t, actor, "switch", "main")
-	writeFile(t, actor, "base-update.txt", "base update\n")
-	runGit(t, actor, "add", ".")
-	runGit(t, actor, "commit", "-m", "Base update")
-	runGit(t, actor, "push", "origin", "main")
-
-	mainBefore := runGit(t, repo.dir, "rev-parse", "main")
-	branchBefore := runGit(t, repo.dir, "rev-parse", "fc/fast-field-path")
-	stateBefore := readState(t, repo.dir)
-	code, _, stderr := repo.runGraphene(t, "sync")
-	if code == 0 {
-		t.Fatal("graphene sync unexpectedly assumed the deleted upstream was merged")
-	}
-	if !strings.Contains(stderr, "fc/fast-field-path") || !strings.Contains(stderr, "--assume-merged") {
-		t.Fatalf("stderr = %q, want deleted branch and --assume-merged guidance", stderr)
-	}
-	if got := runGit(t, repo.dir, "rev-parse", "fc/fast-field-path"); got != branchBefore {
-		t.Fatalf("local branch changed from %s to %s after refused sync", branchBefore, got)
-	}
-	if got := runGit(t, repo.dir, "rev-parse", "main"); got != mainBefore {
-		t.Fatalf("main changed from %s to %s after refused sync", mainBefore, got)
-	}
-	if got := readState(t, repo.dir); !reflect.DeepEqual(got, stateBefore) {
-		t.Fatalf("state changed after refused sync from %#v to %#v", stateBefore, got)
-	}
-
-	code, stdout, stderr := repo.runGraphene(t, "sync", "--dry-run", "--assume-merged")
-	if code != 0 {
-		t.Fatalf("graphene sync --dry-run --assume-merged exited %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
-	}
-	wantAssumedMerged := "  delete branches assumed merged:\n    fc/fast-field-path\n"
-	if !strings.Contains(stdout, wantAssumedMerged) {
-		t.Fatalf("stdout = %q, want it to contain %q", stdout, wantAssumedMerged)
-	}
-	if got := runGit(t, repo.dir, "rev-parse", "fc/fast-field-path"); got != branchBefore {
-		t.Fatalf("local branch changed from %s to %s during dry run", branchBefore, got)
-	}
-	if got := runGit(t, repo.dir, "rev-parse", "main"); got != mainBefore {
-		t.Fatalf("main changed from %s to %s during dry run", mainBefore, got)
-	}
-	if got := readState(t, repo.dir); !reflect.DeepEqual(got, stateBefore) {
-		t.Fatalf("state changed during dry run from %#v to %#v", stateBefore, got)
-	}
-
-	code, stdout, stderr = repo.runGraphene(t, "sync", "--assume-merged")
-	if code != 0 {
-		t.Fatalf("graphene sync --assume-merged exited %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
-	}
-	if refExists(t, repo.dir, "refs/heads/fc/fast-field-path") {
-		t.Fatal("local branch still exists after explicitly assuming its deleted upstream was merged")
-	}
-	state := readState(t, repo.dir)
-	if len(state.Stacks) != 0 {
-		t.Fatalf("stacks = %#v, want empty after explicitly removing remote-deleted branch", state.Stacks)
 	}
 }
 

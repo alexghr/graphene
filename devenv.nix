@@ -60,7 +60,16 @@ in
     };
 
     scripts = {
-      p-test.exec = "go test -parallel 8 ./...";
+      p-test-unit.exec = "go test -parallel 8 -run '^TestUnit' ./internal/...";
+      p-test-integration.exec = "go test -parallel 8 -skip '^TestUnit' ./internal/...";
+      p-test-e2e.exec = "go test -parallel 8 ./tests/e2e";
+      p-test.exec = ''
+        set -euo pipefail
+
+        p-test-unit
+        p-test-integration
+        p-test-e2e
+      '';
       p-build.exec = "go build -o bin/graphene ./cmd/graphene";
       p-lint.exec = "${lint}/bin/graphene-lint";
       p-ci.exec = ''
@@ -97,7 +106,9 @@ in
         checkPhase = ''
           runHook preCheck
           ${lint}/bin/graphene-lint
-          go test -parallel 8 ./...
+          go test -parallel 8 -run '^TestUnit' ./internal/...
+          go test -parallel 8 -skip '^TestUnit' ./internal/...
+          go test -parallel 8 ./tests/e2e
           runHook postCheck
         '';
       };
