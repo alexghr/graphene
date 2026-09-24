@@ -225,10 +225,10 @@ func (g Git) preflightSnapshotWorktree(snapshot operationSnapshot) error {
 	if err != nil {
 		return err
 	}
-	owned := map[string]bool{}
+	owned := snapshotPathTree{}
 	for path := range strings.SplitSeq(string(target), "\x00") {
 		if path != "" {
-			owned[path] = true
+			owned.add(path)
 		}
 	}
 	for _, ignored := range []bool{false, true} {
@@ -244,17 +244,52 @@ func (g Git) preflightSnapshotWorktree(snapshot operationSnapshot) error {
 		}
 		for path := range strings.SplitSeq(string(out), "\x00") {
 			path = strings.TrimSuffix(path, "/")
-			if path == "" || owned[path] {
+			if path == "" {
 				continue
 			}
-			for target := range owned {
-				if strings.HasPrefix(path, target+"/") || strings.HasPrefix(target, path+"/") {
-					return fmt.Errorf("untracked path %q would be overwritten restoring the snapshot; move it aside first", path)
-				}
+			if owned.collides(path) {
+				return fmt.Errorf("untracked path %q would be overwritten restoring the snapshot; move it aside first", path)
 			}
 		}
 	}
 	return nil
+}
+
+// Entries are snapshot files (true) or their parent directories (false).
+// Git trees cannot contain a file and another entry beneath that file.
+type snapshotPathTree map[string]bool
+
+func (tree snapshotPathTree) add(path string) {
+	tree[path] = true
+	for {
+		i := strings.LastIndexByte(path, '/')
+		if i < 0 {
+			return
+		}
+		path = path[:i]
+		if _, found := tree[path]; found {
+			return
+		}
+		tree[path] = false
+	}
+}
+
+func (tree snapshotPathTree) collides(path string) bool {
+	// Exact file matches belong to the snapshot. A directory match would
+	// replace saved children; a file ancestor would replace this local path.
+	if file, found := tree[path]; found {
+		return !file
+	}
+	for {
+		i := strings.LastIndexByte(path, '/')
+		if i < 0 {
+			return false
+		}
+		path = path[:i]
+		if file, found := tree[path]; found {
+			return file
+		}
+	}
 }
 
 func (g Git) restoreSnapshotWorktree(snapshot operationSnapshot) error {
