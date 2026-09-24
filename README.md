@@ -212,7 +212,7 @@ Restart Codex or Claude Code after installing a new skill.
 
 ## Worktrees
 
-Stack state is stored in the repository's local Git config under `graphene.state`, so linked worktrees for the same repository share the same stack graph.
+Linked worktrees for the same repository share the same stack graph.
 
 When `gn sync` needs a newer base branch that is checked out in another worktree, Graphene fetches the upstream and rebases onto the fetched commit instead of switching to or updating the checked-out branch.
 
@@ -221,3 +221,5 @@ If a worktree already has the branch you want to use checked out, commit on that
 ```
 gn new --reuse-current --base main -m "implement foo"
 ```
+
+This also works when your branch starts at `origin/main` and local `main` is behind, provided `main` tracks `origin/main`. You do not need to update `main` or switch its worktree first. You can omit `--base main` when Graphene can identify a single matching base.

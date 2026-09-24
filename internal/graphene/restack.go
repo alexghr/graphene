@@ -1,6 +1,9 @@
 package graphene
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 func (a *App) restack(args []string) error {
 	opts, err := parseRestackArgs(args)
@@ -78,7 +81,7 @@ func (a *App) restack(args []string) error {
 		upstream := refs[parent]
 		if !state.ContainsBranch(parent) {
 			var err error
-			upstream, err = a.git.Output("merge-base", upstream, refs[branch])
+			upstream, err = a.restackRootBoundary(parent, upstream, refs[branch])
 			if err != nil {
 				return err
 			}
@@ -150,4 +153,38 @@ func (a *App) restack(args []string) error {
 		return err
 	}
 	return a.runSnapshotRebases(state)
+}
+
+func (a *App) restackRootBoundary(base, baseHead, branchHead string) (string, error) {
+	boundary, err := a.git.Output("merge-base", baseHead, branchHead)
+	if err != nil {
+		return "", err
+	}
+	upstream, err := a.git.Output("for-each-ref", "--format=%(upstream)", "refs/heads/"+base)
+	if err != nil {
+		return "", err
+	}
+	if !strings.HasPrefix(upstream, "refs/remotes/") {
+		return boundary, nil
+	}
+	exists, err := a.refExists(upstream)
+	if err != nil || !exists {
+		return boundary, err
+	}
+	newer, err := a.git.Output("merge-base", upstream, branchHead)
+	if isGitExit(err, 1) {
+		return boundary, nil
+	}
+	if err != nil {
+		return "", err
+	}
+	// A base checked out elsewhere may lag behind the commit this stack started on.
+	advances, err := a.isAncestor(boundary, newer)
+	if err != nil {
+		return "", err
+	}
+	if advances {
+		return newer, nil
+	}
+	return boundary, nil
 }

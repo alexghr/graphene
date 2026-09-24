@@ -55,6 +55,12 @@ steps, and retain commits that become empty. Completed branches and stack
 metadata are restored together on abort. Backups are removed only after the
 final or restored stack metadata has been persisted.
 
+For a stack root, restack finds the common ancestor with its local base and also
+considers the base's configured remote-tracking upstream. A newer common ancestor
+supersedes the local boundary, allowing stacks to start beyond a base checked out
+in another worktree. This source boundary is frozen in the queued rebase operation;
+the target remains the explicitly selected local branch.
+
 Sync freezes the fetched base tip before advancing any local branch. A base
 checked out in another worktree stays untouched; affected branches rebase onto
 the fetched commit. Applied branches remain until all rebases finish, then one

@@ -132,6 +132,44 @@ func (a *App) inferReuseCurrentBase(current string) (string, error) {
 			candidates = append(candidates, branch)
 		}
 	}
+	if len(candidates) == 1 {
+		return candidates[0], nil
+	}
+	if len(candidates) > 1 {
+		return "", fmt.Errorf("graphene new --reuse-current requires --base")
+	}
+
+	head, err := a.git.Head()
+	if err != nil {
+		return "", err
+	}
+	remoteRefs, err := a.git.Output("for-each-ref", "--points-at", "HEAD", "--format=%(refname)", "refs/remotes")
+	if err != nil {
+		return "", err
+	}
+	pointingAtHead := map[string]bool{}
+	for ref := range strings.SplitSeq(remoteRefs, "\n") {
+		if ref != "" {
+			pointingAtHead[ref] = true
+		}
+	}
+	localRefs, err := a.git.Output("for-each-ref", "--format=%(refname:strip=2)%00%(upstream)", "refs/heads")
+	if err != nil {
+		return "", err
+	}
+	for line := range strings.SplitSeq(localRefs, "\n") {
+		branch, upstream, ok := strings.Cut(line, "\x00")
+		if !ok || branch == current || !pointingAtHead[upstream] {
+			continue
+		}
+		matches, err := a.isAncestor("refs/heads/"+branch, head)
+		if err != nil {
+			return "", err
+		}
+		if matches {
+			candidates = append(candidates, branch)
+		}
+	}
 	if len(candidates) != 1 {
 		return "", fmt.Errorf("graphene new --reuse-current requires --base")
 	}
@@ -3039,14 +3077,39 @@ func (a *App) validateNewBase(base string) error {
 	if err != nil {
 		return err
 	}
-	baseRef, err := a.git.Output("rev-parse", "--verify", "refs/heads/"+base+"^{commit}")
+	matches, err := a.newBaseMatchesHead(base, head)
 	if err != nil {
 		return err
 	}
-	if baseRef != head {
+	if !matches {
 		return fmt.Errorf("base branch %q does not point to current HEAD", base)
 	}
 	return nil
+}
+
+func (a *App) newBaseMatchesHead(base, head string) (bool, error) {
+	baseRef, err := a.git.Output("rev-parse", "--verify", "refs/heads/"+base+"^{commit}")
+	if err != nil {
+		return false, err
+	}
+	if baseRef == head {
+		return true, nil
+	}
+	upstream, err := a.git.Output("for-each-ref", "--format=%(upstream)", "refs/heads/"+base)
+	if err != nil {
+		return false, err
+	}
+	if !strings.HasPrefix(upstream, "refs/remotes/") {
+		return false, nil
+	}
+	upstreamRef, err := a.git.Output("rev-parse", "--verify", upstream+"^{commit}")
+	if err != nil {
+		return false, err
+	}
+	if upstreamRef != head {
+		return false, nil
+	}
+	return a.isAncestor(baseRef, head)
 }
 
 func (a *App) validateRestackBase(base string) error {

@@ -264,6 +264,35 @@ func TestCommitRejectsExplicitBaseAtDifferentCommit(t *testing.T) {
 	}
 }
 
+func TestReuseCurrentBaseUsesConfiguredUpstream(t *testing.T) {
+	t.Parallel()
+	repo := newTestRepo(t)
+	runGit(t, repo.dir, "remote", "add", "origin", ".")
+	runGit(t, repo.dir, "config", "branch.main.remote", "origin")
+	runGit(t, repo.dir, "config", "branch.main.merge", "refs/heads/main")
+	runGit(t, repo.dir, "switch", "-c", "feature")
+	commitFile(t, repo.dir, "upstream.txt", "upstream\n", "Advance upstream")
+	runGit(t, repo.dir, "update-ref", "refs/remotes/origin/main", "HEAD")
+	app := &App{git: Git{Dir: repo.dir}}
+	if got, err := app.inferReuseCurrentBase("feature"); err != nil || got != "main" {
+		t.Fatalf("inferred base = %q, %v; want main", got, err)
+	}
+	if err := app.validateNewBase("main"); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo.dir, "branch", "other", "main")
+	runGit(t, repo.dir, "branch", "--set-upstream-to=origin/main", "other")
+	if _, err := app.inferReuseCurrentBase("feature"); err == nil || !strings.Contains(err.Error(), "requires --base") {
+		t.Fatalf("ambiguous base: %v", err)
+	}
+	runGit(t, repo.dir, "switch", "main")
+	commitFile(t, repo.dir, "local.txt", "local\n", "Diverge main")
+	runGit(t, repo.dir, "switch", "feature")
+	if err := app.validateNewBase("main"); err == nil || !strings.Contains(err.Error(), "does not point to current HEAD") {
+		t.Fatalf("divergent base: %v", err)
+	}
+}
+
 func TestCommitDeletesTemporaryBranchAfterFailedCommit(t *testing.T) {
 	t.Parallel()
 	repo := newTestRepo(t)

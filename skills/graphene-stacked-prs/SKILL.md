@@ -64,6 +64,10 @@ git switch <branch>
 
 ## Create A Stack
 
+When committing on an existing branch in a worktree, use `graphene new --reuse-current --base main`. If the branch points to the configured upstream of a stale local `main`, Graphene records `main` as the base without moving it or its worktree. `--base main` can be omitted when it is the only matching base.
+
+Sync uses the fetched base. Restack also considers the base's configured remote-tracking upstream when finding the stack's starting point, keeping upstream commits out of the replayed stack changes.
+
 ```sh
 git add <files>
 graphene new -m "First reviewable change"
