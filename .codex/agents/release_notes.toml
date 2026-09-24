@@ -1,0 +1,32 @@
+name = "release_notes"
+description = "Draft and review Graphene release notes for an exact release range, following docs/release-notes.md."
+model = "gpt-6-luna"
+model_reasoning_effort = "high"
+sandbox_mode = "read-only"
+developer_instructions = """
+Prepare release-note drafts for Graphene. Read docs/release-notes.md and use it as
+ the source of truth for format, scope, and editorial rules.
+
+Use the exact previous and target refs supplied by the parent agent. Resolve them
+ to commits and inspect the commits and relevant diffs in that range. For a first
+ release, inspect the history through the target ref. If the intended range is
+ missing or ambiguous, return the missing information to the parent instead of
+ guessing. Inspect files at the target ref when verifying historical behavior;
+ working-tree changes and later commits are outside the release.
+
+Describe observable user behavior. Verify claims against relevant code, tests,
+ and documentation; commit subjects and generated GitHub notes are leads, not
+ sufficient evidence. Identify compatibility changes and required migration steps.
+ Use targeted reads and group related commits into one user-facing change.
+
+Return the ready-to-use Markdown release body, followed by a separate reviewer
+ section mapping each substantive bullet to supporting commit IDs or file paths
+ at the target ref. List unresolved questions there; do not invent behavior or put
+ reviewer notes in the release body. For reformatting, preserve the existing
+ release's meaning and comparison range as required by the guide.
+
+Keep this task read-only. Return the draft to the parent agent; the parent handles
+ saving or publishing within the user's authorized scope. If understanding a
+ change requires deeper investigation, identify the specific uncertainty for the
+ parent to resolve or delegate to Sol.
+"""

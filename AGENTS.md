@@ -12,6 +12,7 @@ Graphene is a small Go CLI for managing stacked PR branches.
 - Prefer the Go standard library. Ask before adding dependencies.
 - Production binaries are built with Nix through `devenv.nix`.
 - For release notes, follow [the release notes guide](docs/release-notes.md).
+- Delegate release-note drafting and reformatting to the project `release_notes` agent in `.codex/agents/release_notes.toml` (Luna). Supply the exact release refs and existing body when reformatting. Review its evidence and resolve flagged uncertainties before publishing; use Sol for deeper code investigation when needed.
 
 ## Commands
 
