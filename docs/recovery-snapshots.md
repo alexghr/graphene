@@ -68,6 +68,9 @@ can leave unused entries after successful sync.
 Sync and restack with `--fetch` refresh the selected upstream's remote-tracking
 ref as well as the private recovery ref. These updates also occur during sync
 dry-runs and are not rolled back by abort.
+Sync also refreshes existing upstream remote-tracking refs for surviving selected
+stack branches, so subsequent force-with-lease pushes use the fetched tips. Remote-tracking
+refs belonging only to unselected stacks remain unchanged.
 
 Worktree snapshots preserve Git file content, staging and nonignored untracked
 files. They are not filesystem archives: ignored files, timestamps and arbitrary

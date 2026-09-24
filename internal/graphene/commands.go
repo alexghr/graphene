@@ -1991,6 +1991,9 @@ func (a *App) sync(args []string) error {
 
 	nextState := RemoveBranchesWithBase(state, branches, selection.Base)
 	baseChanges := branchBaseChanges(state, nextState)
+	if err := a.refreshSyncRemoteTrackingRefs(selection, firstRemaining, remoteRefs); err != nil {
+		return err
+	}
 
 	returnBranch := selection.ReturnBranch(firstRemaining)
 

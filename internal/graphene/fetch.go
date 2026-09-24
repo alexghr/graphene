@@ -65,20 +65,63 @@ func (a *App) fetchUpstreamWithCache(branch string, cache *syncFetchCache) (upst
 	if err != nil {
 		return upstreamUpdate{}, err
 	}
-	tracking, err := a.git.Output("for-each-ref", "--format=%(upstream)", "refs/heads/"+branch)
-	if err != nil {
+	if err := a.refreshRemoteTrackingRef(branch, updated); err != nil {
 		return upstreamUpdate{}, err
-	}
-	// Upstream mappings can target local branches. Refresh only remote-tracking
-	// refs, without following symbolic refs that could point at local branches.
-	if strings.HasPrefix(tracking, "refs/remotes/") {
-		if err := a.git.OutputErr("update-ref", "--no-deref", tracking, updated); err != nil {
-			return upstreamUpdate{}, err
-		}
 	}
 	return upstreamUpdate{
 		Branch: branch, Remote: remote, Merge: merge, Old: old, Updated: updated,
 	}, nil
+}
+
+func (a *App) refreshRemoteTrackingRef(branch, updated string) error {
+	tracking, err := a.git.Output("for-each-ref", "--format=%(upstream)", "refs/heads/"+branch)
+	if err != nil {
+		return err
+	}
+	// Upstream mappings can target local branches. Refresh only remote-tracking
+	// refs, without following symbolic refs that could point at local branches.
+	if strings.HasPrefix(tracking, "refs/remotes/") {
+		return a.git.OutputErr("update-ref", "--no-deref", tracking, updated)
+	}
+	return nil
+}
+
+func (a *App) refreshSyncRemoteTrackingRefs(selection syncSelection, firstRemaining map[int]int, cache *syncFetchCache) error {
+	seen := map[string]bool{}
+	for _, path := range selection.Paths {
+		for _, branch := range path.Stack.Branches[firstRemaining[path.StackIndex]:path.BranchLimit] {
+			if seen[branch] {
+				continue
+			}
+			seen[branch] = true
+			missing, err := a.syncUpstreamMissing(branch, cache)
+			if err != nil {
+				return err
+			}
+			remote, merge, err := a.git.Upstream(branch)
+			if err != nil {
+				return err
+			}
+			if missing || remote == "" || merge == "" {
+				continue
+			}
+			ref := fmt.Sprintf("refs/graphene/remotes/%x/%s", remote, strings.TrimPrefix(merge, "refs/heads/"))
+			if !strings.HasPrefix(merge, "refs/heads/"+cache.Prefix) {
+				ref = "refs/graphene/fetch/" + branch
+				if err := a.git.Run("fetch", "--no-write-fetch-head", "--no-tags", "--no-prune", "--no-prune-tags", "--no-recurse-submodules", "--refmap=", "--", remote, "+"+merge+":"+ref); err != nil {
+					return err
+				}
+			}
+			updated, err := a.git.Output("rev-parse", "--verify", ref+"^{commit}")
+			if err != nil {
+				return err
+			}
+			if err := a.refreshRemoteTrackingRef(branch, updated); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // fetch a bunch of branch patterns in one go (e.g. fetch main and stack/*)

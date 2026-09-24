@@ -10,6 +10,84 @@ import (
 	"testing"
 )
 
+func TestSyncRefreshesForcePushLeases(t *testing.T) {
+	for _, remoteMovesAgain := range []bool{false, true} {
+		t.Run(fmt.Sprintf("remote-moves-again=%t", remoteMovesAgain), func(t *testing.T) {
+			t.Parallel()
+			repo, remote := newTestRepoWithOrigin(t)
+			for _, name := range []string{"one", "two", "three"} {
+				createStackBranch(t, repo, name+".txt", name+"\n", name)
+				runGit(t, repo.dir, "push", "-u", "origin", "HEAD")
+			}
+			other := cloneConfiguredRepo(t, remote, "main")
+			oldOne := runGit(t, other, "rev-parse", "origin/stack/one")
+			runGit(t, other, "merge", "--ff-only", "origin/stack/one")
+			commitFile(t, other, "base.txt", "base update\n", "Base update")
+			runGit(t, other, "push", "origin", "main", ":stack/one")
+			runGit(t, other, "checkout", "stack/two")
+			runGit(t, other, "rebase", "--onto", "main", oldOne)
+			runGit(t, other, "checkout", "stack/three")
+			runGit(t, other, "rebase", "--onto", "stack/two", "origin/stack/two")
+			runGit(t, other, "push", "--force-with-lease", "origin", "stack/two", "stack/three")
+			expectGrapheneOK(t, repo, "sync")
+			for _, branch := range []string{"stack/two", "stack/three"} {
+				want := runGit(t, other, "rev-parse", branch)
+				if got := runGit(t, repo.dir, "rev-parse", branch+"@{upstream}"); got != want {
+					t.Fatalf("%s upstream = %s, want %s", branch, got, want)
+				}
+			}
+			// Ensure the push needs to overwrite a rewritten commit even if both
+			// rebases happened within the same second.
+			runGit(t, repo.dir, "commit", "--amend", "-m", "Locally rewritten three")
+			if remoteMovesAgain {
+				commitFile(t, other, "later.txt", "later\n", "Later remote change")
+				runGit(t, other, "push", "origin", "stack/three")
+				if code, _, stderr := repo.runGraphene(t, "sendf"); code == 0 || !strings.Contains(stderr, "stale info") {
+					t.Fatalf("sendf after remote change exited %d: %s", code, stderr)
+				}
+				return
+			}
+			expectGrapheneOK(t, repo, "sendf", "--dry-run")
+			expectGrapheneOK(t, repo, "sendf")
+			if got, want := runGit(t, remote, "rev-parse", "stack/three"), runGit(t, repo.dir, "rev-parse", "stack/three"); got != want {
+				t.Fatalf("pushed tip = %s, want %s", got, want)
+			}
+		})
+	}
+}
+
+func TestSyncStackFetchRespectsUpstreamDestination(t *testing.T) {
+	for _, destination := range []string{"refs/remotes/custom/one", "refs/heads/victim"} {
+		t.Run(destination, func(t *testing.T) {
+			t.Parallel()
+			repo, remote := newTestRepoWithOrigin(t)
+			createStackBranch(t, repo, "one.txt", "one\n", "one")
+			runGit(t, repo.dir, "push", "-u", "origin", "HEAD")
+			old := runGit(t, repo.dir, "rev-parse", "HEAD")
+			runGit(t, repo.dir, "branch", "victim")
+			if strings.HasPrefix(destination, "refs/remotes/") {
+				runGit(t, repo.dir, "symbolic-ref", destination, "refs/heads/victim")
+			}
+			runGit(t, repo.dir, "config", "--replace-all", "remote.origin.fetch", "+refs/heads/main:refs/remotes/origin/main")
+			runGit(t, repo.dir, "config", "--add", "remote.origin.fetch", "+refs/heads/stack/one:"+destination)
+			other := cloneConfiguredRepo(t, remote, "stack/one")
+			updated := commitFile(t, other, "one.txt", "updated\n", "Remote update")
+			runGit(t, other, "push", "origin", "stack/one")
+			expectGrapheneOK(t, repo, "sync", "--dry-run")
+			want := old
+			if strings.HasPrefix(destination, "refs/remotes/") {
+				want = updated
+			}
+			if got := runGit(t, repo.dir, "rev-parse", destination); got != want {
+				t.Fatalf("fetch destination = %s, want %s", got, want)
+			}
+			if got := runGit(t, repo.dir, "rev-parse", "victim"); got != old {
+				t.Fatalf("fetch moved local branch to %s", got)
+			}
+		})
+	}
+}
+
 func TestSyncFetchesOncePerRemote(t *testing.T) {
 	for _, separateRemote := range []bool{false, true} {
 		for _, dryRun := range []bool{false, true} {
