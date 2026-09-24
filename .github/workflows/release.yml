@@ -188,7 +188,6 @@ jobs:
             echo "Linux release asset is dynamically linked; rebuild with CGO_ENABLED=0." >&2
             exit 1
           fi
-          shasum -a 256 "dist/$asset_name" > "dist/$asset_name.sha256"
 
       - name: Upload release assets
         env:
