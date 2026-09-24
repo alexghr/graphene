@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -69,13 +70,21 @@ func (g Git) captureSnapshotWorktree(snapshot *operationSnapshot) error {
 	if err != nil {
 		return err
 	}
-	if len(paths) > 0 {
+	// Updating tracked files separately avoids Git rejecting tracked paths
+	// beneath ignored directories. Only nonignored untracked files are added.
+	for _, batch := range []struct {
+		mode  string
+		paths []string
+	}{{"-u", paths.tracked}, {"-A", paths.untracked}} {
+		if len(batch.paths) == 0 {
+			continue
+		}
 		var input bytes.Buffer
-		for _, path := range paths {
+		for _, path := range batch.paths {
 			input.WriteString(":(top,literal)" + path)
 			input.WriteByte(0)
 		}
-		if _, err := private.outputWithInput(&input, "add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"); err != nil {
+		if _, err := private.outputWithInput(&input, "add", batch.mode, "--pathspec-from-file=-", "--pathspec-file-nul"); err != nil {
 			return err
 		}
 	}
@@ -104,7 +113,12 @@ func (g Git) requireSnapshotIndex() error {
 	return err
 }
 
-func (g Git) snapshotPaths() ([]string, error) {
+type snapshotWorktreePaths struct {
+	tracked   []string
+	untracked []string
+}
+
+func (g Git) snapshotPaths() (*snapshotWorktreePaths, error) {
 	root, err := g.Output("rev-parse", "--show-toplevel")
 	if err != nil {
 		return nil, err
@@ -121,7 +135,7 @@ func (g Git) snapshotPaths() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	var paths []string
+	paths := &snapshotWorktreePaths{}
 	for file := range bytes.SplitSeq(files, []byte{0}) {
 		if len(file) == 0 {
 			continue
@@ -147,7 +161,7 @@ func (g Git) snapshotPaths() ([]string, error) {
 			return nil, fmt.Errorf("cannot snapshot %q: unsupported index flag %q", path, file[:1])
 		}
 		if fields[1] != "160000" {
-			paths = append(paths, string(path))
+			paths.tracked = append(paths.tracked, string(path))
 		}
 	}
 	untracked, err := g.OutputBytes("ls-files", "--others", "--exclude-standard", "-z")
@@ -157,7 +171,7 @@ func (g Git) snapshotPaths() ([]string, error) {
 	for path := range strings.SplitSeq(string(untracked), "\x00") {
 		// Git lists nested repositories as directories, including unborn repos.
 		if path != "" && !strings.HasSuffix(path, "/") {
-			paths = append(paths, path)
+			paths.untracked = append(paths.untracked, path)
 		}
 	}
 	repositories, err := g.nestedRepositories("")
@@ -165,7 +179,7 @@ func (g Git) snapshotPaths() ([]string, error) {
 		return nil, err
 	}
 	var input bytes.Buffer
-	for _, path := range paths {
+	for _, path := range slices.Concat(paths.tracked, paths.untracked) {
 		for repository := range repositories {
 			if pathsOverlap(path, repository) {
 				return nil, nestedRepositoryCollision(repository, path)

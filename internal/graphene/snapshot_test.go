@@ -140,6 +140,39 @@ func TestSnapshotRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSnapshotTrackedFileInIgnoredDirectory(t *testing.T) {
+	t.Parallel()
+	repo := newTestRepo(t)
+	tracked := "spartan/scripts/logs/.gitignore"
+	writeFile(t, repo.dir, "spartan/.gitignore", "scripts/logs\n")
+	writeFile(t, repo.dir, tracked, "*\n!.gitignore\n")
+	runGit(t, repo.dir, "add", "-f", "spartan/.gitignore", tracked)
+	runGit(t, repo.dir, "commit", "-m", "Track placeholder in ignored directory")
+	writeFile(t, repo.dir, tracked, "*\n!.gitignore\n# staged\n")
+	runGit(t, repo.dir, "add", "-u")
+	writeFile(t, repo.dir, tracked, "*\n!.gitignore\n# unstaged\n")
+	writeFile(t, repo.dir, "spartan/scripts/logs/output.log", "ignored\n")
+	writeFile(t, repo.dir, "untracked.txt", "untracked\n")
+	before := runGit(t, repo.dir, "status", "--porcelain")
+	id := captureTestSnapshot(t, repo.dir, true)
+	snapshot, err := (Git{Dir: repo.dir}).readSnapshot(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := runGit(t, repo.dir, "show", snapshot.WorktreeTree+":"+tracked); got != "*\n!.gitignore\n# unstaged" {
+		t.Fatalf("snapshot content = %q", got)
+	}
+	if got := runGit(t, repo.dir, "show", snapshot.IndexTree+":"+tracked); got != "*\n!.gitignore\n# staged" {
+		t.Fatalf("snapshot staged content = %q", got)
+	}
+	if got := runGit(t, repo.dir, "ls-tree", "-r", "--name-only", snapshot.WorktreeTree); strings.Contains(got, "output.log") || !strings.Contains(got, "untracked.txt") {
+		t.Fatalf("incorrect snapshot files: %s", got)
+	}
+	if got := runGit(t, repo.dir, "status", "--porcelain"); got != before {
+		t.Fatalf("snapshot changed staging: %s", got)
+	}
+}
+
 func TestSnapshotRefTransactionIsAtomic(t *testing.T) {
 	t.Parallel()
 	repo := newTestRepo(t)
