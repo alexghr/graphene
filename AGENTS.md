@@ -38,3 +38,12 @@ Graphene is a small Go CLI for managing stacked PR branches.
 - Test important branch, state, rebase, push, and URL behavior.
 - Use Git-backed integration tests when behavior depends on real Git semantics.
 - Use small unit tests for pure helpers such as parsing, state transforms, slugs, graph rendering, and PR URLs.
+
+## README
+
+- Write for CLI users: explain when to use a command, show a practical example, and describe the outcome or constraints they need to know.
+- Add README content only when it helps users understand or use Graphene. Not every implementation change needs a README update.
+- Keep implementation details, state formats, internal algorithms, and recovery contracts in `docs/` or code rather than the README.
+- Update the relevant existing section instead of appending a development history or duplicating guidance.
+- Match the surrounding Markdown: keep each prose paragraph on one source line, separate paragraphs with blank lines, and follow existing heading and code-fence conventions.
+- Check command examples and behavior claims against the current CLI; remove outdated claims when editing a section.
