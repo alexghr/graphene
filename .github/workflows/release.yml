@@ -55,6 +55,17 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
 
+      - name: Cache Nix store
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7.0.2
+        with:
+          primary-key: nix-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.nix', 'devenv.lock', 'devenv.yaml', 'devenv', 'shell', '.github/workflows/ci.yml') }}
+          restore-prefixes-first-match: nix-v2-${{ runner.os }}-${{ runner.arch }}-
+          paths: ~/.cache/nix
+
+      - uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71 # v17
+        with:
+          name: devenv
+
       - name: Update release metadata
         env:
           VERSION: ${{ steps.version.outputs.version }}
@@ -147,6 +158,17 @@ jobs:
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
+
+      - name: Cache Nix store
+        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7.0.2
+        with:
+          primary-key: nix-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.nix', 'devenv.lock', 'devenv.yaml', 'devenv', 'shell', '.github/workflows/ci.yml') }}
+          restore-prefixes-first-match: nix-v2-${{ runner.os }}-${{ runner.arch }}-
+          paths: ~/.cache/nix
+
+      - uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71 # v17
+        with:
+          name: devenv
 
       - name: Build package
         id: build
