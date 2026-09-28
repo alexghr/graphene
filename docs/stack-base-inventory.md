@@ -1,0 +1,32 @@
+# Stack base inventory
+
+This inventory records the implementation before the persisted-boundary refactor. The intended replacement is described in [branch-boundaries.md](branch-boundaries.md). It is an internal baseline, not a command usage guide.
+
+Graphene uses three distinct concepts: a **logical base** is a branch name in stack metadata, a **commit boundary** separates a branch's changes from its ancestry, and a **target tip** is the commit onto which changes are rebased or reset.
+
+| Command | Base selection and resolution | Source |
+| --- | --- | --- |
+| `new` | Records the current branch as parent and commits on HEAD. An explicit `--base`/`--parent` must point to HEAD, or its configured remote-tracking upstream must point to HEAD while the local base is an ancestor. Does not fetch. | [newBranch, newBaseMatchesHead](../internal/graphene/commands.go) |
+| `new --reuse-current` | Uses the explicit base, or infers a unique other local branch pointing to HEAD. Otherwise infers a unique local branch whose remote-tracking upstream points to HEAD and whose local tip is an ancestor. | [inferReuseCurrentBase](../internal/graphene/commands.go) |
+| `track` | User supplies the parent. Uses its literal local tip as boundary; requires ancestry and exactly one commit in `base..branch`. Does not fetch or adjust for upstream. | [validateTrackBranchShape](../internal/graphene/commands.go) |
+| `import` | User supplies the local base. Requires its local tip to be an ancestor of HEAD; imports first-parent commits in `refs/heads/<base>..HEAD` and validates one-commit steps. | [importStack, importCommits, validateImportHistory](../internal/graphene/commands.go) |
+| `split` | Finds the logical parent with `BaseBranch`, then uses that branch's current tip directly for commit counting and `reset -N`. Saves its name as `OriginalBase`; `new` during split counts against that name again. | [split, newDuringSplit](../internal/graphene/commands.go) |
+| `squash` | Follows the dependency path and selects the preceding branch or visible root as logical base. Uses that branch's current local tip for commit counting and soft reset. | [squashRange, validateSquashShape, squash](../internal/graphene/commands.go) |
+| `restack <base>` | Captures the explicit local target tip. Old logical parents come from state. Tracked parents use saved tips with ancestry validation; untracked roots use `restackRootBoundary`. `--fetch` fetches the current branch, not the requested target base. | [restack, restackRootBoundary](../internal/graphene/restack.go) |
+| `sync` | Finds the root from the dependency path and its visible parent; from an untracked base, selects its child stacks. Fetches configured upstream and chooses the newer comparable local/fetched base tip; divergence errors. Root replay boundary is the merge-base of that chosen tip and the old branch tip. Tracked-parent boundaries use saved local tips. | [syncSelectionForCurrent, syncBaseAfterFetch](../internal/graphene/commands.go), [planSnapshotSync](../internal/graphene/sync_recovery.go), [fetchUpstreamWithCache](../internal/graphene/fetch.go) |
+| `amend` | Does not infer a root boundary for the amended commit. Descendant rebases use state predecessor names, saved pre-rewrite predecessor tips as boundaries, and rewritten predecessor branches as targets. Split/squash descendant rewrites also use saved tips. | [amend, splitFinalState, squashFinalState](../internal/graphene/commands.go), [RestackOpsAfterRewrites](../internal/graphene/state.go) |
+| `continue`, `abort` | Reuse pending plans and captured refs rather than infer a new root. Snapshot recovery uses captured `BaseHead` as root target and rejects moved base refs when continuing. | [checkRebaseRefs, runSnapshotRebases](../internal/graphene/rebase_recovery.go), [continueRebase, abortRebase](../internal/graphene/commands.go) |
+| `graph`, `graph --stack` | Logical names only: state graph roots and edges; focused graph uses the visible path and its first branch's `BaseBranch`. No Git ancestry calculation. | [RenderGraph, RenderCurrentStackGraph](../internal/graphene/graph.go) |
+| `go` | Logical names only: state graph determines parents, bottoms, children, and leaves, then the command switches branches. | [goTarget](../internal/graphene/go.go) |
+| `delete`, `delete --stack` | Logical names only: `BaseBranch` chooses where to switch before deletion. No historical boundary inference. | [deleteBranch, deleteBranchStack](../internal/graphene/commands.go) |
+| `send`, `sendf` | State dependency paths select branches; `BaseBranch` supplies PR URL bases. Force-push checks compare patches against branch tips without inferring a root boundary. | [sendBranches, validateForcePushPreservesRemoteDescendantPatches](../internal/graphene/commands.go), [PullRequestURLs](../internal/graphene/pull_request.go) |
+
+Shared metadata helpers are [BranchesThroughCurrent and BaseBranch](../internal/graphene/state.go), and [newStackGraph](../internal/graphene/stack_graph.go). They determine branch relationships, not historical commit boundaries. `restackRootBoundary` starts with the local-base merge-base and can advance it using the configured remote-tracking upstream's merge-base; it does not fetch.
+
+## Problems motivating the refactor
+
+- **Split and squash use the moving local base tip.** A stale local base can make their counts include upstream commits. A base that advanced on a divergent path can leave the count at one while the reset introduces reversions of unrelated base changes.
+- **Sync can succeed while leaving local main behind.** [startSnapshotSync](../internal/graphene/sync_recovery.go) leaves the base pointer unchanged when another worktree has it checked out, while rebasing the stack onto the fetched target. Later commands using the literal local base can therefore still miscount.
+- **Root boundary policies differ.** Squash and split use local tips; restack uses local/upstream merge-bases; sync uses the merge-base with its chosen fetched/local target. Rewritten root history can produce different results across commands.
+- **Track and import explicitly use local tips.** Their input contracts differ from discovering the historical boundary of an already tracked stack; changing them requires a separate behavior decision.
+- Graph, navigation, deletion destinations, and PR URL bases need logical branch names, independently of commit-boundary resolution.

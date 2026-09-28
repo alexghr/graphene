@@ -25,10 +25,11 @@ const (
 )
 
 type stateFile struct {
-	Version   int      `json:"version"`
-	Stacks    []Stack  `json:"stacks"`
-	Pending   *Pending `json:"pending,omitempty"`
-	Migration string   `json:"migration,omitempty"`
+	Version    int               `json:"version"`
+	Stacks     []Stack           `json:"stacks"`
+	Boundaries map[string]string `json:"boundaries,omitempty"`
+	Pending    *Pending          `json:"pending,omitempty"`
+	Migration  string            `json:"migration,omitempty"`
 }
 
 func (g Git) GrapheneDir() (string, error) {
@@ -138,22 +139,24 @@ func (g Git) stateFilePath() (string, error) {
 }
 
 func newStateFile(state State, migration string) stateFile {
-	stacks := cloneStacks(state.Stacks)
-	if stacks == nil {
-		stacks = []Stack{}
+	cloned := cloneStackState(state)
+	if cloned.Stacks == nil {
+		cloned.Stacks = []Stack{}
 	}
 	return stateFile{
-		Version:   stateFileVersion,
-		Stacks:    stacks,
-		Pending:   state.Pending,
-		Migration: migration,
+		Version:    stateFileVersion,
+		Stacks:     cloned.Stacks,
+		Boundaries: cloned.Boundaries,
+		Pending:    state.Pending,
+		Migration:  migration,
 	}
 }
 
 func (f stateFile) state() State {
 	return State{
-		Stacks:  f.Stacks,
-		Pending: f.Pending,
+		Stacks:     f.Stacks,
+		Boundaries: f.Boundaries,
+		Pending:    f.Pending,
 	}
 }
 

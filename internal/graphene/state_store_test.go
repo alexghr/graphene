@@ -49,8 +49,9 @@ func TestWriteStateMigratesLegacyConfigAtomically(t *testing.T) {
 	runGit(t, repo.dir, "config", "--local", stateConfigKey, string(raw))
 
 	want := State{
-		Stacks:  []Stack{{Base: "main", Branches: []string{"stack/new"}}},
-		Pending: &Pending{Operation: "restack", Branch: "stack/new", OriginalHead: strings.Repeat("a", 40)},
+		Stacks:     []Stack{{Base: "main", Branches: []string{"stack/new"}}},
+		Boundaries: map[string]string{"stack/new": strings.Repeat("b", 40)},
+		Pending:    &Pending{Operation: "restack", Branch: "stack/new", OriginalHead: strings.Repeat("a", 40)},
 	}
 	git := Git{Dir: repo.dir}
 	if err := git.WriteState(want); err != nil {

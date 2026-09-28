@@ -2,12 +2,14 @@ package graphene
 
 import (
 	"fmt"
+	"maps"
 	"slices"
 )
 
 type State struct {
-	Stacks  []Stack  `json:"stacks,omitempty"`
-	Pending *Pending `json:"pending,omitempty"`
+	Stacks     []Stack           `json:"stacks,omitempty"`
+	Boundaries map[string]string `json:"boundaries,omitempty"`
+	Pending    *Pending          `json:"pending,omitempty"`
 }
 
 type Stack struct {
@@ -66,6 +68,23 @@ func cloneStacks(stacks []Stack) []Stack {
 		}
 	}
 	return cloned
+}
+
+func cloneStackState(s State) State {
+	return State{Stacks: cloneStacks(s.Stacks), Boundaries: maps.Clone(s.Boundaries)}
+}
+
+func (s *State) pruneBoundaries() {
+	boundaries := maps.Clone(s.Boundaries)
+	for branch := range boundaries {
+		if !s.ContainsBranch(branch) {
+			delete(boundaries, branch)
+		}
+	}
+	if len(boundaries) == 0 {
+		boundaries = nil
+	}
+	s.Boundaries = boundaries
 }
 
 func (s State) BranchLocation(branch string) (BranchLocation, bool) {
@@ -129,10 +148,8 @@ func TrackBranch(s State, base, branch string) (State, error) {
 		return s, fmt.Errorf("cannot track branch %q onto descendant %q", branch, base)
 	}
 
-	next := State{
-		Stacks:  cloneStacks(s.Stacks),
-		Pending: s.Pending,
-	}
+	next := cloneStackState(s)
+	next.Pending = s.Pending
 
 	childIndex := -1
 	for i, stack := range next.Stacks {
@@ -328,6 +345,7 @@ func RemoveBranches(s State, branches []string) State {
 		}
 	}
 	s.Stacks = stacks
+	s.pruneBoundaries()
 	return s
 }
 
@@ -360,6 +378,7 @@ func RemoveBranchesWithBase(s State, branches []string, replacementBase string) 
 		}
 	}
 	s.Stacks = stacks
+	s.pruneBoundaries()
 	return s
 }
 
@@ -372,11 +391,13 @@ func RemoveStackThroughBranch(s State, branch string) (State, bool) {
 	stack := s.Stacks[loc.StackIndex]
 	if loc.BranchIndex == len(stack.Branches)-1 {
 		s.Stacks = append(s.Stacks[:loc.StackIndex], s.Stacks[loc.StackIndex+1:]...)
+		s.pruneBoundaries()
 		return s, true
 	}
 
 	branches := append([]string(nil), stack.Branches[loc.BranchIndex+1:]...)
 	s.Stacks[loc.StackIndex] = Stack{Base: branch, Branches: branches}
+	s.pruneBoundaries()
 	return s, true
 }
 
@@ -389,6 +410,7 @@ func TruncateStackAfterBranch(s State, branch string) (State, bool) {
 	stack := s.Stacks[loc.StackIndex]
 	branches := append([]string(nil), stack.Branches[:loc.BranchIndex+1]...)
 	s.Stacks[loc.StackIndex] = Stack{Base: stack.Base, Branches: branches}
+	s.pruneBoundaries()
 	return s, true
 }
 
