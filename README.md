@@ -140,6 +140,8 @@ git checkout feature/multi-commit
 gn import main
 ```
 
+Import keeps your commits unchanged and excludes commits already in the base's known upstream history, even when the local base is behind in another worktree. It does not fetch; run `git fetch` first if you need the latest upstream state.
+
 Run `gn help` or `gn help <command>` for full command details.
 
 ## Aliases

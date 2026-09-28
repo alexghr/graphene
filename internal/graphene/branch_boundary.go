@@ -40,11 +40,19 @@ func (a *App) resolveBranchBoundary(state State, branch string, refs map[string]
 	candidates := []string{refs[parent]}
 	if !state.ContainsBranch(parent) {
 		var err error
-		candidates, err = a.legacyRootBoundaries(parent, refs[parent], head)
+		candidates, err = a.rootBoundaryCandidates(parent, refs[parent], head)
 		if err != nil {
 			return "", err
 		}
 	}
+	evidence, err := a.inspectBoundaryCandidates(candidates, head)
+	if err != nil {
+		return "", err
+	}
+	return selectLegacyBoundary(branch, evidence)
+}
+
+func (a *App) inspectBoundaryCandidates(candidates []string, head string) ([]boundaryEvidence, error) {
 	seen := map[string]bool{}
 	var evidence []boundaryEvidence
 	for _, candidate := range candidates {
@@ -54,18 +62,18 @@ func (a *App) resolveBranchBoundary(state State, branch string, refs map[string]
 		seen[candidate] = true
 		ancestor, err := a.isAncestor(candidate, head)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 		if !ancestor {
 			continue
 		}
 		count, err := a.commitCount(candidate, head)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 		evidence = append(evidence, boundaryEvidence{Commit: candidate, Commits: count})
 	}
-	return selectLegacyBoundary(branch, evidence)
+	return evidence, nil
 }
 
 func isFullCommitID(id string) bool {
@@ -94,7 +102,7 @@ func selectLegacyBoundary(branch string, candidates []boundaryEvidence) (string,
 	return boundary, nil
 }
 
-func (a *App) legacyRootBoundaries(base, baseHead, branchHead string) ([]string, error) {
+func (a *App) rootBoundaryCandidates(base, baseHead, branchHead string) ([]string, error) {
 	references := []struct{ name, head string }{{"refs/heads/" + base, baseHead}}
 	upstream, err := a.git.Output("for-each-ref", "--format=%(upstream)", "refs/heads/"+base)
 	if err != nil {

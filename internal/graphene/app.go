@@ -389,7 +389,9 @@ options:
       --base <base>    alias for --parent`,
 		"import": `usage: graphene import <base>
 
-Create or reuse one branch per commit from the local base branch to HEAD, then record the path as a Graphene stack.
+Create or reuse one branch per feature commit above the base, then record the path as a Graphene stack.
+
+For an untracked base such as main, exclude commits already in its known local or upstream history, even when the local base has moved or is behind in another worktree. For a tracked parent, import from its local tip. Import does not fetch or move the base; run git fetch first if you need the latest upstream state.
 
 Graphene reuses the current branch for HEAD. Intermediate commits reuse a single existing local branch when one points at that commit; otherwise Graphene creates a branch from the commit subject using branchPrefix.`,
 		"sync": `usage: graphene sync [-a|--all] [--dry-run] [--force] [--assume-merged] [--accept-risk]

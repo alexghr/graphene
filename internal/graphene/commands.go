@@ -1601,22 +1601,24 @@ func (a *App) importStack(args []string) error {
 	if !baseExists {
 		return fmt.Errorf("base branch %q does not exist", base)
 	}
-
-	baseRef := "refs/heads/" + base
-	ancestor, err := a.isAncestor(baseRef, "HEAD")
+	baseHead, err := a.git.Output("rev-parse", "--verify", "refs/heads/"+base+"^{commit}")
 	if err != nil {
 		return err
 	}
-	if !ancestor {
-		return fmt.Errorf("base branch %q is not an ancestor of HEAD", base)
+	head, err := a.git.Head()
+	if err != nil {
+		return err
 	}
-
-	commits, err := a.importCommits(base)
+	baseRef, err := a.resolveImportBoundary(state, base, baseHead, head)
+	if err != nil {
+		return err
+	}
+	commits, err := a.importCommits(baseRef, head)
 	if err != nil {
 		return err
 	}
 	if len(commits) == 0 {
-		return fmt.Errorf("base branch %q already points to HEAD", base)
+		return fmt.Errorf("no commits to import beyond the known history of %q", base)
 	}
 	if err := a.validateImportHistory(baseRef, commits); err != nil {
 		return err
@@ -1653,15 +1655,15 @@ func (a *App) importStack(args []string) error {
 		created = append(created, branch.Branch)
 	}
 
-	if err := a.validateImportedBranches(base, branches); err != nil {
+	if err := a.validateImportedBranches(branches); err != nil {
 		a.cleanupCreatedBranches(created)
 		return err
 	}
 	return a.git.WriteState(nextState)
 }
 
-func (a *App) importCommits(base string) ([]string, error) {
-	out, err := a.git.Output("rev-list", "--reverse", "--first-parent", "refs/heads/"+base+"..HEAD")
+func (a *App) importCommits(baseRef, headRef string) ([]string, error) {
+	out, err := a.git.Output("rev-list", "--reverse", "--first-parent", baseRef+".."+headRef)
 	if err != nil {
 		return nil, err
 	}
@@ -1720,15 +1722,13 @@ func (a *App) importBranchName(state State, current string, cfg Config, commit s
 	sort.Strings(branches)
 
 	if head {
-		for _, branch := range branches {
-			if branch != current {
-				continue
-			}
-			if StateContainsName(state, current) {
-				return "", false, fmt.Errorf("current branch %q is already recorded in graphene state", current)
-			}
-			return current, false, nil
+		if StateContainsName(state, current) {
+			return "", false, fmt.Errorf("current branch %q is already recorded in graphene state", current)
 		}
+		if !slices.Contains(branches, current) {
+			return "", false, fmt.Errorf("branch %q changed while preparing import; retry", current)
+		}
+		return current, false, nil
 	}
 
 	var reusable []string
@@ -1756,13 +1756,15 @@ func (a *App) importBranchName(state State, current string, cfg Config, commit s
 	return branch, true, nil
 }
 
-func (a *App) validateImportedBranches(base string, branches []importBranch) error {
-	parent := base
+func (a *App) validateImportedBranches(branches []importBranch) error {
 	for _, branch := range branches {
-		if err := a.validateTrackBranch(parent, branch.Branch); err != nil {
+		ref, err := a.git.Output("rev-parse", "--verify", "refs/heads/"+branch.Branch+"^{commit}")
+		if err != nil {
 			return err
 		}
-		parent = branch.Branch
+		if ref != branch.Commit {
+			return fmt.Errorf("branch %q changed while preparing import; retry", branch.Branch)
+		}
 	}
 	return nil
 }

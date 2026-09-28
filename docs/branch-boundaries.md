@@ -17,7 +17,8 @@ Persist the historical boundary for each tracked branch in Graphene state. Resol
 | `split` | Saved boundary of the selected branch. | Keep the command. Reset to the frozen boundary, create the split parts, record their boundaries, and restack affected descendants. |
 | `sync` | Saved boundaries of affected branches. | Fetch remote state and rebase surviving branches onto the fetched base commit and their rewritten parents. Retain existing merged-branch handling and recovery guarantees. A rewritten remote base must not prevent syncing when the saved source boundaries remain valid. |
 | `restack <base>` | Saved boundaries of affected branches. | Rebase onto the explicitly selected local destination tip and rewritten parents. With `--fetch`, fetch the destination branch's upstream and use its fetched commit instead. |
-| `track`, `import` | Boundaries established by their explicit local-base contracts. | Record the established boundaries when recording branches. |
+| `track` | Boundary established by its explicit local-base contract. | Record the established boundary when recording the branch. |
+| `import <base>` | Historical fork with an untracked base's known local/upstream history; captured local tip for a tracked parent. | Import only the feature range, preserve the existing commits, and record each imported branch's boundary. The range may contain multiple commits; do not apply the legacy resolver's one-commit requirement to the whole import. |
 | `amend` | Preserve the amended branch's boundary. | Update boundaries of descendants that are rebased onto the rewritten parent. |
 | `continue`, `abort` | Frozen pending-operation data. | Continue without re-inferring boundaries; abort restores the original boundary metadata with the refs and topology. |
 
@@ -37,6 +38,16 @@ The fetched remote base commit is the sync destination even if the local base is
 
 Restack's default destination remains local. Change `restack --fetch <base>` to fetch the destination branch's configured upstream and rebase onto that fetched commit, instead of fetching and fast-forwarding the current stack branch. Update help, completions where applicable, documentation, and tests to reflect this intentional behavior change; do not add a separate `--fetch-base` option.
 
+## Import range investigation
+
+An additional report from `aztec-labs-eng/aztec-node` showed `import main` creating stack branches for dozens of upstream commits. The reporter observed equal `main` and `origin/main` IDs afterwards, but their values at import time are unknown. Import does not move either existing base ref. The previous implementation imported every commit in local `main..HEAD`. A temporary-repository reproduction confirmed that when `main` is behind cached `origin/main`, this includes upstream commits as well as the user's changes. When both base refs point to the feature commit's direct parent, the same reproduction imports only that feature commit. These establish the stale-base failure mode, not the cause of the reported incident; equal base IDs alone do not establish their relationship to the feature tip.
+
+Follow-up diagnostics show `main`, `origin/main`, `refs/graphene/fetch/main`, and `HEAD^` all at `8cd490c7a76ea4cc055e5d987d1b07a8c62cac6c`, with `HEAD` at `c92c0c9cfe4e5960bf0b9c6c6e5db9d679627c5d` and exactly one commit in `main..HEAD`. Neither a stale visible base nor a newer private fetched base explains the checkout in that state. The reporter confirmed the long graph appeared after import and also used `forget`; the ref values at import time remain unresolved. Forget removes tracking, not Git branches or commits. Treat this as an import report, not merely a graph-display issue. In particular, importing a one-commit range after forgetting a stack must produce a single tracked branch even when old branch refs remain. Do not infer the user's installed version or local history from the remote repository alone.
+
+The checkout is a linked worktree, so another worktree may have moved the shared base refs between import and the follow-up diagnostics. The regression uses a linked feature worktree with a stale local main, imports multiple feature commits, then forgets the stack and advances main from the other worktree. Reimport must track only the remaining feature commit while preserving leftover refs.
+
+Import now reuses shared ancestry collection and selects the candidate leaving the fewest feature commits, rejecting a tie between distinct closest candidates. This differs from legacy migration, which requires exactly one branch commit. A tracked parent remains an explicit local-tip boundary. Import freezes the chosen boundary and feature tip for enumeration and history validation, then checks that created or reused branches still point to their planned commits. It does not reread a moving base to validate the completed import. Import creates branch refs and tracking metadata without rewriting commits; recording and maintaining persisted boundaries through all commands remains a subsequent step.
+
 ## State transitions and migration
 
 Record new boundaries at branch creation or import, and update them when a rewrite succeeds. Removing a tracked branch removes its boundary record. Reparenting, squash, split, and descendant rewrites must update topology and boundaries together.
@@ -52,7 +63,7 @@ For legacy state, a tracked parent supplies its captured tip. An untracked root 
 ## Implementation order
 
 1. Add boundary metadata, a shared resolver, and migration tests. Cover advanced or stale local bases, rewritten upstream history, and invalid or ambiguous saved boundaries.
-2. Record and preserve boundaries through creation, tracking, import, state transformations, and recovery. Test successful rewrites, conflicts, continuation, and abort.
+2. Record and preserve boundaries through creation, tracking, import, state transformations, and recovery. Correct import's feature-range selection when the local base is stale. Test successful rewrites, conflicts, continuation, and abort.
 3. Convert squash and split to use the same frozen boundary for validation and rewriting. Fold the current squash-specific inference into the shared resolver.
 4. Convert sync and restack to use saved source boundaries and explicit destination rules. Test sync after an upstream rewrite and sync with the local base held in another worktree.
 5. Add the agreed needs-sync indication and destination-fetch interface, then update help, completions, README, and the embedded skill.
