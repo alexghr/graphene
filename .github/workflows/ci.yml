@@ -9,7 +9,14 @@ on:
 
 jobs:
   ci:
-    runs-on: ubuntu-26.04
+    name: CI ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner:
+          - ubuntu-26.04
+          - macos-14
+    runs-on: ${{ matrix.runner }}
     env:
       GOCACHE: ${{ github.workspace }}/.cache/go-build
     steps:
@@ -39,10 +46,9 @@ jobs:
         with:
           name: devenv
 
-      - name: Materialize devenv shell
-        run: ./shell true
-
-      - name: Lint, test, and build
+      - name: Lint and test
+        env:
+          NO_BUILD: "1"
         run: ./shell p-ci
 
       - name: Build package
@@ -52,11 +58,12 @@ jobs:
           out_dir="$(nix eval --impure --raw --expr '(builtins.fromJSON (builtins.readFile ./out.json))."outputs.graphene"')"
           echo "out_dir=$out_dir" >> "$GITHUB_OUTPUT"
 
-      - name: Verify Linux binary portability
+      - name: Verify package
         run: |
           binary="${{ steps.build.outputs.out_dir }}/bin/graphene"
+          "$binary" version | grep -Fx "graphene $(cat VERSION)"
           file "$binary"
-          if file "$binary" | grep -q "dynamically linked"; then
+          if [[ "$(uname -s)" == "Linux" ]] && file "$binary" | grep -q "dynamically linked"; then
             echo "Linux binary is dynamically linked; rebuild with CGO_ENABLED=0." >&2
             exit 1
           fi
@@ -64,5 +71,5 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: artifact
+          name: artifact-${{ runner.os }}-${{ runner.arch }}
           path: ${{ steps.build.outputs.out_dir }}/bin/*

@@ -1,7 +1,8 @@
 # Testing
 
-Run the full suite with `./shell p-test`, or lint, test, and build with
-`./shell p-ci`. CI and the production Nix build run all three test layers.
+Run the full suite with `./shell p-test`, or lint, test, and build a local binary with `./shell p-ci`. Set `NO_BUILD=1 ./shell p-ci` to skip the local build, or use `./shell p-build` to build only. CI uses `NO_BUILD=1` to run lint and all three test layers once on Linux and macOS, including the `go mod tidy -diff` lint check, then builds the production Nix package and checks its version. Linux binaries are also checked for dynamic linking.
+
+The production Nix build compiles and packages without running lint or tests. Releases update only `VERSION` before tagging, then build and smoke-test the binaries on Linux and macOS. Release preparation does not install Nix or Go, and releases do not require a successful CI run.
 
 | Layer | Devenv command | Plain Go command |
 | --- | --- | --- |

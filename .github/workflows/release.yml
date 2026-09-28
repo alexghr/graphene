@@ -50,28 +50,11 @@ jobs:
             echo "prerelease=$prerelease"
           } >> "$GITHUB_OUTPUT"
 
-      - uses: cachix/install-nix-action@ab739621df7a23f52766f9ccc97f38da6b7af14f
-        with:
-          extra_nix_config: |
-            experimental-features = nix-command flakes
-
-      - name: Cache Nix store
-        uses: nix-community/cache-nix-action@7df957e333c1e5da7721f60227dbba6d06080569 # v7.0.2
-        with:
-          primary-key: nix-v2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.nix', 'devenv.lock', 'devenv.yaml', 'devenv', 'shell', '.github/workflows/ci.yml') }}
-          restore-prefixes-first-match: nix-v2-${{ runner.os }}-${{ runner.arch }}-
-          paths: ~/.cache/nix
-
-      - uses: cachix/cachix-action@5f2d7c5294214f71b873db4b969586b980625e71 # v17
-        with:
-          name: devenv
-
       - name: Update release metadata
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           printf '%s\n' "$VERSION" > VERSION
-          ./devenv shell --quiet --no-reload -- go mod tidy
 
       - name: Commit version bump
         env:
@@ -81,10 +64,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          git add VERSION go.mod
-          if [ -f go.sum ]; then
-            git add go.sum
-          fi
+          git add VERSION
 
           if git diff --cached --quiet; then
             echo "No release metadata changes to commit."
@@ -178,11 +158,14 @@ jobs:
           echo "out_dir=$out_dir" >> "$GITHUB_OUTPUT"
 
       - name: Prepare release assets
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           mkdir -p dist
           asset_name="graphene-$(uname -s)-$(uname -m)"
           cp "${{ steps.build.outputs.out_dir }}/bin/graphene" "dist/$asset_name"
           chmod +x "dist/$asset_name"
+          "dist/$asset_name" version | grep -Fx "graphene $VERSION"
           file "dist/$asset_name"
           if [[ "$(uname -s)" == "Linux" ]] && file "dist/$asset_name" | grep -q "dynamically linked"; then
             echo "Linux release asset is dynamically linked; rebuild with CGO_ENABLED=0." >&2

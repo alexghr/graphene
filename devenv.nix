@@ -26,6 +26,7 @@ let
         exit 1
       fi
 
+      go mod tidy -diff
       go vet ./...
       staticcheck ./...
       modernize ./...
@@ -54,6 +55,7 @@ in
         packages = [
           pkgs.git
           pkgs.go
+          pkgs.zsh
         ];
         env.GOTOOLCHAIN = "local";
       };
@@ -77,7 +79,9 @@ in
 
         p-lint
         p-test
-        p-build
+        if [[ "''${NO_BUILD:-}" != "1" ]]; then
+          p-build
+        fi
       '';
     };
 
@@ -91,25 +95,13 @@ in
         ldflags = [
           "-X github.com/alexghr/graphene/internal/graphene.Version=${version}"
         ];
-        nativeCheckInputs = [
-          pkgs.git
-          pkgs.zsh
-          lint
-        ];
+        doCheck = false;
         subPackages = [ "cmd/graphene" ];
         postInstall = ''
           install -Dm644 aliases/graphite.gitconfig $out/share/graphene/aliases/graphite.gitconfig
           install -Dm644 internal/graphene/graphene.bash $out/share/bash-completion/completions/graphene
           install -Dm644 internal/graphene/graphene.bash $out/share/bash-completion/completions/gn
           install -Dm644 internal/graphene/_graphene $out/share/zsh/site-functions/_graphene
-        '';
-        checkPhase = ''
-          runHook preCheck
-          ${lint}/bin/graphene-lint
-          go test -parallel 8 -run '^TestUnit' ./internal/...
-          go test -parallel 8 -skip '^TestUnit' ./internal/...
-          go test -count=1 -parallel 8 ./tests/e2e
-          runHook postCheck
         '';
       };
     };
