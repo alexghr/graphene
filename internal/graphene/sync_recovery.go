@@ -1,6 +1,9 @@
 package graphene
 
-import "fmt"
+import (
+	"fmt"
+	"maps"
+)
 
 func (a *App) planSnapshotSync(before, after State, selection syncSelection, refs map[string]string, baseHead string) ([]RebaseOp, error) {
 	seen := map[string]bool{}
@@ -188,6 +191,7 @@ func (a *App) finishSnapshotSync(state State) error {
 		}
 	}
 	state.Stacks = p.NextStacks
+	state.Boundaries = maps.Clone(p.NextBoundaries)
 	state.Pending = nil
 	if err := a.git.WriteState(state); err != nil {
 		return err

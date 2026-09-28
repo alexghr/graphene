@@ -2,6 +2,7 @@ package graphene
 
 import (
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -212,6 +213,7 @@ func (a *App) runSnapshotRebases(state State) error {
 				return err
 			}
 			state.Stacks = p.NextStacks
+			state.Boundaries = maps.Clone(p.NextBoundaries)
 			state.Pending = nil
 			if err := a.git.WriteState(state); err != nil {
 				return err
@@ -351,11 +353,11 @@ func (a *App) abortSnapshotRebases(state State) error {
 			return err
 		}
 	}
-	stacks, err := a.git.restoreSnapshot(r.Snapshot, r.Expected)
+	restored, err := a.git.restoreSnapshot(r.Snapshot, r.Expected)
 	if err != nil {
 		return err
 	}
-	state.Stacks = stacks
+	state = restored
 	state.Pending = nil
 	if err := a.git.WriteState(state); err != nil {
 		return err

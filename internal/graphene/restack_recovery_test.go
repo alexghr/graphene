@@ -21,6 +21,13 @@ func restackConflict(t *testing.T) (testRepo, State, string) {
 	runGit(t, repo.dir, "config", "rebase.updateRefs", "true")
 	writeFile(t, repo.dir, "notes", "untracked notes\n")
 	state := readState(t, repo.dir)
+	state.Boundaries = map[string]string{}
+	for _, branch := range []string{"stack/one", "stack/two", "stack/three"} {
+		state.Boundaries[branch] = runGit(t, repo.dir, "rev-parse", branch+"^")
+	}
+	if err := (Git{Dir: repo.dir}).WriteState(state); err != nil {
+		t.Fatal(err)
+	}
 	refs := runGit(t, repo.dir, "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads")
 	fromSubdir := repo
 	fromSubdir.dir = filepath.Join(repo.dir, "sub")

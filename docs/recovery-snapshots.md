@@ -3,7 +3,10 @@
 Restack and sync use these snapshot and rollback primitives. Other commands still use
 their existing recovery paths.
 
-A snapshot saves local branch tips and Graphene's stack metadata. Operations
+A snapshot saves local branch tips and Graphene's stack metadata, including saved
+historical boundaries. Restoring returns both topology and boundaries together;
+the caller persists them before removing the snapshot. Older snapshots without
+boundaries restore legacy metadata without inferring replacement boundaries. Operations
 that change files can also save the original Git index and a worktree tree.
 Capture uses a private index, leaving the user's staging untouched. Backup refs
 keep the saved commits, trees and blobs reachable through Git garbage collection;
@@ -38,6 +41,12 @@ commands or editors. The caller must establish which branch changes belong to
 its pending operation; the snapshot alone cannot infer that after a crash.
 
 ## Scope
+
+Pending operations retain separate original and planned boundary maps alongside
+their stack topology. Split restores suffix metadata when reattaching the suffix;
+squash and deletion prune metadata for removed branches. Abort restores the
+original maps. These fields preserve metadata through recovery; recording new
+boundaries and advancing them during rewrites is a separate command integration.
 
 Restack and sync persist a ready, applying, conflict or aborting phase. Each
 fast-forward or rebase starts with an applying record and ends with a saved result.

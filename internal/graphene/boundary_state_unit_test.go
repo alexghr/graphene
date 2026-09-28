@@ -13,6 +13,13 @@ func TestUnitBoundaryStateRoundTrip(t *testing.T) {
 	state := State{
 		Stacks:     []Stack{{Base: "main", Branches: []string{"one"}}},
 		Boundaries: map[string]string{"one": strings.Repeat("a", 40)},
+		Pending: &Pending{
+			Operation:          "squash",
+			OriginalStacks:     []Stack{{Base: "main", Branches: []string{"one", "two"}}},
+			OriginalBoundaries: map[string]string{"one": strings.Repeat("a", 40), "two": strings.Repeat("b", 40)},
+			NextStacks:         []Stack{{Base: "main", Branches: []string{"one"}}},
+			NextBoundaries:     map[string]string{"one": strings.Repeat("a", 40)},
+		},
 	}
 	data, err := json.Marshal(newStateFile(state, ""))
 	if err != nil {
@@ -104,5 +111,51 @@ func TestUnitTrackBranchPreservesIndependentBoundaryMaps(t *testing.T) {
 	tracked.Boundaries["two"] = "rewritten-one"
 	if original.Boundaries["two"] != "one-commit" {
 		t.Fatal("changing tracked state modified original boundaries")
+	}
+}
+
+func TestUnitSplitPlanRestoresSuffixBoundaries(t *testing.T) {
+	state := State{
+		Stacks:     []Stack{{Base: "main", Branches: []string{"one", "part"}}},
+		Boundaries: map[string]string{"one": "base", "part": "new-one"},
+		Pending: &Pending{
+			Operation: "split", Branch: "one", Branches: []string{"one", "part"}, OriginalHead: "old-one",
+			OriginalStacks:     []Stack{{Base: "main", Branches: []string{"one", "two"}}},
+			OriginalBoundaries: map[string]string{"one": "base", "two": "old-one"},
+		},
+	}
+	next, _, _, _, err := splitFinalState(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"one": "base", "part": "new-one", "two": "old-one"}
+	if !maps.Equal(next.Boundaries, want) {
+		t.Fatalf("boundaries = %v, want %v", next.Boundaries, want)
+	}
+	next.Boundaries["part"] = "changed"
+	next.Boundaries["two"] = "changed"
+	if state.Boundaries["part"] != "new-one" || state.Pending.OriginalBoundaries["two"] != "old-one" {
+		t.Fatal("plan modified the current or original boundary map")
+	}
+}
+
+func TestUnitSquashPlanPrunesRemovedBoundaries(t *testing.T) {
+	state := State{
+		Stacks:     []Stack{{Base: "main", Branches: []string{"one", "two"}}},
+		Boundaries: map[string]string{"one": "base", "two": "one-commit"},
+	}
+	selection, err := squashRange(state, "two", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next, _, err := squashFinalState(state, selection, map[string]string{"one": "one-commit", "two": "two-commit"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !maps.Equal(next.Boundaries, map[string]string{"one": "base"}) {
+		t.Fatalf("boundaries = %v", next.Boundaries)
+	}
+	if state.Boundaries["two"] != "one-commit" {
+		t.Fatal("plan pruned the original boundary map")
 	}
 }

@@ -319,6 +319,13 @@ func TestSplitAbortRestoresOriginalBranchAndState(t *testing.T) {
 	originalCombined := runGit(t, repo.dir, "rev-parse", "stack/combined-change")
 	createStackBranch(t, repo, "after.txt", "after\n", "After")
 	originalState := readState(t, repo.dir)
+	originalState.Boundaries = map[string]string{
+		"stack/combined-change": runGit(t, repo.dir, "rev-parse", "main"),
+		"stack/after":           originalCombined,
+	}
+	if err := (Git{Dir: repo.dir}).WriteState(originalState); err != nil {
+		t.Fatal(err)
+	}
 
 	runGit(t, repo.dir, "checkout", "stack/combined-change")
 	expectGrapheneOK(t, repo, "split")

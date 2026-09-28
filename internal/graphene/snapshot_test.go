@@ -21,13 +21,13 @@ func captureTestSnapshot(t *testing.T, dir string, worktree bool) string {
 	return id
 }
 
-func restoreTestSnapshot(dir, id string, expected map[string]string) ([]Stack, error) {
-	var stacks []Stack
+func restoreTestSnapshot(dir, id string, expected map[string]string) (State, error) {
+	var state State
 	err := (Git{Dir: dir}).WithStateLock(func(g Git) (err error) {
-		stacks, err = g.restoreSnapshot(id, expected)
+		state, err = g.restoreSnapshot(id, expected)
 		return err
 	})
-	return stacks, err
+	return state, err
 }
 
 func TestSnapshotRoundTrip(t *testing.T) {
@@ -38,7 +38,8 @@ func TestSnapshotRoundTrip(t *testing.T) {
 	runGit(t, repo.dir, "branch", "archived")
 	runGit(t, repo.dir, "branch", "unrelated", "main")
 	stacks := []Stack{{Base: "main", Branches: []string{"topic"}}}
-	if err := (Git{Dir: repo.dir}).WriteState(State{Stacks: stacks}); err != nil {
+	saved := State{Stacks: stacks, Boundaries: map[string]string{"topic": runGit(t, repo.dir, "rev-parse", "main")}}
+	if err := (Git{Dir: repo.dir}).WriteState(saved); err != nil {
 		t.Fatal(err)
 	}
 	writeFile(t, repo.dir, "file.txt", "staged\n")
@@ -84,8 +85,8 @@ func TestSnapshotRoundTrip(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !reflect.DeepEqual(restored, stacks) {
-			t.Fatalf("restored stacks = %#v, want %#v", restored, stacks)
+		if !reflect.DeepEqual(restored, saved) {
+			t.Fatalf("restored state = %#v, want %#v", restored, saved)
 		}
 		after, err = os.ReadFile(indexPath)
 		if err != nil || !bytes.Equal(index, after) {

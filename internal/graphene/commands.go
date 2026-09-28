@@ -3,6 +3,7 @@ package graphene
 import (
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -233,20 +234,21 @@ func (a *App) split(args []string) error {
 	originalRefs := a.trackedBranchRefs(state)
 
 	originalStacks := cloneStacks(state.Stacks)
-	nextState, ok := TruncateStackAfterBranch(State{Stacks: cloneStacks(state.Stacks)}, target)
+	nextState, ok := TruncateStackAfterBranch(cloneStackState(state), target)
 	if !ok {
 		return fmt.Errorf("branch %q is not in a graphene stack", target)
 	}
 	pending, err := a.pendingForCurrentWorktree(Pending{
-		Operation:      "split",
-		Branch:         target,
-		ReturnBranch:   current,
-		Top:            originalHead,
-		Branches:       []string{target},
-		OriginalHead:   originalHead,
-		OriginalBase:   base,
-		OriginalRefs:   originalRefs,
-		OriginalStacks: originalStacks,
+		Operation:          "split",
+		Branch:             target,
+		ReturnBranch:       current,
+		Top:                originalHead,
+		Branches:           []string{target},
+		OriginalHead:       originalHead,
+		OriginalBase:       base,
+		OriginalRefs:       originalRefs,
+		OriginalStacks:     originalStacks,
+		OriginalBoundaries: maps.Clone(state.Boundaries),
 	})
 	if err != nil {
 		return err
@@ -262,9 +264,7 @@ func (a *App) split(args []string) error {
 		return err
 	}
 	if err := a.git.Run("reset", "-N", base); err != nil {
-		nextState.Pending = nil
-		nextState.Stacks = state.Stacks
-		_ = a.git.WriteState(nextState)
+		_ = a.git.WriteState(state)
 		return err
 	}
 	return nil
@@ -413,6 +413,7 @@ func (a *App) finishSplit(state State) error {
 	state.Pending.ReturnBranch = current
 	state.Pending.Queue = ops
 	state.Pending.NextStacks = nextState.Stacks
+	state.Pending.NextBoundaries = maps.Clone(nextState.Boundaries)
 	if err := a.git.WriteState(state); err != nil {
 		return err
 	}
@@ -427,7 +428,7 @@ func splitFinalState(state State) (State, []RebaseOp, []string, map[string]bool,
 	target := pending.Branch
 	top := splitTop(pending)
 
-	original := State{Stacks: cloneStacks(pending.OriginalStacks)}
+	original := State{Stacks: cloneStacks(pending.OriginalStacks), Boundaries: maps.Clone(pending.OriginalBoundaries)}
 	loc, ok := original.BranchLocation(target)
 	if !ok {
 		return State{}, nil, nil, nil, fmt.Errorf("branch %q is not in original split state", target)
@@ -435,7 +436,7 @@ func splitFinalState(state State) (State, []RebaseOp, []string, map[string]bool,
 	originalStack := original.Stacks[loc.StackIndex]
 	suffix := append([]string(nil), originalStack.Branches[loc.BranchIndex+1:]...)
 
-	nextState := State{Stacks: cloneStacks(state.Stacks)}
+	nextState := cloneStackState(state)
 	if len(suffix) > 0 {
 		topLoc, ok := nextState.BranchLocation(top)
 		if !ok {
@@ -452,6 +453,15 @@ func splitFinalState(state State) (State, []RebaseOp, []string, map[string]bool,
 	for i, stack := range nextState.Stacks {
 		if stack.Base == target {
 			nextState.Stacks[i].Base = top
+		}
+	}
+
+	for _, branch := range suffix {
+		if boundary, ok := original.Boundaries[branch]; ok {
+			if nextState.Boundaries == nil {
+				nextState.Boundaries = map[string]string{}
+			}
+			nextState.Boundaries[branch] = boundary
 		}
 	}
 
@@ -585,7 +595,7 @@ func (a *App) squash(args []string) error {
 		}
 	}
 	restore := func(cause error) error {
-		if restoreErr := a.restoreOriginalRewrite(State{Stacks: cloneStacks(state.Stacks)}, oldRefs, selection.Bottom, current); restoreErr != nil {
+		if restoreErr := a.restoreOriginalRewrite(cloneStackState(state), oldRefs, selection.Bottom, current); restoreErr != nil {
 			return fmt.Errorf("%w; additionally failed to restore original squash state: %v", cause, restoreErr)
 		}
 		return cause
@@ -611,15 +621,17 @@ func (a *App) squash(args []string) error {
 	}
 
 	pending, err := a.pendingForCurrentWorktree(Pending{
-		Operation:      "squash",
-		Branch:         selection.Bottom,
-		ReturnBranch:   selection.Bottom,
-		Queue:          ops,
-		Top:            selection.Top,
-		Branches:       append([]string(nil), selection.Removed...),
-		NextStacks:     nextState.Stacks,
-		OriginalRefs:   oldRefs,
-		OriginalStacks: cloneStacks(state.Stacks),
+		Operation:          "squash",
+		Branch:             selection.Bottom,
+		ReturnBranch:       selection.Bottom,
+		Queue:              ops,
+		Top:                selection.Top,
+		Branches:           append([]string(nil), selection.Removed...),
+		NextStacks:         nextState.Stacks,
+		NextBoundaries:     maps.Clone(nextState.Boundaries),
+		OriginalRefs:       oldRefs,
+		OriginalStacks:     cloneStacks(state.Stacks),
+		OriginalBoundaries: maps.Clone(state.Boundaries),
 	})
 	if err != nil {
 		return restore(err)
@@ -735,7 +747,7 @@ func (a *App) validateSquashBranchesAvailable(current string, selection squashSe
 }
 
 func squashFinalState(state State, selection squashSelection, oldRefs map[string]string) (State, []RebaseOp, error) {
-	nextState := RemoveBranchesWithBase(State{Stacks: cloneStacks(state.Stacks)}, selection.Removed, selection.Bottom)
+	nextState := RemoveBranchesWithBase(cloneStackState(state), selection.Removed, selection.Bottom)
 	deleted := map[string]bool{}
 	for _, branch := range selection.Removed {
 		deleted[branch] = true
@@ -881,7 +893,7 @@ func (a *App) restoreOriginalRewrite(original State, refs map[string]string, res
 		}
 	}
 
-	restored := State{Stacks: cloneStacks(original.Stacks)}
+	restored := cloneStackState(original)
 	if err := a.git.WriteState(restored); err != nil {
 		return err
 	}
@@ -1272,6 +1284,7 @@ func (a *App) abortSplit(state State, rebaseInProgress bool) error {
 	}
 
 	state.Stacks = cloneStacks(pending.OriginalStacks)
+	state.Boundaries = maps.Clone(pending.OriginalBoundaries)
 	state.Pending = nil
 	if err := a.git.WriteState(state); err != nil {
 		return err
@@ -1298,7 +1311,7 @@ func (a *App) abortSquash(state State, rebaseInProgress bool) error {
 	if returnBranch == "" {
 		returnBranch = pending.ReturnBranch
 	}
-	return a.restoreOriginalRewrite(State{Stacks: cloneStacks(pending.OriginalStacks)}, pending.OriginalRefs, pending.Branch, returnBranch)
+	return a.restoreOriginalRewrite(State{Stacks: cloneStacks(pending.OriginalStacks), Boundaries: maps.Clone(pending.OriginalBoundaries)}, pending.OriginalRefs, pending.Branch, returnBranch)
 }
 
 func (a *App) abortSync(state State, rebaseInProgress bool) error {
@@ -1320,7 +1333,7 @@ func (a *App) abortSync(state State, rebaseInProgress bool) error {
 	if err != nil {
 		return err
 	}
-	original := State{Stacks: cloneStacks(pending.OriginalStacks)}
+	original := State{Stacks: cloneStacks(pending.OriginalStacks), Boundaries: maps.Clone(pending.OriginalBoundaries)}
 	return a.restoreOriginalRewrite(original, pending.OriginalRefs, resetBranch, pending.Branch)
 }
 
@@ -1428,7 +1441,7 @@ func (a *App) deleteBranch(args []string) error {
 	if err := a.git.Run("branch", "-D", branch); err != nil {
 		return err
 	}
-	nextState := RemoveBranches(State{Stacks: cloneStacks(state.Stacks)}, []string{branch})
+	nextState := RemoveBranches(cloneStackState(state), []string{branch})
 	return a.git.WriteState(nextState)
 }
 
@@ -1486,7 +1499,7 @@ func (a *App) deleteBranchStack(branch, current string, state State) error {
 			return err
 		}
 	}
-	nextState := RemoveBranches(State{Stacks: cloneStacks(state.Stacks)}, branches)
+	nextState := RemoveBranches(cloneStackState(state), branches)
 	return a.git.WriteState(nextState)
 }
 
@@ -2046,7 +2059,7 @@ func (a *App) sync(args []string) error {
 	}
 	pending := &Pending{
 		Operation: "sync", Branch: current, ReturnBranch: returnBranch,
-		Queue: ops, Branches: branches, NextStacks: nextState.Stacks, BaseChanges: baseChanges,
+		Queue: ops, Branches: branches, NextStacks: nextState.Stacks, NextBoundaries: maps.Clone(nextState.Boundaries), BaseChanges: baseChanges,
 	}
 	if opts.dryRun {
 		a.printSyncDryRun(fetched, appliedBranches, assumedMergedBranches, baseChanges, ops, returnBranch, baseRef)
@@ -2600,6 +2613,7 @@ func (a *App) finishPendingRebases(state State) error {
 	}
 	if nextStacks != nil {
 		state.Stacks = nextStacks
+		state.Boundaries = maps.Clone(state.Pending.NextBoundaries)
 	}
 	state.Pending = nil
 	if err := a.git.WriteState(state); err != nil {

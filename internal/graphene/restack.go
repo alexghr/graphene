@@ -30,7 +30,7 @@ func (a *App) restack(args []string) error {
 	if !state.ContainsBranch(current) {
 		return fmt.Errorf("branch %q is not in a graphene stack", current)
 	}
-	nextState, _, ok := ReparentBranch(State{Stacks: cloneStacks(state.Stacks)}, current, opts.base)
+	nextState, _, ok := ReparentBranch(cloneStackState(state), current, opts.base)
 	if !ok {
 		return fmt.Errorf("cannot restack %q onto %q", current, opts.base)
 	}
@@ -125,7 +125,7 @@ func (a *App) restack(args []string) error {
 	}
 	p := &Pending{
 		Operation: "restack", Branch: current,
-		ReturnBranch: current, Queue: queue, NextStacks: nextState.Stacks, Recovery: r,
+		ReturnBranch: current, Queue: queue, NextStacks: nextState.Stacks, NextBoundaries: nextState.Boundaries, Recovery: r,
 	}
 	if err := a.preflightRebaseRepositories(p, "HEAD", true); err != nil {
 		return err
