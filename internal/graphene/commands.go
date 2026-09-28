@@ -2034,11 +2034,11 @@ func (a *App) sync(args []string) error {
 	if err != nil {
 		return err
 	}
-	fetched.Updated, err = a.syncBaseAfterFetch(selection.Base, selection.Base+"@{upstream}", fetched.Old, fetched.Updated)
+	advanceBase, err := a.isAncestor(fetched.Old, fetched.Updated)
 	if err != nil {
 		return err
 	}
-	if len(skipped) > 0 && !opts.force && fetched.Old != fetched.Updated {
+	if len(skipped) > 0 && !opts.force && advanceBase && fetched.Old != fetched.Updated {
 		return fmt.Errorf("sync would leave skipped stacks stale because base %q would advance from %s to %s; switch other worktrees away from skipped branches or rerun with --force", selection.Base, shortSyncRef(fetched.Old), shortSyncRef(fetched.Updated))
 	}
 	baseRef := fetched.Updated
@@ -2127,7 +2127,7 @@ func (a *App) sync(args []string) error {
 		a.warnNestedRepositoryRisks(risks)
 		return nil
 	}
-	return a.startSnapshotSync(state, pending, fetched, oldRefs, opts.acceptRisk)
+	return a.startSnapshotSync(state, pending, fetched, oldRefs, opts.acceptRisk, advanceBase)
 }
 
 type syncSkippedPath struct {
@@ -2702,7 +2702,7 @@ func (a *App) printSyncDryRun(base upstreamUpdate, appliedBranches, assumedMerge
 	if base.Old == base.Updated {
 		fmt.Fprintf(a.stdout, "  base: %s is up to date\n", base.Branch)
 	} else {
-		fmt.Fprintf(a.stdout, "  base: %s %s -> %s\n", base.Branch, shortSyncRef(base.Old), shortSyncRef(base.Updated))
+		fmt.Fprintf(a.stdout, "  rebase destination: %s (%s)\n", base.UpstreamName(), shortSyncRef(base.Updated))
 	}
 
 	if len(appliedBranches) == 0 {
@@ -2745,48 +2745,6 @@ func (a *App) printSyncDryRun(base upstreamUpdate, appliedBranches, assumedMerge
 	} else {
 		fmt.Fprintf(a.stdout, "  return: detach at %s\n", shortSyncRef(baseRef))
 	}
-}
-
-func (a *App) currentBranchNeedsFastForward(branch, oldHead, updatedHead string) (bool, error) {
-	upstream := branch + "@{upstream}"
-	if oldHead == updatedHead {
-		return false, nil
-	}
-	ancestor, err := a.isAncestor(updatedHead, oldHead)
-	if err != nil {
-		return false, err
-	}
-	if ancestor {
-		return false, nil
-	}
-	ancestor, err = a.isAncestor(oldHead, updatedHead)
-	if err != nil {
-		return false, err
-	}
-	if !ancestor {
-		return false, fmt.Errorf("current branch %q diverged from upstream %q (local %s, upstream %s); reconcile the branch or rerun without --fetch to restack using local refs only", branch, upstream, shortSyncRef(oldHead), shortSyncRef(updatedHead))
-	}
-	return true, nil
-}
-
-func (a *App) syncBaseAfterFetch(base, upstream, oldBase, updatedBase string) (string, error) {
-	ancestor, err := a.isAncestor(oldBase, updatedBase)
-	if err != nil {
-		return "", err
-	}
-	if ancestor {
-		return updatedBase, nil
-	}
-
-	ancestor, err = a.isAncestor(updatedBase, oldBase)
-	if err != nil {
-		return "", err
-	}
-	if ancestor {
-		return oldBase, nil
-	}
-
-	return "", fmt.Errorf("cannot fast-forward %q to %q; resolve the base branch before updating the stack", base, upstream)
 }
 
 func (a *App) syncUpstreamMissing(branch string, cache *syncFetchCache) (bool, error) {

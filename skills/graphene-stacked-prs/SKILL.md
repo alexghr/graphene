@@ -113,9 +113,9 @@ Move the current branch and its descendants onto a local branch:
 graphene restack <local-base>
 ```
 
-Restack uses local refs by default. Use `graphene restack --fetch <local-base>` only when you also intend to fetch the current branch's upstream before restacking. This fetches the current branch and refreshes its remote-tracking ref; it does not fetch the target base. Diverged upstreams and fetched tips that would introduce extra commits are rejected before local branches change.
+Restack uses the named local branch's tip by default. Use `graphene restack --fetch <local-base>` to fetch that destination's configured upstream and rebase onto the fetched commit. The destination must have an upstream. Its local branch stays in place, even when ahead or diverged; the current stack branch's upstream is not fetched.
 
-Only `sync` and `restack --fetch` fetch Git objects. `track` records an existing branch using local refs and does not advance its parent. Use `sync` to update a stack against its upstream base.
+Only `sync` and `restack --fetch` fetch Git objects. `track` records an existing branch using local refs and does not advance its parent. Use `sync` to update a stack against its fetched upstream base. Local-only base commits are preserved but are not included in the synced stack; a base checked out in another worktree stays in place.
 
 ## Amend A Stacked Branch
 

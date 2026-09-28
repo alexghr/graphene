@@ -119,12 +119,14 @@ Preview the same sync first:
 gn sync -a --dry-run
 ```
 
-Sync only removes branches automatically when their commits are ancestors of the updated base or their patches are already present there. A deleted remote branch is not, by itself, proof that it was merged. If sync reports missing upstreams, preview the explicit assumption and verify every listed PR was merged before running it for real:
+Sync rebases onto the fetched upstream base. It preserves local-only base commits but does not include them in the synced stack. Sync only removes branches automatically when their commits are ancestors of that fetched base or their patches are already present there. A deleted remote branch is not, by itself, proof that it was merged. If sync reports missing upstreams, preview the explicit assumption and verify every listed PR was merged before running it for real:
 
 ```
 gn sync --assume-merged --dry-run
 gn sync --assume-merged
 ```
+
+Move a branch and its descendants onto a local destination with `gn restack main`. To use that destination's latest upstream commit, run `gn restack --fetch main`. The destination must have an upstream configured; its local branch stays in place.
 
 Record an existing one-commit branch on top of a base branch:
 

@@ -47,17 +47,11 @@ func (a *App) restack(args []string) error {
 		Expected: map[string]string{}, AcceptRisk: opts.acceptRisk,
 	}
 	if opts.fetch {
-		fetched, err := a.fetchUpstream(current)
+		fetched, err := a.fetchUpstream(opts.base)
 		if err != nil {
 			return err
 		}
-		advance, err := a.currentBranchNeedsFastForward(current, refs[current], fetched.Updated)
-		if err != nil {
-			return err
-		}
-		if advance {
-			r.FastForward = fetched.Updated
-		}
+		r.BaseHead = fetched.Updated
 	}
 	graph := newStackGraph(nextState)
 	var queue []RebaseOp
@@ -66,21 +60,11 @@ func (a *App) restack(args []string) error {
 		if _, seen := r.Expected[branch]; seen {
 			return fmt.Errorf("branch %q appears more than once in the affected stack", branch)
 		}
-		parent, _ := BaseBranch(state, branch)
 		upstream, err := a.resolveBranchBoundary(state, branch, refs)
 		if err != nil {
 			return err
 		}
 		nextState.setBoundary(branch, upstream)
-		if branch == current && r.FastForward != "" {
-			count, err := a.commitCount(upstream, r.FastForward)
-			if err != nil {
-				return err
-			}
-			if count > 1 {
-				return fmt.Errorf("fetched branch %q contains %d commits on top of %q; Graphene expects one commit per stack branch. squash or drop the extra commits before restacking with --fetch", branch, count, parent)
-			}
-		}
 		r.Expected[branch] = refs[branch]
 		destination := refs[graph.parent[branch]]
 		if branch == current {
@@ -96,7 +80,7 @@ func (a *App) restack(args []string) error {
 			queue = append(queue, RebaseOp{Top: branch, Upstream: upstream, Onto: graph.parent[branch]})
 		}
 		for _, child := range graph.children[branch] {
-			if err := visit(child, rewrite || (branch == current && r.FastForward != "")); err != nil {
+			if err := visit(child, rewrite); err != nil {
 				return err
 			}
 		}
@@ -105,7 +89,7 @@ func (a *App) restack(args []string) error {
 	if err := visit(current, false); err != nil {
 		return err
 	}
-	if len(queue) == 0 && r.FastForward == "" {
+	if len(queue) == 0 {
 		return a.git.WriteState(nextState)
 	}
 	p := &Pending{
@@ -124,7 +108,7 @@ func (a *App) restack(args []string) error {
 	if err != nil {
 		return err
 	}
-	if snapshot.Branch != current || snapshot.Refs[r.Base] != r.BaseHead {
+	if snapshot.Branch != current || snapshot.Refs[r.Base] != refs[r.Base] {
 		return fmt.Errorf("branches changed while preparing restack; retry")
 	}
 	for branch, oid := range r.Expected {

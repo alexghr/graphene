@@ -38,7 +38,7 @@ func TestE2EReuseCurrentWithStaleBase(t *testing.T) {
 	f.graph("sendf", "origin")
 	f.cleanState(stack{"main", branches("older")}, stack{"main", []string{"feature", "stack/child"}})
 	f.git("switch", "feature")
-	f.graph("restack", "--fetch", "target")
+	f.graph("restack", "target")
 	f.assertParent("feature", "target")
 	f.assertParent("stack/child", "feature")
 	f.assertPatchFile("feature", "feature")

@@ -282,29 +282,30 @@ func TestRestackKilledAfterRewriteCanAbort(t *testing.T) {
 	}
 }
 
-func TestRestackFetchDoesNotAdvanceSavedBoundaryWithMain(t *testing.T) {
+func TestRestackFetchConflictRestoresLocalState(t *testing.T) {
 	t.Parallel()
 	repo, remote := newTestRepoWithOrigin(t)
-	createStackBranch(t, repo, "one.txt", "one\n", "One")
-	expectGrapheneOK(t, repo, "send", "origin")
-	runGit(t, repo.dir, "switch", "main")
-	runGit(t, repo.dir, "merge", "--ff-only", "stack/one")
-	oldOne := runGit(t, repo.dir, "rev-parse", "stack/one")
-	other := cloneConfiguredRepo(t, remote, "stack/one")
-	commitFile(t, other, "file.txt", "upstream\n", "Upstream")
-	runGit(t, other, "push", "origin", "stack/one")
-	runGit(t, repo.dir, "switch", "-c", "target", "main")
-	commitFile(t, repo.dir, "file.txt", "target\n", "Target")
-	runGit(t, repo.dir, "switch", "stack/one")
+	base := runGit(t, repo.dir, "rev-parse", "main")
+	createStackBranch(t, repo, "file.txt", "local\n", "One")
+	one := runGit(t, repo.dir, "rev-parse", "HEAD")
 	original := readState(t, repo.dir)
-	code, _, stderr := repo.runGraphene(t, "restack", "--fetch", "target")
-	if code == 0 || !strings.Contains(stderr, "contains 2 commits") {
-		t.Fatalf("restack result: %d, %s", code, stderr)
+	actor := cloneConfiguredRepo(t, remote, "main")
+	upstream := commitFile(t, actor, "file.txt", "remote\n", "Remote")
+	runGit(t, actor, "push", "origin", "main")
+	if code, _, stderr := repo.runGraphene(t, "restack", "--fetch", "main"); code == 0 {
+		t.Fatalf("expected conflict: %s", stderr)
 	}
-	if got := runGit(t, repo.dir, "rev-parse", "stack/one"); got != oldOne {
-		t.Fatalf("original branch tip %s was not preserved: %s", oldOne, got)
+	pending := readState(t, repo.dir).Pending
+	if pending == nil || pending.Recovery == nil || pending.Recovery.BaseHead != upstream || pending.Recovery.Phase != recoveryConflict {
+		t.Fatalf("pending = %#v", pending)
+	}
+	expectGrapheneOK(t, repo, "abort")
+	for ref, want := range map[string]string{"main": base, "stack/one": one, "origin/main": upstream} {
+		if got := runGit(t, repo.dir, "rev-parse", ref); got != want {
+			t.Fatalf("%s = %s, want %s", ref, got, want)
+		}
 	}
 	if got := readState(t, repo.dir); !reflect.DeepEqual(got, original) {
-		t.Fatalf("original metadata was not preserved: %#v", got)
+		t.Fatalf("restored state = %#v", got)
 	}
 }

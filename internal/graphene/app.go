@@ -396,7 +396,7 @@ For an untracked base such as main, exclude commits already in its known local o
 Graphene reuses the current branch for HEAD. Intermediate commits reuse a single existing local branch when one points at that commit; otherwise Graphene creates a branch from the commit subject using branchPrefix.`,
 		"sync": `usage: graphene sync [-a|--all] [--dry-run] [--force] [--assume-merged] [--accept-risk]
 
-Fetch the stack base, drop already-applied branches on the current path, and restack affected children.
+Fetch the stack base, drop already-applied branches on the current path, and restack affected children onto the fetched base. Local-only base commits are preserved but are not included in the stack; a base checked out in another worktree stays in place.
 
 Dry-run also contacts the remote and downloads objects, but does not move local branches or change stack state.
 
@@ -437,7 +437,7 @@ options:
 
 Move the current branch onto another local branch, then restack dependent branches.
 
-Uses local refs by default. With --fetch, fetch only the current branch's upstream into a private Graphene ref and fast-forward the current branch when possible before restacking.
+Uses local refs by default. With --fetch, fetch the destination branch's configured upstream and rebase onto that fetched commit, leaving the local destination branch in place.
 
 Each affected branch is rebased separately; unrelated branch pointers stay in place. A snapshot is saved before changing branches or files. Resolve normal conflicts with continue, or use abort to restore the entire restack. Ambiguous interruptions require abort and rerun.
 
@@ -446,7 +446,7 @@ Submodule commits recorded in the parent are preserved; submodule checkouts and 
 If destination or replayed paths overlap a nested repository, restack warns and stops. --accept-risk allows possible overwrites for this operation, including continue; nested files or local edits may be lost and abort cannot restore them. This conservative check does not simulate Git merges. Other safeguards, including abort collision checks, remain enabled.
 
 options:
-      --fetch        fetch the current branch's upstream before restacking
+      --fetch        fetch the destination branch's upstream before restacking
       --accept-risk  acknowledge possible overwrites in nested repositories/worktrees/submodules`,
 		"go": `usage: graphene go <up|down|top|bottom> [number]
 

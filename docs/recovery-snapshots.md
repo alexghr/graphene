@@ -76,7 +76,7 @@ A moved parent does not replace the saved source. Both planners inspect children
 even when their parent needs no rewrite, so a child left behind by a direct Git
 amend can be rebased from its own historical boundary.
 
-Sync freezes the fetched base tip before advancing any local branch. A base
+Sync always uses the fetched base tip as its destination. It advances the local base only when that is a fast-forward and the branch is available in this worktree. Local-only commits are preserved when the local base is ahead or diverged. A base
 checked out in another worktree stays untouched; affected branches rebase onto
 the fetched commit. Applied branches remain until all rebases finish, then one
 ref transaction deletes them after a persisted deleting phase. An interrupted
@@ -86,7 +86,13 @@ Branch configuration is kept until the final stack metadata is saved, so abort
 restores upstreams as well as deleted branches. Interrupted configuration cleanup
 can leave unused entries after successful sync.
 
-Sync and restack with `--fetch` refresh the selected upstream's remote-tracking
+Restack uses the destination's captured local tip by default. With `--fetch`, it
+fetches the destination's configured upstream and uses that commit without moving
+the local destination. Recovery checks the local destination against its captured
+local tip separately from the fetched rebase target. Existing pending restacks
+with a current-branch fast-forward remain resumable.
+
+Sync and restack with `--fetch` refresh the selected destination upstream's remote-tracking
 ref as well as the private recovery ref. These updates also occur during sync
 dry-runs and are not rolled back by abort.
 Sync also refreshes existing upstream remote-tracking refs for surviving selected

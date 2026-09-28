@@ -73,7 +73,7 @@ func (a *App) planSnapshotSync(before State, after *State, selection syncSelecti
 	return queue, nil
 }
 
-func (a *App) startSnapshotSync(state State, p *Pending, fetched upstreamUpdate, refs map[string]string, acceptRisk bool) error {
+func (a *App) startSnapshotSync(state State, p *Pending, fetched upstreamUpdate, refs map[string]string, acceptRisk, advanceBase bool) error {
 	base, current := fetched.Branch, p.Branch
 	r := &recoveryState{Phase: recoveryReady, Base: base, BaseHead: fetched.Updated, Expected: map[string]string{current: refs[current]}, AcceptRisk: acceptRisk}
 	baseAvailable := base == current
@@ -86,7 +86,7 @@ func (a *App) startSnapshotSync(state State, p *Pending, fetched upstreamUpdate,
 	}
 	if baseAvailable {
 		r.Expected[base] = fetched.Old
-		if fetched.Old != fetched.Updated {
+		if advanceBase && fetched.Old != fetched.Updated {
 			r.FastForward = fetched.Updated
 		}
 	}

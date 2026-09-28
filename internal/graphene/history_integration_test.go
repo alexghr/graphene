@@ -102,36 +102,21 @@ func TestRegressionSquashUsesRenderedParentAcrossNestedStacks(t *testing.T) {
 	}
 }
 
-func TestRegressionRestackRejectsMultiCommitUpstream(t *testing.T) {
+func TestRestackFetchRequiresDestinationUpstream(t *testing.T) {
 	t.Parallel()
-	repo, remote := newTestRepoWithOrigin(t)
+	repo := newTestRepo(t)
 	createStackBranch(t, repo, "one.txt", "one\n", "One")
-	createStackBranch(t, repo, "two.txt", "two\n", "Two")
-	expectGrapheneOK(t, repo, "send", "--stack", "origin")
-
-	other := cloneConfiguredRepo(t, remote, "main")
-	runGit(t, other, "switch", "-c", "stack/one", "--track", "origin/stack/one")
-	writeFile(t, other, "remote-one.txt", "remote one\n")
-	runGit(t, other, "add", ".")
-	runGit(t, other, "commit", "-m", "Remote one update")
-	runGit(t, other, "push", "origin", "stack/one")
-
-	runGit(t, repo.dir, "switch", "-c", "target", "main")
-	writeFile(t, repo.dir, "target.txt", "target\n")
-	runGit(t, repo.dir, "add", ".")
-	runGit(t, repo.dir, "commit", "-m", "Target")
-
-	runGit(t, repo.dir, "switch", "stack/one")
-	refs := runGit(t, repo.dir, "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads")
-	state := readState(t, repo.dir)
-	if code, _, stderr := repo.runGraphene(t, "restack", "--fetch", "target"); code == 0 || !strings.Contains(stderr, "contains 2 commits") {
-		t.Fatalf("restack with multi-commit upstream: %d, %s", code, stderr)
+	runGit(t, repo.dir, "branch", "target", "main")
+	before := readState(t, repo.dir)
+	head := runGit(t, repo.dir, "rev-parse", "HEAD")
+	if code, _, stderr := repo.runGraphene(t, "restack", "--fetch", "target"); code == 0 || !strings.Contains(stderr, `branch "target" has no upstream`) {
+		t.Fatalf("restack result: %d, %s", code, stderr)
 	}
-	if got := runGit(t, repo.dir, "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads"); got != refs {
-		t.Fatal("refused restack moved local branches")
+	if got := readState(t, repo.dir); !reflect.DeepEqual(got, before) {
+		t.Fatalf("state changed: %#v", got)
 	}
-	if got := readState(t, repo.dir); !reflect.DeepEqual(got, state) {
-		t.Fatalf("refused restack changed metadata: %#v", got)
+	if got := runGit(t, repo.dir, "rev-parse", "HEAD"); got != head {
+		t.Fatal("failed restack moved HEAD")
 	}
 }
 
@@ -196,7 +181,7 @@ func TestRegressionSyncAllowsStackAlreadyBasedOnFetchedBase(t *testing.T) {
 	}
 }
 
-func TestRegressionSyncAllAllowsLocalBaseAheadOfUpstream(t *testing.T) {
+func TestSyncUsesRemoteBaseWhenLocalBaseIsAhead(t *testing.T) {
 	t.Parallel()
 	repo, _ := newTestRepoWithOrigin(t)
 	remoteMain := runGit(t, repo.dir, "rev-parse", "origin/main")
@@ -233,52 +218,50 @@ func TestRegressionSyncAllAllowsLocalBaseAheadOfUpstream(t *testing.T) {
 	if got := runGit(t, repo.dir, "rev-parse", "origin/main"); got != remoteMain {
 		t.Fatalf("origin/main = %s, want remote commit %s", got, remoteMain)
 	}
-	if refExists(t, repo.dir, "refs/heads/stack/one") {
-		t.Fatal("stack/one still exists after its commit was applied to main")
+	if !refExists(t, repo.dir, "refs/heads/stack/one") {
+		t.Fatal("deleted a branch only merged locally")
 	}
-	assertBranchParent(t, repo.dir, "stack/two", "main")
+	assertBranchParent(t, repo.dir, "stack/one", "origin/main")
+	assertBranchParent(t, repo.dir, "stack/two", "stack/one")
 	if !refFileExists(t, repo.dir, "stack/two:two.txt") {
 		t.Fatal("stack/two lost its patch during sync")
 	}
 	if got := currentBranch(t, repo.dir); got != "main" {
 		t.Fatalf("current branch = %q, want main", got)
 	}
-	wantState := State{Stacks: []Stack{{Base: "main", Branches: []string{"stack/two"}}}, Boundaries: map[string]string{"stack/two": localMain}}
+	wantState := stateBefore
 	if got := readState(t, repo.dir); !reflect.DeepEqual(got, wantState) {
 		t.Fatalf("state = %#v, want %#v", got, wantState)
 	}
 }
 
-func TestRegressionSyncAllRejectsDivergedBase(t *testing.T) {
+func TestSyncUsesRemoteBaseWhenLocalBaseDiverged(t *testing.T) {
 	t.Parallel()
 	repo, remote := newTestRepoWithOrigin(t)
 	createStackBranch(t, repo, "one.txt", "one\n", "One")
 	runGit(t, repo.dir, "switch", "main")
-	commitFile(t, repo.dir, "local.txt", "local\n", "Local base update")
-
+	local := commitFile(t, repo.dir, "local.txt", "local\n", "Local base update")
 	actor := cloneConfiguredRepo(t, remote, "main")
-	commitFile(t, actor, "remote.txt", "remote\n", "Remote base update")
+	upstream := commitFile(t, actor, "remote.txt", "remote\n", "Remote base update")
 	runGit(t, actor, "push", "origin", "main")
-
-	mainBefore := runGit(t, repo.dir, "rev-parse", "main")
-	oneBefore := runGit(t, repo.dir, "rev-parse", "stack/one")
-	stateBefore := readState(t, repo.dir)
-	code, stdout, stderr := repo.runGraphene(t, "sync", "--all")
-	if code == 0 {
-		t.Fatalf("graphene sync --all unexpectedly succeeded\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
+	expectGrapheneOK(t, repo, "sync", "--all")
+	if got := runGit(t, repo.dir, "rev-parse", "main"); got != local {
+		t.Fatal("sync changed local-only base history")
 	}
-	wantError := "cannot fast-forward \"main\" to \"main@{upstream}\"; resolve the base branch before updating the stack"
-	if !strings.Contains(stderr, wantError) {
-		t.Fatalf("stderr = %q, want it to contain %q", stderr, wantError)
+	assertBranchParent(t, repo.dir, "stack/one", "origin/main")
+	if refFileExists(t, repo.dir, "stack/one:local.txt") {
+		t.Fatal("sync included local-only base changes")
 	}
-	if got := runGit(t, repo.dir, "rev-parse", "main"); got != mainBefore {
-		t.Fatalf("main changed from %s to %s after refused sync", mainBefore, got)
+	for _, path := range []string{"remote.txt", "one.txt"} {
+		if !refFileExists(t, repo.dir, "stack/one:"+path) {
+			t.Fatalf("lost %s", path)
+		}
 	}
-	if got := runGit(t, repo.dir, "rev-parse", "stack/one"); got != oneBefore {
-		t.Fatalf("stack/one changed from %s to %s after refused sync", oneBefore, got)
+	if got := readState(t, repo.dir).Boundaries["stack/one"]; got != upstream {
+		t.Fatalf("boundary = %s, want %s", got, upstream)
 	}
-	if got := readState(t, repo.dir); !reflect.DeepEqual(got, stateBefore) {
-		t.Fatalf("state changed after refused sync from %#v to %#v", stateBefore, got)
+	if got := currentBranch(t, repo.dir); got != "main" {
+		t.Fatalf("checkout = %s", got)
 	}
 }
 

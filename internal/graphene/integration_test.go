@@ -433,48 +433,37 @@ func TestRestackOntoBranchAtSameCommitUpdatesStateOnly(t *testing.T) {
 	}
 }
 
-func TestRestackReportsDivergedCurrentUpstream(t *testing.T) {
+func TestRestackFetchUsesDestinationDespiteLocalDivergence(t *testing.T) {
 	t.Parallel()
 	repo, remote := newTestRepoWithOrigin(t)
 	createStackBranch(t, repo, "one.txt", "one\n", "One")
 	expectGrapheneOK(t, repo, "send", "origin")
-
-	other := cloneConfiguredRepo(t, remote, "main")
-	runGit(t, other, "switch", "-c", "stack/one", "--track", "origin/stack/one")
-	writeFile(t, other, "remote-one.txt", "remote one\n")
-	runGit(t, other, "add", ".")
-	runGit(t, other, "commit", "--amend", "-m", "One remote")
-	runGit(t, other, "push", "--force-with-lease", "origin", "stack/one")
-
-	writeFile(t, repo.dir, "local-one.txt", "local one\n")
-	runGit(t, repo.dir, "add", ".")
-	runGit(t, repo.dir, "commit", "--amend", "-m", "One local")
-	localHead := runGit(t, repo.dir, "rev-parse", "stack/one")
-	stateBefore := readState(t, repo.dir)
-
+	oldRemote := runGit(t, repo.dir, "rev-parse", "origin/stack/one")
+	actor := cloneConfiguredRepo(t, remote, "main")
+	upstream := commitFile(t, actor, "remote.txt", "remote\n", "Remote destination")
+	runGit(t, actor, "push", "origin", "main")
+	runGit(t, actor, "switch", "--track", "origin/stack/one")
+	commitFile(t, actor, "remote-feature.txt", "remote feature\n", "Remote feature update")
+	runGit(t, actor, "push", "origin", "stack/one")
 	runGit(t, repo.dir, "switch", "-c", "target", "main")
-	writeFile(t, repo.dir, "target.txt", "target\n")
-	runGit(t, repo.dir, "add", ".")
-	runGit(t, repo.dir, "commit", "-m", "Target")
+	localTarget := commitFile(t, repo.dir, "local-target.txt", "local target\n", "Local destination")
+	runGit(t, repo.dir, "branch", "--set-upstream-to=origin/main", "target")
 	runGit(t, repo.dir, "switch", "stack/one")
-
-	code, _, stderr := repo.runGraphene(t, "restack", "--fetch", "target")
-	if code == 0 {
-		t.Fatal("graphene restack unexpectedly succeeded")
+	expectGrapheneOK(t, repo, "restack", "--fetch", "target")
+	assertBranchParent(t, repo.dir, "stack/one", "origin/main")
+	if got := runGit(t, repo.dir, "rev-parse", "target"); got != localTarget {
+		t.Fatal("restack moved local destination")
 	}
-	for _, want := range []string{
-		`current branch "stack/one" diverged from upstream "stack/one@{upstream}"`,
-		"rerun without --fetch",
-	} {
-		if !strings.Contains(stderr, want) {
-			t.Fatalf("stderr = %q, want it to contain %q", stderr, want)
-		}
+	if got := runGit(t, repo.dir, "rev-parse", "origin/stack/one"); got != oldRemote {
+		t.Fatal("restack fetched the current branch")
 	}
-	if got := runGit(t, repo.dir, "rev-parse", "stack/one"); got != localHead {
-		t.Fatalf("stack/one changed from %s to %s", localHead, got)
+	if !refFileExists(t, repo.dir, "stack/one:remote.txt") || refFileExists(t, repo.dir, "stack/one:local-target.txt") {
+		t.Fatal("restack used local destination changes")
 	}
-	if state := readState(t, repo.dir); !reflect.DeepEqual(state, stateBefore) {
-		t.Fatalf("state = %#v, want %#v", state, stateBefore)
+	state := readState(t, repo.dir)
+	base, _ := BaseBranch(state, "stack/one")
+	if base != "target" || state.Boundaries["stack/one"] != upstream {
+		t.Fatalf("state = %#v", state)
 	}
 }
 
