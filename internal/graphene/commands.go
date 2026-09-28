@@ -2058,10 +2058,18 @@ func (a *App) sync(args []string) error {
 			return err
 		}
 		for _, branch := range applied {
-			if _, saved := state.Boundaries[branch]; saved {
-				if _, err := a.resolveSyncBoundary(state, branch, oldRefs); err != nil {
+			if _, saved := state.Boundaries[branch]; !saved {
+				contained, err := a.isAncestor(oldRefs[branch], baseRef)
+				if err != nil {
 					return err
 				}
+				// Ancestry proves the whole branch is upstream; a matching tip patch does not.
+				if contained {
+					continue
+				}
+			}
+			if _, err := a.resolveSyncBoundary(state, branch, oldRefs); err != nil {
+				return err
 			}
 		}
 		removed := append([]string(nil), applied...)

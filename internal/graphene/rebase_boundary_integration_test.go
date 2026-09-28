@@ -1,6 +1,37 @@
 package graphene
 
-import "testing"
+import (
+	"reflect"
+	"strings"
+	"testing"
+)
+
+func TestSyncPreservesLegacyBranchWithUnappliedCommit(t *testing.T) {
+	t.Parallel()
+	repo, remote := newTestRepoWithOrigin(t)
+	createStackBranch(t, repo, "unique.txt", "unique\n", "One")
+	commitFile(t, repo.dir, "applied.txt", "applied\n", "Applied")
+	head := runGit(t, repo.dir, "rev-parse", "HEAD")
+	state := readState(t, repo.dir)
+	state.Boundaries = nil
+	if err := (Git{Dir: repo.dir}).WriteState(state); err != nil {
+		t.Fatal(err)
+	}
+	actor := cloneConfiguredRepo(t, remote, "main")
+	commitFile(t, actor, "applied.txt", "applied\n", "Applied upstream")
+	runGit(t, actor, "push", "origin", "main")
+
+	code, _, stderr := repo.runGraphene(t, "sync")
+	if code == 0 || !strings.Contains(stderr, "one-commit branch") {
+		t.Fatalf("sync exited %d: %s", code, stderr)
+	}
+	if got := runGit(t, repo.dir, "rev-parse", "stack/one"); got != head {
+		t.Fatalf("branch moved from %s to %s", head, got)
+	}
+	if got := readState(t, repo.dir); !reflect.DeepEqual(got, state) {
+		t.Fatalf("state changed: %#v", got)
+	}
+}
 
 func TestRebaseUsesSavedBoundariesAfterHistoryChanges(t *testing.T) {
 	for _, command := range []string{"sync", "restack"} {
