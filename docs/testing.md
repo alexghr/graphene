@@ -7,11 +7,13 @@ Run the full suite with `./shell p-test`, or lint, test, and build with
 | --- | --- | --- |
 | Unit | `./shell p-test-unit` | `go test -parallel 8 -run '^TestUnit' ./internal/...` |
 | Integration | `./shell p-test-integration` | `go test -parallel 8 -skip '^TestUnit' ./internal/...` |
-| E2E | `./shell p-test-e2e` | `go test -parallel 8 ./tests/e2e` |
+| E2E | `./shell p-test-e2e` | `go test -count=1 -parallel 8 ./tests/e2e` |
 
-`go test ./...` also runs every layer. Use `-count=1` when measuring uncached test
-execution. The layered commands run sequentially so each timing is useful and the
-Git-heavy packages do not compete for two separate sets of eight test slots.
+`go test -count=1 ./...` runs every layer without cached results. E2E commands
+always disable result caching because their CLI is built in a subprocess; Go's
+test cache does not track that binary's source dependencies. The layered commands
+run sequentially so each timing is useful and the Git-heavy packages do not
+compete for two separate sets of eight test slots.
 
 ## Where a test belongs
 

@@ -62,7 +62,7 @@ in
     scripts = {
       p-test-unit.exec = "go test -parallel 8 -run '^TestUnit' ./internal/...";
       p-test-integration.exec = "go test -parallel 8 -skip '^TestUnit' ./internal/...";
-      p-test-e2e.exec = "go test -parallel 8 ./tests/e2e";
+      p-test-e2e.exec = "go test -count=1 -parallel 8 ./tests/e2e";
       p-test.exec = ''
         set -euo pipefail
 
@@ -108,7 +108,7 @@ in
           ${lint}/bin/graphene-lint
           go test -parallel 8 -run '^TestUnit' ./internal/...
           go test -parallel 8 -skip '^TestUnit' ./internal/...
-          go test -parallel 8 ./tests/e2e
+          go test -count=1 -parallel 8 ./tests/e2e
           runHook postCheck
         '';
       };
