@@ -26,7 +26,7 @@ func (a *App) prepareBoundaryUpdates(state *State) error {
 		return err
 	}
 	inRange := map[string]bool{}
-	for _, commit := range strings.Fields(commits) {
+	for commit := range strings.FieldsSeq(commits) {
 		inRange[commit] = true
 	}
 	planned := *state
@@ -40,8 +40,8 @@ func (a *App) prepareBoundaryUpdates(state *State) error {
 			continue
 		}
 		trackedRefs[branch] = refs[branch]
-		boundary, saved := planned.Boundaries[branch]
-		if saved {
+		var boundary string
+		if _, saved := planned.Boundaries[branch]; saved {
 			boundary, err = a.resolveBranchBoundary(planned, branch, refs)
 			if err != nil {
 				return err

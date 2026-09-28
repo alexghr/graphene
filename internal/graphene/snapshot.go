@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -251,7 +252,7 @@ func (g Git) removeSnapshot(id string) error {
 	if err := g.updateSnapshotRefs(edits); err != nil {
 		return err
 	}
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	return nil

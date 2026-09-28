@@ -97,8 +97,8 @@ func gitCommandError(args []string, err error, stderr string, streamed bool) err
 }
 
 func isGitExit(err error, code int) bool {
-	var gitErr *GitError
-	return errors.As(err, &gitErr) && gitErr.Code == code
+	gitErr, ok := errors.AsType[*GitError](err)
+	return ok && gitErr.Code == code
 }
 
 func (g Git) CurrentBranch() (string, error) {
@@ -250,7 +250,7 @@ func (g Git) BranchCheckedOut(branch string) (bool, error) {
 	}
 	target := "refs/heads/" + branch
 	for line := range strings.SplitSeq(out, "\n") {
-		if strings.TrimPrefix(line, "branch ") == target && strings.HasPrefix(line, "branch ") {
+		if branch, ok := strings.CutPrefix(line, "branch "); ok && branch == target {
 			return true, nil
 		}
 	}

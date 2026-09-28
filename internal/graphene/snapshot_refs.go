@@ -1,8 +1,9 @@
 package graphene
 
 import (
+	"cmp"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -35,7 +36,7 @@ func (g Git) updateSnapshotRefs(edits []snapshotRefEdit) error {
 	if len(edits) == 0 {
 		return nil
 	}
-	sort.Slice(edits, func(i, j int) bool { return edits[i].Ref < edits[j].Ref })
+	slices.SortFunc(edits, func(a, b snapshotRefEdit) int { return cmp.Compare(a.Ref, b.Ref) })
 	var input strings.Builder
 	input.WriteString("start\x00")
 	for _, edit := range edits {

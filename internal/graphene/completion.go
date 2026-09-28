@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"slices"
-	"sort"
 	"strings"
 )
 
@@ -428,7 +427,7 @@ func completeStaticWithPrefix(fragment, prefix string, candidates []string) comp
 			matches = append(matches, candidate)
 		}
 	}
-	sort.Strings(matches)
+	slices.Sort(matches)
 	return completionResult{candidates: matches}
 }
 

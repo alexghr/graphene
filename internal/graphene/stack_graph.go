@@ -1,6 +1,6 @@
 package graphene
 
-import "sort"
+import "slices"
 
 type stackGraph struct {
 	nodes    map[string]bool
@@ -61,6 +61,6 @@ func (g stackGraph) roots() []string {
 			roots = append(roots, name)
 		}
 	}
-	sort.Strings(roots)
+	slices.Sort(roots)
 	return roots
 }

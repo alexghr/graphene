@@ -2,6 +2,7 @@ package graphene
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -17,7 +18,7 @@ func (g Git) requireNoGitOperation() error {
 		}
 		if _, err := os.Stat(path); err == nil {
 			return fmt.Errorf("finish or abort the existing Git operation (%s) first", name)
-		} else if !os.IsNotExist(err) {
+		} else if !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
 	}

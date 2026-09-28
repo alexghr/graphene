@@ -74,7 +74,7 @@ func (g Git) nestedRepositories(savedTree string) (map[string]bool, error) {
 			seen[path] = true
 			full := filepath.Join(root, filepath.FromSlash(path))
 			info, err := os.Lstat(full)
-			if os.IsNotExist(err) || errors.Is(err, syscall.ENOTDIR) {
+			if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
 				continue
 			}
 			if err != nil {
@@ -88,7 +88,7 @@ func (g Git) nestedRepositories(savedTree string) (map[string]bool, error) {
 				repositories[path] = gitlinks[path]
 				continue
 			}
-			if !os.IsNotExist(err) {
+			if !errors.Is(err, os.ErrNotExist) {
 				return nil, err
 			}
 			if gitlinks[path] {

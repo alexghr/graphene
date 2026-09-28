@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -1787,7 +1786,7 @@ func (a *App) importBranchName(state State, current string, cfg Config, commit s
 	if err != nil {
 		return "", false, err
 	}
-	sort.Strings(branches)
+	slices.Sort(branches)
 
 	if head {
 		if StateContainsName(state, current) {

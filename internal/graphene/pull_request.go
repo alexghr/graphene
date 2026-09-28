@@ -68,18 +68,17 @@ func githubRepoURL(remoteURL string) (string, bool) {
 		return "https://github.com/" + owner + "/" + repo, true
 	}
 
-	hostPath := strings.SplitN(remoteURL, ":", 2)
-	if len(hostPath) != 2 {
+	host, path, ok := strings.Cut(remoteURL, ":")
+	if !ok {
 		return "", false
 	}
-	host := hostPath[0]
 	if at := strings.LastIndex(host, "@"); at >= 0 {
 		host = host[at+1:]
 	}
 	if host != "github.com" {
 		return "", false
 	}
-	owner, repo, ok := githubOwnerRepo(hostPath[1])
+	owner, repo, ok := githubOwnerRepo(path)
 	if !ok {
 		return "", false
 	}

@@ -233,9 +233,9 @@ func (a *App) Run(args []string) int {
 		return 0
 	}
 
-	var gitErr *GitError
-	var aliasErr *shellAliasError
-	if !(errors.As(err, &gitErr) && gitErr.Streamed && err == gitErr) && !errors.As(err, &aliasErr) {
+	gitErr, isGitErr := errors.AsType[*GitError](err)
+	_, isAliasErr := errors.AsType[*shellAliasError](err)
+	if !(isGitErr && gitErr.Streamed && err == gitErr) && !isAliasErr {
 		fmt.Fprintln(a.stderr, err)
 	}
 	return errorExitCode(err)
@@ -469,12 +469,10 @@ options:
 }
 
 func errorExitCode(err error) int {
-	var gitErr *GitError
-	if errors.As(err, &gitErr) && gitErr.Code > 0 {
+	if gitErr, ok := errors.AsType[*GitError](err); ok && gitErr.Code > 0 {
 		return gitErr.Code
 	}
-	var aliasErr *shellAliasError
-	if errors.As(err, &aliasErr) && aliasErr.code > 0 {
+	if aliasErr, ok := errors.AsType[*shellAliasError](err); ok && aliasErr.code > 0 {
 		return aliasErr.code
 	}
 	return 1
