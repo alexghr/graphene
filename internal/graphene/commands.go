@@ -2043,12 +2043,6 @@ func (a *App) sync(args []string) error {
 	}
 	baseRef := fetched.Updated
 
-	for _, path := range selection.Paths {
-		if err := a.validateStackShapeFromBase(path.Stack, baseRef, path.Stack.Base); err != nil {
-			return err
-		}
-	}
-
 	oldRefs, err := a.git.snapshotBranchRefs()
 	if err != nil {
 		return err
@@ -2062,6 +2056,13 @@ func (a *App) sync(args []string) error {
 		applied, err := a.appliedPrefixBranches(baseRef, path.Stack.Branches[:path.BranchLimit], oldRefs)
 		if err != nil {
 			return err
+		}
+		for _, branch := range applied {
+			if _, saved := state.Boundaries[branch]; saved {
+				if _, err := a.resolveSyncBoundary(state, branch, oldRefs); err != nil {
+					return err
+				}
+			}
 		}
 		removed := append([]string(nil), applied...)
 		appliedBranches = append(appliedBranches, applied...)
@@ -2105,7 +2106,7 @@ func (a *App) sync(args []string) error {
 
 	returnBranch := selection.ReturnBranch(firstRemaining)
 
-	ops, err := a.planSnapshotSync(state, nextState, selection, oldRefs, baseRef)
+	ops, err := a.planSnapshotSync(state, &nextState, selection, oldRefs, baseRef)
 	if err != nil {
 		return err
 	}
@@ -2939,21 +2940,20 @@ func (a *App) deleteBranches(branches []string) error {
 	return nil
 }
 
-func (a *App) validateStackShapeFromBase(stack Stack, baseRef, baseName string) error {
-	parentRef := baseRef
-	parentName := baseName
-	for _, branch := range stack.Branches {
-		count, err := a.commitCount(parentRef, branch)
-		if err != nil {
-			return err
-		}
-		if count > 1 {
-			return fmt.Errorf("branch %q contains %d commits on top of %q; Graphene expects one commit per stack branch. squash or drop the extra commits before graphene sync", branch, count, parentName)
-		}
-		parentRef = branch
-		parentName = branch
+func (a *App) resolveSyncBoundary(state State, branch string, refs map[string]string) (string, error) {
+	boundary, err := a.resolveBranchBoundary(state, branch, refs)
+	if err != nil {
+		return "", err
 	}
-	return nil
+	count, err := a.commitCount(boundary, refs[branch])
+	if err != nil {
+		return "", err
+	}
+	if count > 1 {
+		parent, _ := BaseBranch(state, branch)
+		return "", fmt.Errorf("branch %q contains %d commits on top of %q; Graphene expects one commit per stack branch. squash or drop the extra commits before graphene sync", branch, count, parent)
+	}
+	return boundary, nil
 }
 
 func (a *App) validateRebaseOpsUpdateable(operation, current string, state State, oldRefs map[string]string, ops []RebaseOp) error {

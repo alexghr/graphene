@@ -1,9 +1,6 @@
 package graphene
 
-import (
-	"fmt"
-	"strings"
-)
+import "fmt"
 
 func (a *App) restack(args []string) error {
 	opts, err := parseRestackArgs(args)
@@ -64,36 +61,17 @@ func (a *App) restack(args []string) error {
 	}
 	graph := newStackGraph(nextState)
 	var queue []RebaseOp
-	var visit func(string) error
-	visit = func(branch string) error {
+	var visit func(string, bool) error
+	visit = func(branch string, parentRewritten bool) error {
 		if _, seen := r.Expected[branch]; seen {
 			return fmt.Errorf("branch %q appears more than once in the affected stack", branch)
 		}
-		if branch != current {
-			if err := a.git.requireSnapshotBranchAvailable(branch); err != nil {
-				return err
-			}
-		}
 		parent, _ := BaseBranch(state, branch)
-		if refs[branch] == "" || refs[parent] == "" {
-			return fmt.Errorf("missing local branch or parent for %q", branch)
+		upstream, err := a.resolveBranchBoundary(state, branch, refs)
+		if err != nil {
+			return err
 		}
-		upstream := refs[parent]
-		if !state.ContainsBranch(parent) {
-			var err error
-			upstream, err = a.restackRootBoundary(parent, upstream, refs[branch])
-			if err != nil {
-				return err
-			}
-		} else {
-			ancestor, err := a.isAncestor(upstream, refs[branch])
-			if err != nil {
-				return err
-			}
-			if !ancestor {
-				return fmt.Errorf("parent %q is not an ancestor of %q; repair the stack before restacking", parent, branch)
-			}
-		}
+		nextState.setBoundary(branch, upstream)
 		if branch == current && r.FastForward != "" {
 			count, err := a.commitCount(upstream, r.FastForward)
 			if err != nil {
@@ -104,20 +82,27 @@ func (a *App) restack(args []string) error {
 			}
 		}
 		r.Expected[branch] = refs[branch]
-		if branch == current && upstream == r.BaseHead && r.FastForward == "" {
-			return nil
+		destination := refs[graph.parent[branch]]
+		if branch == current {
+			destination = r.BaseHead
 		}
-		if branch != current || upstream != r.BaseHead {
+		rewrite := parentRewritten || upstream != destination
+		if rewrite {
+			if branch != current {
+				if err := a.git.requireSnapshotBranchAvailable(branch); err != nil {
+					return err
+				}
+			}
 			queue = append(queue, RebaseOp{Top: branch, Upstream: upstream, Onto: graph.parent[branch]})
 		}
 		for _, child := range graph.children[branch] {
-			if err := visit(child); err != nil {
+			if err := visit(child, rewrite || (branch == current && r.FastForward != "")); err != nil {
 				return err
 			}
 		}
 		return nil
 	}
-	if err := visit(current); err != nil {
+	if err := visit(current, false); err != nil {
 		return err
 	}
 	if len(queue) == 0 && r.FastForward == "" {
@@ -153,38 +138,4 @@ func (a *App) restack(args []string) error {
 		return err
 	}
 	return a.runSnapshotRebases(state)
-}
-
-func (a *App) restackRootBoundary(base, baseHead, branchHead string) (string, error) {
-	boundary, err := a.git.Output("merge-base", baseHead, branchHead)
-	if err != nil {
-		return "", err
-	}
-	upstream, err := a.git.Output("for-each-ref", "--format=%(upstream)", "refs/heads/"+base)
-	if err != nil {
-		return "", err
-	}
-	if !strings.HasPrefix(upstream, "refs/remotes/") {
-		return boundary, nil
-	}
-	exists, err := a.refExists(upstream)
-	if err != nil || !exists {
-		return boundary, err
-	}
-	newer, err := a.git.Output("merge-base", upstream, branchHead)
-	if isGitExit(err, 1) {
-		return boundary, nil
-	}
-	if err != nil {
-		return "", err
-	}
-	// A base checked out elsewhere may lag behind the commit this stack started on.
-	advances, err := a.isAncestor(boundary, newer)
-	if err != nil {
-		return "", err
-	}
-	if advances {
-		return newer, nil
-	}
-	return boundary, nil
 }

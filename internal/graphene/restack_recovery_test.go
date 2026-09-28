@@ -282,50 +282,29 @@ func TestRestackKilledAfterRewriteCanAbort(t *testing.T) {
 	}
 }
 
-func TestRestackSnapshotsBeforeFastForward(t *testing.T) {
+func TestRestackFetchDoesNotAdvanceSavedBoundaryWithMain(t *testing.T) {
 	t.Parallel()
-	for _, action := range []string{"abort", "preflight"} {
-		t.Run(action, func(t *testing.T) {
-			t.Parallel()
-			repo, remote := newTestRepoWithOrigin(t)
-			createStackBranch(t, repo, "one.txt", "one\n", "One")
-			createStackBranch(t, repo, "two.txt", "two\n", "Two")
-			expectGrapheneOK(t, repo, "send", "origin")
-			// The original branch commit is now in main; the fetched tip adds one new commit.
-			runGit(t, repo.dir, "switch", "main")
-			runGit(t, repo.dir, "merge", "--ff-only", "stack/one")
-			oldOne := runGit(t, repo.dir, "rev-parse", "stack/one")
-			other := cloneConfiguredRepo(t, remote, "stack/one")
-			remoteOne := commitFile(t, other, "file.txt", "upstream\n", "Upstream")
-			runGit(t, other, "push", "origin", "stack/one")
-			runGit(t, repo.dir, "switch", "-c", "target", "main")
-			commitFile(t, repo.dir, "file.txt", "target\n", "Target")
-			runGit(t, repo.dir, "switch", "stack/one")
-			if action == "preflight" {
-				runGit(t, repo.dir, "worktree", "add", t.TempDir(), "stack/two")
-			}
-			original := readState(t, repo.dir)
-			code, _, stderr := repo.runGraphene(t, "restack", "--fetch", "target")
-			if code == 0 {
-				t.Fatal("restack unexpectedly succeeded")
-			}
-			state := readState(t, repo.dir)
-			if action == "preflight" {
-				if !strings.Contains(stderr, "checked out in another worktree") || state.Pending != nil {
-					t.Fatalf("preflight result: %#v, stderr %s", state.Pending, stderr)
-				}
-			} else {
-				if state.Pending == nil || state.Pending.Recovery == nil || state.Pending.Recovery.Expected["stack/one"] != remoteOne {
-					t.Fatalf("fast-forward was not recorded: %#v, stderr %s", state.Pending, stderr)
-				}
-				expectGrapheneOK(t, repo, "abort")
-			}
-			if got := runGit(t, repo.dir, "rev-parse", "stack/one"); got != oldOne {
-				t.Fatalf("original branch tip %s was not preserved: %s", oldOne, got)
-			}
-			if got := readState(t, repo.dir); !reflect.DeepEqual(got, original) {
-				t.Fatalf("original metadata was not preserved: %#v", got)
-			}
-		})
+	repo, remote := newTestRepoWithOrigin(t)
+	createStackBranch(t, repo, "one.txt", "one\n", "One")
+	expectGrapheneOK(t, repo, "send", "origin")
+	runGit(t, repo.dir, "switch", "main")
+	runGit(t, repo.dir, "merge", "--ff-only", "stack/one")
+	oldOne := runGit(t, repo.dir, "rev-parse", "stack/one")
+	other := cloneConfiguredRepo(t, remote, "stack/one")
+	commitFile(t, other, "file.txt", "upstream\n", "Upstream")
+	runGit(t, other, "push", "origin", "stack/one")
+	runGit(t, repo.dir, "switch", "-c", "target", "main")
+	commitFile(t, repo.dir, "file.txt", "target\n", "Target")
+	runGit(t, repo.dir, "switch", "stack/one")
+	original := readState(t, repo.dir)
+	code, _, stderr := repo.runGraphene(t, "restack", "--fetch", "target")
+	if code == 0 || !strings.Contains(stderr, "contains 2 commits") {
+		t.Fatalf("restack result: %d, %s", code, stderr)
+	}
+	if got := runGit(t, repo.dir, "rev-parse", "stack/one"); got != oldOne {
+		t.Fatalf("original branch tip %s was not preserved: %s", oldOne, got)
+	}
+	if got := readState(t, repo.dir); !reflect.DeepEqual(got, original) {
+		t.Fatalf("original metadata was not preserved: %#v", got)
 	}
 }

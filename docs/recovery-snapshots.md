@@ -67,11 +67,14 @@ steps, and retain commits that become empty. Completed branches and stack
 metadata are restored together on abort. Backups are removed only after the
 final or restored stack metadata has been persisted.
 
-For a stack root, restack finds the common ancestor with its local base and also
-considers the base's configured remote-tracking upstream. A newer common ancestor
-supersedes the local boundary, allowing stacks to start beyond a base checked out
-in another worktree. This source boundary is frozen in the queued rebase operation;
-the target remains the explicitly selected local branch.
+Sync and restack resolve source boundaries from saved metadata, validating that
+each saved commit exists and is an ancestor of its branch. Legacy branches use
+the shared resolver's local/upstream ancestry and reflog evidence. They freeze
+the resolved commit in each queued rebase and record inferred boundaries only
+with a successful state transition. Sync dry-run does not persist that inference.
+A moved parent does not replace the saved source. Both planners inspect children
+even when their parent needs no rewrite, so a child left behind by a direct Git
+amend can be rebased from its own historical boundary.
 
 Sync freezes the fetched base tip before advancing any local branch. A base
 checked out in another worktree stays untouched; affected branches rebase onto

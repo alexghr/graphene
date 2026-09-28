@@ -408,6 +408,11 @@ func TestRestackOntoBranchAtSameCommitUpdatesStateOnly(t *testing.T) {
 	createStackBranch(t, repo, "two.txt", "two\n", "Two")
 	before := runGit(t, repo.dir, "rev-parse", "stack/two")
 	runGit(t, repo.dir, "branch", "alias/one", "stack/one")
+	legacy := readState(t, repo.dir)
+	legacy.Boundaries = nil
+	if err := (Git{Dir: repo.dir}).WriteState(legacy); err != nil {
+		t.Fatal(err)
+	}
 
 	expectGrapheneOK(t, repo, "restack", "alias/one")
 
@@ -416,6 +421,9 @@ func TestRestackOntoBranchAtSameCommitUpdatesStateOnly(t *testing.T) {
 		t.Fatalf("stack/two changed from %s to %s", before, after)
 	}
 	state := readState(t, repo.dir)
+	if state.Boundaries["stack/two"] != runGit(t, repo.dir, "rev-parse", "stack/one") {
+		t.Fatalf("restack did not record the legacy boundary: %v", state.Boundaries)
+	}
 	want := []Stack{
 		{Base: "main", Branches: []string{"stack/one"}},
 		{Base: "alias/one", Branches: []string{"stack/two"}},

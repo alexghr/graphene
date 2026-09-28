@@ -5,7 +5,7 @@ import (
 	"maps"
 )
 
-func (a *App) planSnapshotSync(before, after State, selection syncSelection, refs map[string]string, baseHead string) ([]RebaseOp, error) {
+func (a *App) planSnapshotSync(before State, after *State, selection syncSelection, refs map[string]string, baseHead string) ([]RebaseOp, error) {
 	seen := map[string]bool{}
 	for _, stack := range before.Stacks {
 		for _, branch := range stack.Branches {
@@ -15,7 +15,7 @@ func (a *App) planSnapshotSync(before, after State, selection syncSelection, ref
 			seen[branch] = true
 		}
 	}
-	oldGraph, graph := newStackGraph(before), newStackGraph(after)
+	oldGraph, graph := newStackGraph(before), newStackGraph(*after)
 	affected := map[string]bool{}
 	for _, path := range selection.Paths {
 		for _, branch := range syncPathAffectedBranches(path, oldGraph) {
@@ -35,29 +35,16 @@ func (a *App) planSnapshotSync(before, after State, selection syncSelection, ref
 		}
 		visited[branch] = true
 		parent, nextParent := oldGraph.parent[branch], graph.parent[branch]
-		upstream := refs[parent]
-		if refs[branch] == "" || upstream == "" {
-			return fmt.Errorf("missing local branch or parent for %q", branch)
-		}
-		if parent == selection.Base && !before.ContainsBranch(parent) {
-			var err error
-			upstream, err = a.git.Output("merge-base", baseHead, refs[branch])
-			if err != nil {
-				return err
-			}
-		} else {
-			ancestor, err := a.isAncestor(upstream, refs[branch])
-			if err != nil {
-				return err
-			}
-			if !ancestor {
-				return fmt.Errorf("parent %q is not an ancestor of %q; repair the stack before syncing", parent, branch)
-			}
-		}
-		if err := a.validateStackShapeFromBase(Stack{Branches: []string{branch}}, upstream, parent); err != nil {
+		upstream, err := a.resolveSyncBoundary(before, branch, refs)
+		if err != nil {
 			return err
 		}
-		rewrite := parentRewritten || parent != nextParent || (nextParent == selection.Base && upstream != baseHead)
+		after.setBoundary(branch, upstream)
+		destination := refs[nextParent]
+		if nextParent == selection.Base {
+			destination = baseHead
+		}
+		rewrite := parentRewritten || parent != nextParent || upstream != destination
 		if rewrite {
 			if branch != selection.Current {
 				if err := a.git.requireSnapshotBranchAvailable(branch); err != nil {
@@ -105,6 +92,9 @@ func (a *App) startSnapshotSync(state State, p *Pending, fetched upstreamUpdate,
 	}
 	for _, op := range p.Queue {
 		r.Expected[op.Top] = refs[op.Top]
+		if op.Onto != base {
+			r.Expected[op.Onto] = refs[op.Onto]
+		}
 	}
 	for _, branch := range p.Branches {
 		r.Expected[branch] = refs[branch]
