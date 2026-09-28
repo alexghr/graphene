@@ -310,7 +310,7 @@ func TestCommitDeletesTemporaryBranchAfterFailedCommit(t *testing.T) {
 	assertNoGrapheneTmpBranches(t, repo.dir)
 }
 
-func TestSplitAbortRestoresOriginalBranchAndState(t *testing.T) {
+func TestSplitKeepsHistoricalBoundaryThroughBaseMovementAndAbort(t *testing.T) {
 	t.Parallel()
 	repo := newTestRepo(t)
 
@@ -329,9 +329,13 @@ func TestSplitAbortRestoresOriginalBranchAndState(t *testing.T) {
 	if err := (Git{Dir: repo.dir}).WriteState(originalState); err != nil {
 		t.Fatal(err)
 	}
+	mainWorktree := filepath.Join(t.TempDir(), "main")
+	runGit(t, repo.dir, "worktree", "add", mainWorktree, "main")
+	commitFile(t, mainWorktree, "upstream.txt", "upstream\n", "Advance main")
 
 	runGit(t, repo.dir, "checkout", "stack/combined-change")
 	expectGrapheneOK(t, repo, "split")
+	newMain := commitFile(t, mainWorktree, "later.txt", "later\n", "Advance during split")
 	runGit(t, repo.dir, "add", "one.txt")
 	expectGrapheneOK(t, repo, "new", "--reuse-current", "-m", "Add one")
 	runGit(t, repo.dir, "add", "two.txt")
@@ -353,6 +357,30 @@ func TestSplitAbortRestoresOriginalBranchAndState(t *testing.T) {
 	state := readState(t, repo.dir)
 	if !reflect.DeepEqual(state, originalState) {
 		t.Fatalf("state = %#v, want %#v", state, originalState)
+	}
+	if got := runGit(t, repo.dir, "rev-parse", "main"); got != newMain {
+		t.Fatal("abort changed main in the other worktree")
+	}
+	// A second attempt completes and must retain only the original branch changes.
+	originalTree := runGit(t, repo.dir, "rev-parse", "stack/combined-change^{tree}")
+	afterTree := runGit(t, repo.dir, "rev-parse", "stack/after^{tree}")
+	expectGrapheneOK(t, repo, "split")
+	runGit(t, repo.dir, "add", "one.txt", "two.txt")
+	expectGrapheneOK(t, repo, "new", "--reuse-current", "-m", "First part")
+	expectGrapheneOK(t, repo, "new", "-a", "--branch", "stack/last-part", "-m", "Last part")
+	for ref, want := range map[string]string{
+		"stack/combined-change^": originalState.Boundaries["stack/combined-change"],
+		"stack/last-part^{tree}": originalTree,
+		"stack/after^{tree}":     afterTree,
+	} {
+		if got := runGit(t, repo.dir, "rev-parse", ref); got != want {
+			t.Fatalf("%s = %s, want %s", ref, got, want)
+		}
+	}
+	assertBranchParent(t, repo.dir, "stack/after", "stack/last-part")
+	state = readState(t, repo.dir)
+	if state.Pending != nil || state.Boundaries["stack/after"] != runGit(t, repo.dir, "rev-parse", "stack/last-part") {
+		t.Fatalf("completed split state = %#v", state)
 	}
 }
 

@@ -163,7 +163,7 @@ The first split commit must use `graphene new --reuse-current`; later split part
 
 ## Squash Stacked Branches
 
-Use this when adjacent stack branches should become one reviewable branch. `-c`/`--count` includes the current branch and defaults to `2`. Use `--no-edit` to accept Graphene's generated squash message without opening an editor.
+Use this when adjacent stack branches should become one reviewable branch. `-c`/`--count` includes the current branch and defaults to `2`; each selected branch must contain one commit. A moved base branch does not require syncing before split or squash. Use `--no-edit` to accept Graphene's generated squash message without opening an editor.
 
 ```sh
 graphene squash

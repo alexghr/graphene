@@ -98,7 +98,7 @@ gn squash
 gn squash -c 3 -m "Combine parser cleanup"
 ```
 
-Use `--no-edit` with `gn squash` to accept the generated squash message without opening an editor.
+Each selected branch must contain one commit. You do not need to sync before splitting or squashing merely because the base branch has moved. Use `--no-edit` with `gn squash` to accept the generated squash message without opening an editor.
 
 Stop tracking the current branch path without deleting any Git branches:
 

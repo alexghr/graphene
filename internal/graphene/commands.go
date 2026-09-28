@@ -209,7 +209,15 @@ func (a *App) split(args []string) error {
 	if !ok {
 		return fmt.Errorf("branch %q is not in a graphene stack", target)
 	}
-	count, err := a.commitCount(base, target)
+	refs, err := a.git.snapshotBranchRefs()
+	if err != nil {
+		return err
+	}
+	boundary, err := a.resolveBranchBoundary(state, target, refs)
+	if err != nil {
+		return err
+	}
+	count, err := a.commitCount(boundary, refs[target])
 	if err != nil {
 		return err
 	}
@@ -233,11 +241,8 @@ func (a *App) split(args []string) error {
 		return fmt.Errorf("rebase in progress; use graphene continue or graphene abort before graphene split")
 	}
 
-	originalHead, err := a.git.Output("rev-parse", "--verify", target+"^{commit}")
-	if err != nil {
-		return err
-	}
-	originalRefs := a.trackedBranchRefs(state)
+	originalHead := refs[target]
+	originalRefs := trackedBranchRefs(state, refs)
 
 	originalStacks := cloneStacks(state.Stacks)
 	nextState, ok := TruncateStackAfterBranch(cloneStackState(state), target)
@@ -251,7 +256,7 @@ func (a *App) split(args []string) error {
 		Top:                originalHead,
 		Branches:           []string{target},
 		OriginalHead:       originalHead,
-		OriginalBase:       base,
+		OriginalBase:       boundary,
 		OriginalRefs:       originalRefs,
 		OriginalStacks:     originalStacks,
 		OriginalBoundaries: maps.Clone(state.Boundaries),
@@ -259,6 +264,7 @@ func (a *App) split(args []string) error {
 	if err != nil {
 		return err
 	}
+	nextState.setBoundary(target, boundary)
 	nextState.Pending = pending
 
 	if target != current {
@@ -269,7 +275,7 @@ func (a *App) split(args []string) error {
 	if err := a.git.WriteState(nextState); err != nil {
 		return err
 	}
-	if err := a.git.Run("reset", "-N", base); err != nil {
+	if err := a.git.Run("reset", "-N", boundary); err != nil {
 		_ = a.git.WriteState(state)
 		return err
 	}
@@ -573,21 +579,22 @@ func (a *App) squash(args []string) error {
 	if inProgress {
 		return fmt.Errorf("rebase in progress; use graphene continue or graphene abort before graphene squash")
 	}
-	if err := a.validateSquashShape(selection); err != nil {
+	refs, err := a.git.snapshotBranchRefs()
+	if err != nil {
+		return err
+	}
+	baseRef, err := a.validateSquashShape(state, selection, refs)
+	if err != nil {
 		return err
 	}
 	if err := a.validateSquashBranchesAvailable(current, selection); err != nil {
 		return err
 	}
 
-	oldRefs := a.trackedBranchRefs(state)
+	oldRefs := trackedBranchRefs(state, refs)
 	topRef := oldRefs[selection.Top]
 	if topRef == "" {
 		return fmt.Errorf("missing old ref for %q", selection.Top)
-	}
-	baseRef, err := a.git.Output("rev-parse", "--verify", selection.Base+"^{commit}")
-	if err != nil {
-		return err
 	}
 
 	nextState, ops, err := squashFinalState(state, selection, oldRefs)
@@ -722,17 +729,35 @@ func squashSuffixes(state State, removed []string) ([]squashSuffix, map[int]bool
 	return suffixes, handledStacks
 }
 
-func (a *App) validateSquashShape(selection squashSelection) error {
-	parent := selection.Base
+func (a *App) validateSquashShape(state State, selection squashSelection, refs map[string]string) (string, error) {
+	base := ""
+	previous := ""
 	for _, branch := range selection.Branches {
-		count, err := a.commitCount(parent, branch)
+		boundary, err := a.resolveBranchBoundary(state, branch, refs)
 		if err != nil {
-			return err
+			return "", err
 		}
-		if count != 1 {
-			return fmt.Errorf("branch %q contains %d commits on top of %q; Graphene can only squash one-commit stack branches", branch, count, parent)
+		count, err := a.commitCount(boundary, refs[branch])
+		if err != nil {
+			return "", err
 		}
-		parent = branch
+		if err := validateSquashStep(branch, boundary, previous, count); err != nil {
+			return "", err
+		}
+		if base == "" {
+			base = boundary
+		}
+		previous = refs[branch]
+	}
+	return base, nil
+}
+
+func validateSquashStep(branch, boundary, previous string, count int) error {
+	if count != 1 {
+		return fmt.Errorf("branch %q contains %d commits after its historical boundary; Graphene can only squash one-commit stack branches", branch, count)
+	}
+	if previous != "" && boundary != previous {
+		return fmt.Errorf("branch %q is not based on the preceding selected branch's current commit; use graphene sync before squashing", branch)
 	}
 	return nil
 }
@@ -3095,21 +3120,14 @@ func (a *App) stateRefs(state State) map[string]string {
 	return refs
 }
 
-func (a *App) trackedBranchRefs(state State) map[string]string {
-	seen := map[string]bool{}
-	refs := map[string]string{}
-	for _, stack := range state.Stacks {
-		for _, branch := range stack.Branches {
-			if branch == "" || seen[branch] {
-				continue
-			}
-			seen[branch] = true
-			if ref, err := a.git.Output("rev-parse", "--verify", branch+"^{commit}"); err == nil {
-				refs[branch] = ref
-			}
+func trackedBranchRefs(state State, refs map[string]string) map[string]string {
+	tracked := map[string]string{}
+	for branch, commit := range refs {
+		if state.ContainsBranch(branch) {
+			tracked[branch] = commit
 		}
 	}
-	return refs
+	return tracked
 }
 
 func (a *App) validateNewBase(base string) error {
