@@ -243,7 +243,7 @@ func TestRegressionSyncAllAllowsLocalBaseAheadOfUpstream(t *testing.T) {
 	if got := currentBranch(t, repo.dir); got != "main" {
 		t.Fatalf("current branch = %q, want main", got)
 	}
-	wantState := State{Stacks: []Stack{{Base: "main", Branches: []string{"stack/two"}}}}
+	wantState := State{Stacks: []Stack{{Base: "main", Branches: []string{"stack/two"}}}, Boundaries: map[string]string{"stack/two": localMain}}
 	if got := readState(t, repo.dir); !reflect.DeepEqual(got, wantState) {
 		t.Fatalf("state = %#v, want %#v", got, wantState)
 	}

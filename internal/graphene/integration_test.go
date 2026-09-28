@@ -86,7 +86,7 @@ func TestCommitRecordsExplicitBaseBranch(t *testing.T) {
 	}
 }
 
-func TestTrackRejectsMultiCommitBranch(t *testing.T) {
+func TestTrackRequiresOneCommitAndRecordsParent(t *testing.T) {
 	t.Parallel()
 	repo := newTestRepo(t)
 	runGit(t, repo.dir, "checkout", "-b", "z")
@@ -108,6 +108,12 @@ func TestTrackRejectsMultiCommitBranch(t *testing.T) {
 	state := readState(t, repo.dir)
 	if len(state.Stacks) != 0 {
 		t.Fatalf("stacks = %#v, want none", state.Stacks)
+	}
+	parent := runGit(t, repo.dir, "rev-parse", "HEAD^")
+	runGit(t, repo.dir, "branch", "-f", "z", parent)
+	expectGrapheneOK(t, repo, "track", "--parent", "z")
+	if got := readState(t, repo.dir).Boundaries["a"]; got != parent {
+		t.Fatalf("tracked boundary = %s, want %s", got, parent)
 	}
 }
 
@@ -241,26 +247,23 @@ func TestCommitReuseCurrentRejectsRecordedBranchBeforeCommit(t *testing.T) {
 	}
 }
 
-func TestCommitRejectsExplicitBaseAtDifferentCommit(t *testing.T) {
+func TestCommitUsesHeadWithExplicitBaseAtDifferentCommit(t *testing.T) {
 	t.Parallel()
 	repo := newTestRepo(t)
 	createStackBranch(t, repo, "one.txt", "one\n", "One")
 	runGit(t, repo.dir, "checkout", "main")
+	parent := runGit(t, repo.dir, "rev-parse", "HEAD")
 
 	writeFile(t, repo.dir, "two.txt", "two\n")
 	runGit(t, repo.dir, "add", ".")
-	code, _, stderr := repo.runGraphene(t, "new", "--base", "stack/one", "-m", "Two")
-	if code == 0 {
-		t.Fatal("graphene new --base unexpectedly succeeded")
+	expectGrapheneOK(t, repo, "new", "--base", "stack/one", "-m", "Two")
+	if got := runGit(t, repo.dir, "rev-parse", "HEAD^"); got != parent {
+		t.Fatalf("commit parent = %s, want original HEAD %s", got, parent)
 	}
-	if !strings.Contains(stderr, "does not point to current HEAD") {
-		t.Fatalf("stderr = %q", stderr)
-	}
-	if got := currentBranch(t, repo.dir); got != "main" {
-		t.Fatalf("branch = %q, want main", got)
-	}
-	if refExists(t, repo.dir, "refs/heads/stack/two") {
-		t.Fatal("stack/two was created")
+	state := readState(t, repo.dir)
+	base, _ := BaseBranch(state, "stack/two")
+	if base != "stack/one" || state.Boundaries["stack/two"] != parent {
+		t.Fatalf("logical base = %s, boundaries = %v", base, state.Boundaries)
 	}
 }
 
@@ -288,7 +291,7 @@ func TestReuseCurrentBaseUsesConfiguredUpstream(t *testing.T) {
 	runGit(t, repo.dir, "switch", "main")
 	commitFile(t, repo.dir, "local.txt", "local\n", "Diverge main")
 	runGit(t, repo.dir, "switch", "feature")
-	if err := app.validateNewBase("main"); err == nil || !strings.Contains(err.Error(), "does not point to current HEAD") {
+	if err := app.validateNewBase("main"); err != nil {
 		t.Fatalf("divergent base: %v", err)
 	}
 }
@@ -1099,12 +1102,13 @@ func TestSyncAbortRestoresBranchDeletedDuringFinalization(t *testing.T) {
 	one := runGit(t, repo.dir, "rev-parse", "stack/one")
 	state := original
 	state.Pending = &Pending{
-		Operation:      "sync",
-		Branch:         "stack/one",
-		ReturnBranch:   "main",
-		Branches:       []string{"stack/one"},
-		OriginalRefs:   map[string]string{"stack/one": one},
-		OriginalStacks: cloneStacks(original.Stacks),
+		Operation:          "sync",
+		Branch:             "stack/one",
+		ReturnBranch:       "main",
+		Branches:           []string{"stack/one"},
+		OriginalRefs:       map[string]string{"stack/one": one},
+		OriginalStacks:     cloneStacks(original.Stacks),
+		OriginalBoundaries: original.Boundaries,
 	}
 	if err := (Git{Dir: repo.dir}).WriteState(state); err != nil {
 		t.Fatal(err)
@@ -1307,6 +1311,9 @@ func TestContinueRestoresRebaseStateAfterCommitCreationFailure(t *testing.T) {
 	branchOne := runGit(t, repo.dir, "rev-parse", "stack/one")
 	if parent != branchOne {
 		t.Fatalf("stack/two parent = %s, want stack/one %s", parent, branchOne)
+	}
+	if state.Boundaries["stack/two"] != branchOne {
+		t.Fatalf("continued boundary = %s, want %s", state.Boundaries["stack/two"], branchOne)
 	}
 }
 

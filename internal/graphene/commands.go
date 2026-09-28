@@ -87,6 +87,11 @@ func (a *App) newBranch(args []string) error {
 		temp = true
 	}
 
+	boundary, err := a.git.Head()
+	if err != nil {
+		return err
+	}
+
 	if !opts.reuseCurrent {
 		if err := a.git.Run("switch", "-c", branch); err != nil {
 			return err
@@ -118,6 +123,7 @@ func (a *App) newBranch(args []string) error {
 	if err := state.AddCommit(recordBase, branch); err != nil {
 		return err
 	}
+	state.setBoundary(branch, boundary)
 	return a.git.WriteState(state)
 }
 
@@ -288,6 +294,10 @@ func (a *App) newDuringSplit(opts commitOptions, current string, state State) er
 	if err != nil {
 		return err
 	}
+	boundary, err := a.git.Head()
+	if err != nil {
+		return err
+	}
 	if opts.reuseCurrent {
 		if opts.branch != "" {
 			return fmt.Errorf("graphene new --reuse-current cannot use --branch")
@@ -304,6 +314,10 @@ func (a *App) newDuringSplit(opts commitOptions, current string, state State) er
 			return err
 		}
 		if err := a.git.Run(commitGitArgs...); err != nil {
+			return err
+		}
+		state.setBoundary(current, boundary)
+		if err := a.git.WriteState(state); err != nil {
 			return err
 		}
 		return a.finishSplitIfClean(state)
@@ -359,6 +373,7 @@ func (a *App) newDuringSplit(opts commitOptions, current string, state State) er
 	if err := state.AddCommit(recordBase, branch); err != nil {
 		return err
 	}
+	state.setBoundary(branch, boundary)
 	state.Pending.Branches = append(state.Pending.Branches, branch)
 	if err := a.git.WriteState(state); err != nil {
 		return err
@@ -610,6 +625,7 @@ func (a *App) squash(args []string) error {
 		return restore(err)
 	}
 
+	nextState.setBoundary(selection.Bottom, baseRef)
 	if len(ops) == 0 {
 		if err := a.deleteBranches(selection.Removed); err != nil {
 			return restore(err)
@@ -949,6 +965,13 @@ func (a *App) amend(args []string) error {
 		return err
 	}
 	oldRefs[current] = oldHead
+	if state.ContainsBranch(current) {
+		boundary, err := a.resolveBranchBoundary(state, current, oldRefs)
+		if err != nil {
+			return err
+		}
+		state.setBoundary(current, boundary)
+	}
 
 	ops, err := RestackOpsAfterRewrite(state, current, oldRefs)
 	if err != nil {
@@ -972,7 +995,7 @@ func (a *App) amend(args []string) error {
 		return err
 	}
 	if len(ops) == 0 {
-		return nil
+		return a.git.WriteState(state)
 	}
 
 	pending, err := a.pendingForCurrentWorktree(Pending{
@@ -1045,8 +1068,7 @@ func (a *App) continueRebase(args []string) error {
 		if inProgress {
 			return nil
 		}
-		state.Pending.Queue = state.Pending.Queue[1:]
-		if err := a.git.WriteState(state); err != nil {
+		if err := a.completePendingRebase(&state); err != nil {
 			return err
 		}
 		if len(state.Pending.Queue) == 0 {
@@ -1552,9 +1574,14 @@ func (a *App) trackBranch(base, branch string) error {
 	if err := a.validateTrackBranchesExist(base, branch); err != nil {
 		return err
 	}
-	if err := a.validateTrackBranchShape(base, branch); err != nil {
+	refs, err := a.git.snapshotBranchRefs()
+	if err != nil {
 		return err
 	}
+	if err := a.validateTrackBranchCommits(base, branch, refs[base], refs[branch]); err != nil {
+		return err
+	}
+	nextState.setBoundary(branch, refs[base])
 	return a.git.WriteState(nextState)
 }
 
@@ -1648,11 +1675,14 @@ func (a *App) importStack(args []string) error {
 
 	nextState := state
 	parent := base
+	boundary := baseRef
 	for _, branch := range branches {
 		nextState, err = TrackBranch(nextState, parent, branch.Branch)
 		if err != nil {
 			return err
 		}
+		nextState.setBoundary(branch.Branch, boundary)
+		boundary = branch.Commit
 		parent = branch.Branch
 	}
 
@@ -2545,11 +2575,13 @@ func (a *App) runPendingRebases(state State) error {
 	}
 	for state.Pending != nil && len(state.Pending.Queue) > 0 {
 		op := state.Pending.Queue[0]
+		if err := a.prepareBoundaryUpdates(&state); err != nil {
+			return err
+		}
 		if err := a.git.Run("rebase", "--update-refs", "--onto", op.Onto, op.Upstream, op.Top); err != nil {
 			return err
 		}
-		state.Pending.Queue = state.Pending.Queue[1:]
-		if err := a.git.WriteState(state); err != nil {
+		if err := a.completePendingRebase(&state); err != nil {
 			return err
 		}
 		if len(state.Pending.Queue) == 0 {
@@ -3089,43 +3121,7 @@ func (a *App) validateNewBase(base string) error {
 		return fmt.Errorf("base branch %q does not exist", base)
 	}
 
-	head, err := a.git.Head()
-	if err != nil {
-		return err
-	}
-	matches, err := a.newBaseMatchesHead(base, head)
-	if err != nil {
-		return err
-	}
-	if !matches {
-		return fmt.Errorf("base branch %q does not point to current HEAD", base)
-	}
 	return nil
-}
-
-func (a *App) newBaseMatchesHead(base, head string) (bool, error) {
-	baseRef, err := a.git.Output("rev-parse", "--verify", "refs/heads/"+base+"^{commit}")
-	if err != nil {
-		return false, err
-	}
-	if baseRef == head {
-		return true, nil
-	}
-	upstream, err := a.git.Output("for-each-ref", "--format=%(upstream)", "refs/heads/"+base)
-	if err != nil {
-		return false, err
-	}
-	if !strings.HasPrefix(upstream, "refs/remotes/") {
-		return false, nil
-	}
-	upstreamRef, err := a.git.Output("rev-parse", "--verify", upstream+"^{commit}")
-	if err != nil {
-		return false, err
-	}
-	if upstreamRef != head {
-		return false, nil
-	}
-	return a.isAncestor(baseRef, head)
 }
 
 func (a *App) validateRestackBase(base string) error {
@@ -3143,13 +3139,6 @@ func (a *App) validateRestackBase(base string) error {
 		return fmt.Errorf("base %q is a remote-tracking ref; use a local branch name for graphene restack", base)
 	}
 	return fmt.Errorf("base branch %q does not exist", base)
-}
-
-func (a *App) validateTrackBranch(base, branch string) error {
-	if err := a.validateTrackBranchesExist(base, branch); err != nil {
-		return err
-	}
-	return a.validateTrackBranchShape(base, branch)
 }
 
 func (a *App) validateTrackBranchesExist(base, branch string) error {
@@ -3171,9 +3160,7 @@ func (a *App) validateTrackBranchesExist(base, branch string) error {
 	return nil
 }
 
-func (a *App) validateTrackBranchShape(base, branch string) error {
-	baseRef := "refs/heads/" + base
-	branchRef := "refs/heads/" + branch
+func (a *App) validateTrackBranchCommits(base, branch, baseRef, branchRef string) error {
 	ancestor, err := a.isAncestor(baseRef, branchRef)
 	if err != nil {
 		return err

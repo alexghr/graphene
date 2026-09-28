@@ -62,8 +62,9 @@ type stack struct {
 }
 
 type state struct {
-	Stacks  []stack        `json:"stacks"`
-	Pending map[string]any `json:"pending"`
+	Stacks     []stack           `json:"stacks"`
+	Pending    map[string]any    `json:"pending"`
+	Boundaries map[string]string `json:"boundaries"`
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -217,6 +218,16 @@ func (f *fixture) cleanState(want ...stack) {
 	s := f.state()
 	if s.Pending != nil || len(s.Stacks) != len(want) || (len(want) > 0 && !reflect.DeepEqual(s.Stacks, want)) {
 		f.t.Fatalf("state = %+v, want stacks %+v without pending", s, want)
+	}
+	count := 0
+	for _, stack := range want {
+		for _, branch := range stack.Branches {
+			count++
+			expectSame(f.t, branch+" saved boundary", s.Boundaries[branch], f.parent(branch))
+		}
+	}
+	if len(s.Boundaries) != count {
+		f.t.Fatalf("boundaries = %v, want %d tracked branches", s.Boundaries, count)
 	}
 }
 

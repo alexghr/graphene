@@ -19,6 +19,7 @@ func TestUnitBoundaryStateRoundTrip(t *testing.T) {
 			OriginalBoundaries: map[string]string{"one": strings.Repeat("a", 40), "two": strings.Repeat("b", 40)},
 			NextStacks:         []Stack{{Base: "main", Branches: []string{"one"}}},
 			NextBoundaries:     map[string]string{"one": strings.Repeat("a", 40)},
+			BoundaryUpdates:    map[string]string{"child": "refs/heads/one"},
 		},
 	}
 	data, err := json.Marshal(newStateFile(state, ""))

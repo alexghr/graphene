@@ -20,7 +20,10 @@ func TestImportUsesFeatureRangeWithBaseInAnotherWorktree(t *testing.T) {
 	top := commitFile(t, worktree.dir, "two.txt", "two\n", "Two")
 
 	expectGrapheneOK(t, worktree, "import", "main")
-	want := State{Stacks: []Stack{{Base: "main", Branches: []string{"stack/one", "feature"}}}}
+	want := State{
+		Stacks:     []Stack{{Base: "main", Branches: []string{"stack/one", "feature"}}},
+		Boundaries: map[string]string{"stack/one": upstream, "feature": one},
+	}
 	if got := readState(t, repo.dir); !reflect.DeepEqual(got, want) {
 		t.Fatalf("imported state = %#v, want %#v", got, want)
 	}
@@ -51,6 +54,7 @@ func TestImportUsesFeatureRangeWithBaseInAnotherWorktree(t *testing.T) {
 
 	expectGrapheneOK(t, worktree, "import", "main")
 	want.Stacks[0].Branches = []string{"feature"}
+	delete(want.Boundaries, "stack/one")
 	if got := readState(t, repo.dir); !reflect.DeepEqual(got, want) {
 		t.Fatalf("reimported state = %#v, want %#v", got, want)
 	}

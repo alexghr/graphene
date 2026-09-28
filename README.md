@@ -224,4 +224,4 @@ If a worktree already has the branch you want to use checked out, commit on that
 gn new --reuse-current --base main -m "implement foo"
 ```
 
-This also works when your branch starts at `origin/main` and local `main` is behind, provided `main` tracks `origin/main`. You do not need to update `main` or switch its worktree first. You can omit `--base main` when Graphene can identify a single matching base.
+The new commit uses your current HEAD as its parent. `--base main` records where the branch belongs in the stack; it does not move your checkout or update `main`. This works even when local `main` has moved ahead or fallen behind. You can omit `--base main` when Graphene can identify a single matching base.

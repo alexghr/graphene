@@ -286,6 +286,10 @@ func (a *App) recordRebaseResult(state State, gitErr error) error {
 		}
 		r.FastForward = ""
 	} else {
+		if p.NextBoundaries == nil {
+			p.NextBoundaries = map[string]string{}
+		}
+		p.NextBoundaries[branch] = r.Onto
 		p.Queue = p.Queue[1:]
 	}
 	r.Expected[branch] = updated

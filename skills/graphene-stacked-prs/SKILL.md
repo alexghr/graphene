@@ -64,7 +64,7 @@ git switch <branch>
 
 ## Create A Stack
 
-When committing on an existing branch in a worktree, use `graphene new --reuse-current --base main`. If the branch points to the configured upstream of a stale local `main`, Graphene records `main` as the base without moving it or its worktree. `--base main` can be omitted when it is the only matching base.
+When committing on an existing branch in a worktree, use `graphene new --reuse-current --base main`. The commit starts at the current HEAD; `--base` records the stack parent without moving your checkout or updating the base branch. Local `main` may be ahead or behind. `--base main` can be omitted when it is the only matching base.
 
 For an existing linear commit series, run `graphene import main` from its tip to create a stack without rewriting the commits. Import excludes commits already in the base's known upstream history, including when local `main` is behind in another worktree. It does not fetch; run `git fetch` first if you need the latest upstream state. When importing onto a tracked parent, the series starts at that parent's local tip.
 

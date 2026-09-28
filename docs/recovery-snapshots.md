@@ -45,8 +45,11 @@ its pending operation; the snapshot alone cannot infer that after a crash.
 Pending operations retain separate original and planned boundary maps alongside
 their stack topology. Split restores suffix metadata when reattaching the suffix;
 squash and deletion prune metadata for removed branches. Abort restores the
-original maps. These fields preserve metadata through recovery; recording new
-boundaries and advancing them during rewrites is a separate command integration.
+original maps. Snapshot rebases record the frozen destination as the branch's new
+boundary only after Git completes the step. Legacy queued rebases save boundary
+destinations before starting Git, then resolve rewritten branch refs and persist
+the resulting boundaries with queue advancement. A conflicted step leaves its
+boundary metadata unchanged until continue succeeds.
 
 Restack and sync persist a ready, applying, conflict or aborting phase. Each
 fast-forward or rebase starts with an applying record and ends with a saved result.

@@ -29,6 +29,7 @@ type Pending struct {
 	Branches           []string          `json:"branches,omitempty"`
 	NextStacks         []Stack           `json:"nextStacks,omitempty"`
 	NextBoundaries     map[string]string `json:"nextBoundaries,omitempty"`
+	BoundaryUpdates    map[string]string `json:"boundaryUpdates,omitempty"`
 	BaseChanges        []BaseChange      `json:"baseChanges,omitempty"`
 	OriginalHead       string            `json:"originalHead,omitempty"`
 	OriginalBase       string            `json:"originalBase,omitempty"`
@@ -74,6 +75,14 @@ func cloneStacks(stacks []Stack) []Stack {
 
 func cloneStackState(s State) State {
 	return State{Stacks: cloneStacks(s.Stacks), Boundaries: maps.Clone(s.Boundaries)}
+}
+
+func (s *State) setBoundary(branch, commit string) {
+	s.Boundaries = maps.Clone(s.Boundaries)
+	if s.Boundaries == nil {
+		s.Boundaries = map[string]string{}
+	}
+	s.Boundaries[branch] = commit
 }
 
 func (s *State) pruneBoundaries() {
