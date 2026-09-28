@@ -38,6 +38,8 @@ git branch --show-current
 graphene graph
 ```
 
+If graph reports that a branch needs syncing after its parent history changed, switch to the named branch and run `graphene sync`. Graph does not fetch. Use `graphene graph --stack` to inspect only the current stack path and its warnings.
+
 Use Graphene stack navigation for tracked branches:
 
 ```sh

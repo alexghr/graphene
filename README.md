@@ -55,6 +55,8 @@ Inspect the stack:
 gn graph
 ```
 
+If the graph reports that a branch needs syncing after its parent history changed, switch to that branch and run `gn sync`. Graph checks locally known history without fetching; `gn graph --stack` limits the view and warnings to the current stack path.
+
 Move through the stack:
 
 ```

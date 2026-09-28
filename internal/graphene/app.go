@@ -457,7 +457,7 @@ options:
   -b, --bottom [number]  switch to the bottom branch in the current stack path
   -u, --up [number]      switch to a direct child branch
   -d, --down [number]    switch to the direct parent branch`,
-		"graph":   "usage: graphene graph [-s|--stack]\n\nPrint the tracked stack graph.\n\noptions:\n  -s, --stack  print only the current stack path",
+		"graph":   "usage: graphene graph [-s|--stack]\n\nPrint the tracked stack graph and warn about branches needing sync. Uses locally known history without fetching.\n\noptions:\n  -s, --stack  print only the current stack path",
 		"version": "usage: graphene version\n\nPrint the Graphene version and Git version.",
 	}
 	text, ok := usages[command]

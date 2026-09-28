@@ -32,6 +32,8 @@ A local base can remain behind after sync when it is checked out in another work
 
 Show a visible needs-sync warning/status indicator and direct users to `gn sync` when the historical boundary is no longer contained in the known base history. This indication does not require a CLI override and does not itself block operations whose saved boundaries remain valid. Sync remains available to repair the stack.
 
+`graph` reports these warnings on stderr after rendering the graph, scoped to displayed branches. A tracked parent's local history is authoritative; an untracked base can contain the boundary in either its local history or its configured remote-tracking upstream. Checking the union avoids treating a stale local base as a rewrite. Graph does not fetch, infer missing legacy boundaries, or persist metadata. Invalid saved boundaries produce a separate diagnostic without suggesting that sync can repair them. Pending operations show their existing recovery status instead of inspecting temporarily inconsistent branch history.
+
 ## Sync destinations and local base refs
 
 The fetched remote base commit is the sync destination even if the local base is ahead or diverged. Updating the local base ref is separate from rebasing the stack. Preserve local-only commits and respect other worktrees; do not require moving the local base in order to sync the stack.

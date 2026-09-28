@@ -23,9 +23,18 @@ func (a *App) graph(args []string) error {
 		return err
 	}
 	if opts.stack {
-		return WriteCurrentStackGraph(a.stdout, state, current)
+		err = WriteCurrentStackGraph(a.stdout, state, current)
+	} else {
+		err = WriteGraph(a.stdout, state, current)
 	}
-	return WriteGraph(a.stdout, state, current)
+	if err != nil || state.Pending != nil {
+		return err
+	}
+	branches := StateRefNames(state)
+	if opts.stack {
+		branches, _ = VisibleStackPath(state, current)
+	}
+	return a.writeBoundaryWarnings(state, branches)
 }
 
 type graphOptions struct {
