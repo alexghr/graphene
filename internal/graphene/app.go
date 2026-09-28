@@ -419,7 +419,7 @@ options:
       --accept-risk   acknowledge possible overwrites in nested repositories/worktrees/submodules`,
 		"send": `usage: graphene send [options] [remote]
 
-Push the current branch and its dependency path, then print pull request URLs.
+Atomically push the current branch and its dependency path, then print pull request URLs. If any branch is rejected, none are updated. The server must support atomic pushes.
 
 options:
       --remote <remote>  push to this remote
@@ -427,7 +427,7 @@ options:
   -n, --dry-run          show what would be pushed without updating refs or upstreams`,
 		"sendf": `usage: graphene sendf [options] [remote]
 
-Force-with-lease push the same branch set selected by graphene send.
+Atomically force-with-lease push the same branch set selected by graphene send. If any branch is rejected, none are updated. The server must support atomic pushes.
 
 options:
       --remote <remote>  push to this remote

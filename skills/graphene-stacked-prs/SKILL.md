@@ -147,6 +147,8 @@ After approval to force-with-lease push rewritten stacked branches:
 graphene sendf
 ```
 
+`send` and `sendf` push all selected branches atomically. A rejection leaves every selected remote branch unchanged. Servers without atomic-push support are rejected; Graphene does not fall back to partial pushes.
+
 ## Split A Stacked Branch
 
 Use this when a tracked one-commit branch should become multiple reviewable branches. If no branch is given, Graphene splits the current branch.

@@ -66,7 +66,7 @@ For legacy state, a tracked parent supplies its captured tip. An untracked root 
 
 Squash captures local refs once and validates each selected branch against its resolved historical boundary. Every branch must contain exactly one commit, and each branch after the bottom must start at the preceding selected tip. A rewritten internal parent requires sync before squash, while a moved base below the selection does not. The combined commit uses the bottom boundary and the selected top tree. Split freezes its resolved boundary in pending `OriginalBase` and uses that commit for reset and split-part checks; older pending splits containing a branch name remain readable. Abort restores the original metadata rather than persisting inferred boundaries from the cancelled operation.
 
-## Implementation order
+## Implementation sequence (completed)
 
 1. Add boundary metadata, a shared resolver, and migration tests. Cover advanced or stale local bases, rewritten upstream history, and invalid or ambiguous saved boundaries.
 2. Record and preserve boundaries through creation, tracking, import, state transformations, and recovery. Correct import's feature-range selection when the local base is stale. Test successful rewrites, conflicts, continuation, and abort.
@@ -84,4 +84,6 @@ Keep design decisions, migration details, recovery invariants, and the inventory
 
 ## Follow-up backlog for 2026-09-28
 
-- Make `send` and `sendf` push the selected branches with `git push --atomic`. A rejected branch currently leaves other selected branches published; the whole push should succeed or fail together. Cover partial rejection using a local bare remote and update the usage notes.
+- Completed: `send` and `sendf` push the selected branches with `git push --atomic`, including dry-runs. Rejections leave every selected remote branch unchanged. A server without atomic support fails without fallback. A single Git integration table covers non-fast-forward rejection, stale leases, and unsupported servers; existing daily E2Es cover successful sends and force-with-lease sends.
+
+The final test/documentation review keeps candidate selection, boundary validation rules, map isolation, and squash adjacency in unit tests without mocks. Git integration fixtures cover ancestry, worktrees, persisted metadata, recovery, and push transactions. Existing daily E2Es assert saved boundaries after their workflows; no split or squash E2Es were added. User documentation describes command selection, outcomes, and recovery actions; persisted fields and inference/recovery algorithms remain in these internal notes.

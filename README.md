@@ -70,6 +70,8 @@ Push the current branch and the branches it depends on:
 gn send
 ```
 
+`send` and `sendf` push the selected branches atomically: if any branch is rejected, none are updated remotely. The server must support atomic pushes; Graphene stops if it does not.
+
 After amending a stacked branch, push the rewritten branch set with force-with-lease:
 
 ```

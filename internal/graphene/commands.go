@@ -2309,7 +2309,7 @@ func (a *App) sendBranches(args []string, forceWithLease bool) error {
 		}
 	}
 
-	pushArgs := []string{"push"}
+	pushArgs := []string{"push", "--atomic"}
 	if forceWithLease {
 		pushArgs = append(pushArgs, "--force-with-lease")
 	}
