@@ -45,6 +45,10 @@ Pending operations must preserve both the original boundaries for rollback and t
 
 Existing state lacks boundaries. A shared migration resolver may use local and configured upstream ancestry, with reflog evidence where available. Validate the inferred boundary against the one-commit branch contract. If the evidence is ambiguous, report the affected branch instead of treating unrelated history as stack changes. Once recorded, the saved boundary takes precedence over inference.
 
+`resolveBranchBoundary` takes captured local branch tips and returns a commit ID without fetching, changing refs, or writing state. A saved value must be a full commit ID naming an available commit that is an ancestor of the captured branch tip. An invalid saved value is an error, never a reason to infer a replacement. Commands separately validate how many commits they can operate on.
+
+For legacy state, a tracked parent supplies its captured tip. An untracked root supplies common-ancestor and reflog fork-point candidates from its local branch and configured remote-tracking upstream. Only ancestor candidates leaving exactly one branch commit qualify; repeated evidence for the same commit is harmless, while missing or conflicting qualifying evidence is an error. Callers record the resolved boundary with a successful state transition, not during a read or dry run. Command adoption and boundary updates through recovery are subsequent implementation steps.
+
 ## Implementation order
 
 1. Add boundary metadata, a shared resolver, and migration tests. Cover advanced or stale local bases, rewritten upstream history, and invalid or ambiguous saved boundaries.
