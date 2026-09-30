@@ -1,7 +1,7 @@
 package graphene
 
 import (
-	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -9,11 +9,11 @@ import (
 	"testing"
 )
 
-func captureTestSnapshot(t *testing.T, dir string, worktree bool) string {
+func captureTestSnapshot(t *testing.T, dir string) string {
 	t.Helper()
 	var id string
 	if err := (Git{Dir: dir}).WithStateLock(func(g Git) (err error) {
-		id, err = g.captureSnapshot(worktree)
+		id, err = g.captureSnapshot()
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -30,42 +30,46 @@ func restoreTestSnapshot(dir, id string, expected map[string]string) (State, err
 	return state, err
 }
 
+func TestSnapshotRejectsTrackedChanges(t *testing.T) {
+	t.Parallel()
+	for _, staged := range []bool{false, true} {
+		t.Run(fmt.Sprint(staged), func(t *testing.T) {
+			t.Parallel()
+			repo := newTestRepo(t)
+			writeFile(t, repo.dir, "file.txt", "local edits\n")
+			if staged {
+				runGit(t, repo.dir, "add", "file.txt")
+			}
+			err := (Git{Dir: repo.dir}).WithStateLock(func(g Git) error {
+				_, err := g.captureSnapshot()
+				return err
+			})
+			if err == nil || !strings.Contains(err.Error(), "tracked changes") {
+				t.Fatalf("capture error = %v", err)
+			}
+			if got := runGit(t, repo.dir, "for-each-ref", "refs/graphene/snapshots/"); got != "" {
+				t.Fatal("rejected capture installed backup refs")
+			}
+		})
+	}
+}
+
 func TestSnapshotRoundTrip(t *testing.T) {
 	t.Parallel()
 	repo := newTestRepo(t)
 	runGit(t, repo.dir, "switch", "-c", "topic")
-	original := commitFile(t, repo.dir, "gone.txt", "delete me\n", "topic")
+	original := commitFile(t, repo.dir, "gone.txt", "original\n", "topic")
 	runGit(t, repo.dir, "branch", "archived")
 	runGit(t, repo.dir, "branch", "unrelated", "main")
-	stacks := []Stack{{Base: "main", Branches: []string{"topic"}}}
-	saved := State{Stacks: stacks, Boundaries: map[string]string{"topic": runGit(t, repo.dir, "rev-parse", "main")}}
+	saved := State{Stacks: []Stack{{Base: "main", Branches: []string{"topic"}}}, Boundaries: map[string]string{"topic": runGit(t, repo.dir, "rev-parse", "main")}}
 	if err := (Git{Dir: repo.dir}).WriteState(saved); err != nil {
 		t.Fatal(err)
 	}
-	writeFile(t, repo.dir, "file.txt", "staged\n")
-	runGit(t, repo.dir, "add", "file.txt")
-	writeFile(t, repo.dir, "file.txt", "unstaged\n")
-	runGit(t, repo.dir, "rm", "gone.txt")
-	writeFile(t, repo.dir, "binary", "\x00staged\xff")
-	runGit(t, repo.dir, "add", "binary")
-	writeFile(t, repo.dir, "binary", "\x00unstaged\xfe")
 	writeFile(t, repo.dir, "sub/untracked\nname", "keep me\n")
-	indexPath, err := (Git{Dir: repo.dir}).GitPath("index")
-	if err != nil {
-		t.Fatal(err)
-	}
-	index, err := os.ReadFile(indexPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Capturing from a subdirectory still backs up the entire worktree.
-	id := captureTestSnapshot(t, filepath.Join(repo.dir, "sub"), true)
-	after, err := os.ReadFile(indexPath)
-	if err != nil || !bytes.Equal(index, after) {
-		t.Fatalf("capture changed the live index: %v", err)
-	}
+	id := captureTestSnapshot(t, filepath.Join(repo.dir, "sub"))
+	runGit(t, repo.dir, "rm", "gone.txt")
 	writeFile(t, repo.dir, "file.txt", "operation\n")
-	runGit(t, repo.dir, "add", "-A")
+	runGit(t, repo.dir, "add", "-u")
 	runGit(t, repo.dir, "commit", "--amend", "-m", "rewritten")
 	changed := runGit(t, repo.dir, "rev-parse", "HEAD")
 	runGit(t, repo.dir, "branch", "-D", "archived")
@@ -75,22 +79,17 @@ func TestSnapshotRoundTrip(t *testing.T) {
 	if err := (Git{Dir: repo.dir}).WriteState(State{}); err != nil {
 		t.Fatal(err)
 	}
-	// Only the backup refs now keep the old commit and staged-only blobs alive.
+	// Backup refs keep the original commit alive after reflog expiry and pruning.
 	runGit(t, repo.dir, "reflog", "expire", "--expire=now", "--all")
 	runGit(t, repo.dir, "prune", "--expire=now")
 	expected := map[string]string{"topic": changed, "archived": "", "created": changed}
 	for range 2 {
-		// Reopen the snapshot and lock on each attempt, including after rollback.
 		restored, err := restoreTestSnapshot(repo.dir, id, expected)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if !reflect.DeepEqual(restored, saved) {
 			t.Fatalf("restored state = %#v, want %#v", restored, saved)
-		}
-		after, err = os.ReadFile(indexPath)
-		if err != nil || !bytes.Equal(index, after) {
-			t.Fatalf("rollback did not restore the index: %v", err)
 		}
 		if got := currentBranch(t, repo.dir); got != "topic" {
 			t.Fatalf("branch = %q", got)
@@ -106,27 +105,21 @@ func TestSnapshotRoundTrip(t *testing.T) {
 		if got := runGit(t, repo.dir, "rev-parse", "unrelated"); got != changed {
 			t.Fatal("rollback changed an unrelated branch")
 		}
-		for path, want := range map[string]string{
-			"file.txt": "unstaged\n", "binary": "\x00unstaged\xfe",
-			"sub/untracked\nname": "keep me\n", "later.txt": "outside the operation\n",
-		} {
+		for path, want := range map[string]string{"file.txt": "base\n", "gone.txt": "original\n", "sub/untracked\nname": "keep me\n", "later.txt": "outside the operation\n"} {
 			got, err := os.ReadFile(filepath.Join(repo.dir, path))
 			if err != nil || string(got) != want {
 				t.Fatalf("%q = %q, want %q (error %v)", path, got, want, err)
 			}
 		}
-		if _, err := os.Stat(filepath.Join(repo.dir, "gone.txt")); !os.IsNotExist(err) {
-			t.Fatalf("staged deletion not preserved: %v", err)
-		}
 	}
-	if got := runGit(t, repo.dir, "show", ":file.txt"); got != "staged" {
-		t.Fatalf("staged file content = %q", got)
+	if got := runGit(t, repo.dir, "show", ":file.txt"); got != "base" {
+		t.Fatalf("restored tracked content = %q", got)
 	}
 	if got := runGit(t, repo.dir, "ls-files", "sub"); got != "" {
-		t.Fatalf("previously untracked file became tracked: %q", got)
+		t.Fatalf("untracked file became tracked: %q", got)
 	}
 	if err := (Git{Dir: repo.dir}).WithStateLock(func(g Git) error {
-		if err := g.WriteState(State{Stacks: stacks}); err != nil {
+		if err := g.WriteState(saved); err != nil {
 			return err
 		}
 		if err := g.removeSnapshot(id); err != nil {
@@ -138,39 +131,6 @@ func TestSnapshotRoundTrip(t *testing.T) {
 	}
 	if got := runGit(t, repo.dir, "for-each-ref", "--format=%(refname)", snapshotRefPrefix(id)); got != "" {
 		t.Fatalf("backup refs survived cleanup: %s", got)
-	}
-}
-
-func TestSnapshotTrackedFileInIgnoredDirectory(t *testing.T) {
-	t.Parallel()
-	repo := newTestRepo(t)
-	tracked := "spartan/scripts/logs/.gitignore"
-	writeFile(t, repo.dir, "spartan/.gitignore", "scripts/logs\n")
-	writeFile(t, repo.dir, tracked, "*\n!.gitignore\n")
-	runGit(t, repo.dir, "add", "-f", "spartan/.gitignore", tracked)
-	runGit(t, repo.dir, "commit", "-m", "Track placeholder in ignored directory")
-	writeFile(t, repo.dir, tracked, "*\n!.gitignore\n# staged\n")
-	runGit(t, repo.dir, "add", "-u")
-	writeFile(t, repo.dir, tracked, "*\n!.gitignore\n# unstaged\n")
-	writeFile(t, repo.dir, "spartan/scripts/logs/output.log", "ignored\n")
-	writeFile(t, repo.dir, "untracked.txt", "untracked\n")
-	before := runGit(t, repo.dir, "status", "--porcelain")
-	id := captureTestSnapshot(t, repo.dir, true)
-	snapshot, err := (Git{Dir: repo.dir}).readSnapshot(id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := runGit(t, repo.dir, "show", snapshot.WorktreeTree+":"+tracked); got != "*\n!.gitignore\n# unstaged" {
-		t.Fatalf("snapshot content = %q", got)
-	}
-	if got := runGit(t, repo.dir, "show", snapshot.IndexTree+":"+tracked); got != "*\n!.gitignore\n# staged" {
-		t.Fatalf("snapshot staged content = %q", got)
-	}
-	if got := runGit(t, repo.dir, "ls-tree", "-r", "--name-only", snapshot.WorktreeTree); strings.Contains(got, "output.log") || !strings.Contains(got, "untracked.txt") {
-		t.Fatalf("incorrect snapshot files: %s", got)
-	}
-	if got := runGit(t, repo.dir, "status", "--porcelain"); got != before {
-		t.Fatalf("snapshot changed staging: %s", got)
 	}
 }
 
@@ -201,28 +161,25 @@ func TestSnapshotRetriesInterruptedRollback(t *testing.T) {
 			t.Parallel()
 			repo := newTestRepo(t)
 			original := runGit(t, repo.dir, "rev-parse", "HEAD")
-			writeFile(t, repo.dir, "file.txt", "staged\n")
-			runGit(t, repo.dir, "add", "file.txt")
-			writeFile(t, repo.dir, "file.txt", "unstaged\n")
-			id := captureTestSnapshot(t, repo.dir, true)
+			id := captureTestSnapshot(t, repo.dir)
 			snapshot, err := (Git{Dir: repo.dir}).readSnapshot(id)
 			if err != nil {
 				t.Fatal(err)
 			}
 			changed := commitFile(t, repo.dir, "file.txt", "operation\n", "operation")
-			// Stop at the boundaries between rollback's ref, worktree and index writes.
+			// Stop at the boundaries between rollback's ref and checkout writes.
 			runGit(t, repo.dir, "update-ref", "refs/heads/main", original, changed)
 			if interruptedAfter == "worktree" {
-				runGit(t, repo.dir, "read-tree", "--reset", "-u", snapshot.WorktreeTree)
+				runGit(t, repo.dir, "read-tree", "--reset", "-u", snapshot.Head)
 			}
 			if _, err := restoreTestSnapshot(repo.dir, id, map[string]string{"main": changed}); err != nil {
 				t.Fatal(err)
 			}
-			if got := runGit(t, repo.dir, "show", ":file.txt"); got != "staged" {
+			if got := runGit(t, repo.dir, "show", ":file.txt"); got != "base" {
 				t.Fatalf("staged content = %q", got)
 			}
 			content, err := os.ReadFile(filepath.Join(repo.dir, "file.txt"))
-			if err != nil || string(content) != "unstaged\n" {
+			if err != nil || string(content) != "base\n" {
 				t.Fatalf("worktree content = %q, error %v", content, err)
 			}
 		})
@@ -238,7 +195,7 @@ func TestSnapshotRefusalDoesNotMutate(t *testing.T) {
 			runGit(t, repo.dir, "switch", "-c", "topic")
 			old := runGit(t, repo.dir, "rev-parse", "HEAD")
 			runGit(t, repo.dir, "branch", "parent")
-			id := captureTestSnapshot(t, repo.dir, true)
+			id := captureTestSnapshot(t, repo.dir)
 			newOID := commitFile(t, repo.dir, "other.txt", "next\n", "next")
 			runGit(t, repo.dir, "branch", "-f", "parent", newOID)
 			expected := map[string]string{"topic": newOID, "parent": newOID}
@@ -291,7 +248,7 @@ func TestSnapshotInLinkedWorktree(t *testing.T) {
 	linked := t.TempDir()
 	runGit(t, repo.dir, "worktree", "add", "-b", "topic", linked)
 	original := runGit(t, linked, "rev-parse", "HEAD")
-	id := captureTestSnapshot(t, linked, true)
+	id := captureTestSnapshot(t, linked)
 	changed := commitFile(t, linked, "file.txt", "rewritten\n", "rewrite")
 	expected := map[string]string{"topic": changed}
 	if _, err := restoreTestSnapshot(repo.dir, id, expected); err == nil || !strings.Contains(err.Error(), "original worktree") {
@@ -308,77 +265,5 @@ func TestSnapshotInLinkedWorktree(t *testing.T) {
 	}
 	if got := runGit(t, linked, "status", "--porcelain"); got != "" {
 		t.Fatalf("restored worktree is dirty: %s", got)
-	}
-}
-
-func TestSnapshotRefsWithoutWorktree(t *testing.T) {
-	t.Parallel()
-	repo := newTestRepo(t)
-	original := runGit(t, repo.dir, "rev-parse", "HEAD")
-	runGit(t, repo.dir, "branch", "topic")
-	changed := commitFile(t, repo.dir, "file.txt", "next\n", "next")
-	writeFile(t, repo.dir, "file.txt", "local edits\n")
-	id := captureTestSnapshot(t, repo.dir, false)
-	runGit(t, repo.dir, "branch", "-f", "topic", changed)
-	if _, err := restoreTestSnapshot(repo.dir, id, map[string]string{"topic": changed}); err != nil {
-		t.Fatal(err)
-	}
-	if got := runGit(t, repo.dir, "rev-parse", "topic"); got != original {
-		t.Fatalf("restored branch = %s, want %s", got, original)
-	}
-	if got := runGit(t, repo.dir, "rev-parse", "HEAD"); got != changed {
-		t.Fatal("refs-only rollback changed HEAD")
-	}
-	content, err := os.ReadFile(filepath.Join(repo.dir, "file.txt"))
-	if err != nil || string(content) != "local edits\n" {
-		t.Fatalf("refs-only rollback changed local edits: %v", err)
-	}
-}
-
-func TestSnapshotRejectsUnsupportedIndex(t *testing.T) {
-	t.Parallel()
-	for _, scenario := range []string{"split index", "skip worktree", "assume unchanged", "unmerged", "filter"} {
-		t.Run(scenario, func(t *testing.T) {
-			t.Parallel()
-			repo := newTestRepo(t)
-			wantError := ""
-			switch scenario {
-			case "split index":
-				runGit(t, repo.dir, "update-index", "--split-index")
-				wantError = "split indexes"
-			case "skip worktree":
-				runGit(t, repo.dir, "update-index", "--skip-worktree", "file.txt")
-				wantError = `"file.txt": skip-worktree`
-			case "assume unchanged":
-				runGit(t, repo.dir, "update-index", "--assume-unchanged", "file.txt")
-				wantError = `"file.txt": assume-unchanged`
-			case "unmerged":
-				blob := runGit(t, repo.dir, "rev-parse", "HEAD:file.txt")
-				g := Git{Dir: repo.dir}
-				if _, err := g.outputWithInput(strings.NewReader("100644 "+blob+" 1\tfile.txt\n"), "update-index", "--index-info"); err != nil {
-					t.Fatal(err)
-				}
-				wantError = `"file.txt": unmerged`
-			case "filter":
-				writeFile(t, repo.dir, ".gitattributes", "untracked filter=custom\n")
-				writeFile(t, repo.dir, "untracked", "content\n")
-				wantError = "do not support filter"
-			}
-			writeFile(t, repo.dir, "sub/file", "subdirectory\n")
-			before := runGit(t, repo.dir, "ls-files", "--stage", "-v")
-			err := (Git{Dir: filepath.Join(repo.dir, "sub")}).WithStateLock(func(g Git) error {
-				_, err := g.captureSnapshot(true)
-				return err
-			})
-			if err == nil || !strings.Contains(err.Error(), wantError) {
-				t.Fatalf("capture error = %v, want %q", err, wantError)
-			}
-			if got := runGit(t, repo.dir, "ls-files", "--stage", "-v"); got != before {
-				t.Fatal("rejected capture changed the live index")
-			}
-			if got := runGit(t, repo.dir, "for-each-ref", "refs/graphene/snapshots/"); got != "" {
-				t.Fatal("rejected capture installed backup refs")
-			}
-		})
 	}
 }

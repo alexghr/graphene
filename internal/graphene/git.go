@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -18,7 +17,6 @@ type Git struct {
 	Stdout    io.Writer
 	Stderr    io.Writer
 	stateLock *StateLock
-	indexFile string
 }
 
 type GitError struct {
@@ -46,9 +44,6 @@ func (e *GitError) Error() string {
 func (g Git) command(args ...string) *exec.Cmd {
 	cmd := exec.Command("git", args...)
 	cmd.Dir = g.Dir
-	if g.indexFile != "" {
-		cmd.Env = append(os.Environ(), "GIT_INDEX_FILE="+g.indexFile)
-	}
 	return cmd
 }
 

@@ -99,7 +99,7 @@ func (a *App) restack(args []string) error {
 	if err := a.preflightRebaseRepositories(p, "HEAD", true); err != nil {
 		return err
 	}
-	id, err := a.git.captureSnapshot(true)
+	id, err := a.git.captureSnapshot()
 	if err != nil {
 		return err
 	}

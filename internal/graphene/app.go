@@ -405,18 +405,18 @@ From an untracked stack base, --all syncs every stack descendant of the current 
 Branches detected as already applied upstream are removed from Graphene state and deleted locally.
 If configured upstreams disappeared for branches whose patches are not applied to the base, sync stops without changing local branches or Graphene state. Verify every branch shown by --dry-run --assume-merged before using the flag for a real sync.
 
-Sync saves a snapshot before changing local branches. Resolve normal rebase conflicts with continue, or use abort to restore the base, rebased branches, deleted branches and stack metadata. Ambiguous interruptions require abort and rerun. Unrelated branch pointers stay in place.
+Sync saves branch tips and stack metadata before changing local branches. Resolve normal rebase conflicts with continue, or use abort to restore the base, rebased branches, deleted branches, stack metadata and tracked checkout. Untracked and ignored files are not backed up. Ambiguous interruptions require abort and rerun. Unrelated branch pointers stay in place.
 
 Submodule commits recorded in the parent are preserved; submodule checkouts and nested repositories/worktrees are not recursively updated. Dirty submodules are allowed, but staged parent changes (including submodule commit changes) must be committed or stashed first. Nested repositories need no ignore entry. Update submodule checkouts explicitly with git submodule update.
 
-If destination or replayed paths overlap a nested repository, sync warns and stops. Dry-run shows these warnings without requiring acceptance. --accept-risk allows possible overwrites for this operation, including continue; nested files or local edits may be lost and abort cannot restore them. This conservative check does not simulate Git merges. Other safeguards, including abort collision checks, remain enabled.
+If destination or replayed paths may overwrite untracked files, ignored files or nested repositories, sync warns and stops. Dry-run shows these warnings without requiring acceptance. --accept-risk acknowledges possible overwrites for this operation, including continue; local files or edits may be lost and abort cannot restore them. It does not force Git to overwrite paths it refuses to change. This conservative check does not simulate Git merges. Other safeguards, including abort collision checks, remain enabled.
 
 options:
   -a, --all           sync every stack descendant from the current base branch
   -n, --dry-run       fetch and show planned changes without moving local branches or changing stack state
   -f, --force         sync safe stacks even when skipped stacks checked out elsewhere would become stale
       --assume-merged treat consecutive missing upstream branches as merged and delete them
-      --accept-risk   acknowledge possible overwrites in nested repositories/worktrees/submodules`,
+      --accept-risk   acknowledge possible overwrites of local files or nested checkouts`,
 		"send": `usage: graphene send [options] [remote]
 
 Atomically push the current branch and its dependency path, then print pull request URLs. If any branch is rejected, none are updated. The server must support atomic pushes.
@@ -439,15 +439,15 @@ Move the current branch onto another local branch, then restack dependent branch
 
 Uses local refs by default. With --fetch, fetch the destination branch's configured upstream and rebase onto that fetched commit, leaving the local destination branch in place.
 
-Each affected branch is rebased separately; unrelated branch pointers stay in place. A snapshot is saved before changing branches or files. Resolve normal conflicts with continue, or use abort to restore the entire restack. Ambiguous interruptions require abort and rerun.
+Each affected branch is rebased separately; unrelated branch pointers stay in place. Branch tips and stack metadata are saved before changing branches or files. Resolve normal conflicts with continue, or use abort to restore the entire restack and original tracked checkout. Untracked and ignored files are not backed up. Ambiguous interruptions require abort and rerun.
 
 Submodule commits recorded in the parent are preserved; submodule checkouts and nested repositories/worktrees are not recursively updated. Dirty submodules are allowed, but staged parent changes (including submodule commit changes) must be committed or stashed first. Nested repositories need no ignore entry. Update submodule checkouts explicitly with git submodule update.
 
-If destination or replayed paths overlap a nested repository, restack warns and stops. --accept-risk allows possible overwrites for this operation, including continue; nested files or local edits may be lost and abort cannot restore them. This conservative check does not simulate Git merges. Other safeguards, including abort collision checks, remain enabled.
+If destination or replayed paths may overwrite untracked files, ignored files or nested repositories, restack warns and stops. --accept-risk acknowledges possible overwrites for this operation, including continue; local files or edits may be lost and abort cannot restore them. It does not force Git to overwrite paths it refuses to change. This conservative check does not simulate Git merges. Other safeguards, including abort collision checks, remain enabled.
 
 options:
       --fetch        fetch the destination branch's upstream before restacking
-      --accept-risk  acknowledge possible overwrites in nested repositories/worktrees/submodules`,
+      --accept-risk  acknowledge possible overwrites of local files or nested checkouts`,
 		"go": `usage: graphene go <up|down|top|bottom> [number]
 
 Switch to another branch in the tracked stack graph.

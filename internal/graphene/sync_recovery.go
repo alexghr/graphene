@@ -119,7 +119,7 @@ func (a *App) startSnapshotSync(state State, p *Pending, fetched upstreamUpdate,
 	if err := a.preflightRebaseRepositories(p, "HEAD", true); err != nil {
 		return err
 	}
-	id, err := a.git.captureSnapshot(true)
+	id, err := a.git.captureSnapshot()
 	if err != nil {
 		return err
 	}

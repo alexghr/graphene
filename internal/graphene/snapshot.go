@@ -16,19 +16,16 @@ import (
 // Snapshots are immutable. The pending operation will record its snapshot ID
 // and the refs it changed; taking a backup does not grant ownership of a ref.
 type operationSnapshot struct {
-	Version      int               `json:"version"`
-	Worktree     string            `json:"worktree"`
-	Branch       string            `json:"branch"`
-	Head         string            `json:"head"`
-	Refs         map[string]string `json:"refs"`
-	Stacks       []Stack           `json:"stacks"`
-	Boundaries   map[string]string `json:"boundaries,omitempty"`
-	Index        []byte            `json:"index,omitempty"`
-	IndexTree    string            `json:"indexTree,omitempty"`
-	WorktreeTree string            `json:"worktreeTree,omitempty"`
+	Version    int               `json:"version"`
+	Worktree   string            `json:"worktree"`
+	Branch     string            `json:"branch"`
+	Head       string            `json:"head"`
+	Refs       map[string]string `json:"refs"`
+	Stacks     []Stack           `json:"stacks"`
+	Boundaries map[string]string `json:"boundaries,omitempty"`
 }
 
-func (g Git) captureSnapshot(includeWorktree bool) (string, error) {
+func (g Git) captureSnapshot() (string, error) {
 	if !g.stateLock.held() {
 		return "", fmt.Errorf("capturing a snapshot requires the repository state lock")
 	}
@@ -55,16 +52,18 @@ func (g Git) captureSnapshot(includeWorktree bool) (string, error) {
 		return "", err
 	}
 	snapshot := operationSnapshot{
-		Version: 1, Worktree: worktree, Branch: branch, Head: refs[branch],
+		Version: 2, Worktree: worktree, Branch: branch, Head: refs[branch],
 		Refs: refs, Stacks: cloneStacks(state.Stacks), Boundaries: maps.Clone(state.Boundaries),
 	}
 	if snapshot.Head == "" {
 		return "", fmt.Errorf("snapshot requires an existing commit on %q", branch)
 	}
-	if includeWorktree {
-		if err := g.captureSnapshotWorktree(&snapshot); err != nil {
-			return "", err
-		}
+	dirty, err := g.hasParentTrackedChanges()
+	if err != nil {
+		return "", err
+	}
+	if dirty {
+		return "", fmt.Errorf("tracked changes would prevent capturing a snapshot")
 	}
 	var random [16]byte
 	if _, err := rand.Read(random[:]); err != nil {
@@ -83,12 +82,6 @@ func (g Git) captureSnapshot(includeWorktree bool) (string, error) {
 		edits = append(edits,
 			snapshotRefEdit{Ref: "refs/heads/" + branch, Old: oid, New: oid},
 			snapshotRefEdit{Ref: snapshotRefPrefix(id) + "heads/" + branch, New: oid},
-		)
-	}
-	if includeWorktree {
-		edits = append(edits,
-			snapshotRefEdit{Ref: snapshotRefPrefix(id) + "index", New: snapshot.IndexTree},
-			snapshotRefEdit{Ref: snapshotRefPrefix(id) + "worktree", New: snapshot.WorktreeTree},
 		)
 	}
 	// Verify branch tips and install their backups in one ref transaction.
@@ -118,19 +111,12 @@ func (g Git) readSnapshot(id string) (operationSnapshot, error) {
 	if err := requireJSONEOF(decoder); err != nil {
 		return snapshot, err
 	}
-	if snapshot.Version != 1 || snapshot.Worktree == "" || snapshot.Branch == "" || snapshot.Head == "" || snapshot.Refs[snapshot.Branch] != snapshot.Head {
+	if snapshot.Version != 2 || snapshot.Worktree == "" || snapshot.Branch == "" || snapshot.Head == "" || snapshot.Refs[snapshot.Branch] != snapshot.Head {
 		return snapshot, fmt.Errorf("invalid recovery snapshot %s", id)
-	}
-	if (len(snapshot.Index) == 0) != (snapshot.IndexTree == "") || (snapshot.IndexTree == "") != (snapshot.WorktreeTree == "") {
-		return snapshot, fmt.Errorf("snapshot %s has incomplete worktree data", id)
 	}
 	backups := map[string]string{}
 	for branch, oid := range snapshot.Refs {
 		backups[snapshotRefPrefix(id)+"heads/"+branch] = oid
-	}
-	if snapshot.IndexTree != "" {
-		backups[snapshotRefPrefix(id)+"index"] = snapshot.IndexTree
-		backups[snapshotRefPrefix(id)+"worktree"] = snapshot.WorktreeTree
 	}
 	for ref, oid := range backups {
 		actual, err := g.Output("show-ref", "--verify", "--hash", ref)
@@ -180,39 +166,38 @@ func (g Git) restoreSnapshot(id string, expected map[string]string) (State, erro
 		if actual[branch] != want && actual[branch] != original {
 			return State{}, fmt.Errorf("cannot restore branch %q: it changed outside the operation", branch)
 		}
-		if actual[branch] != original && (branch != current || snapshot.WorktreeTree == "") {
+		if actual[branch] != original && branch != current {
 			if err := g.requireSnapshotBranchAvailable(branch); err != nil {
 				return State{}, err
 			}
 		}
 		edits = append(edits, snapshotRefEdit{Ref: "refs/heads/" + branch, Old: actual[branch], New: original})
 	}
-	if snapshot.WorktreeTree != "" {
-		if _, owned := expected[current]; current != "" && current != snapshot.Branch && !owned {
-			return State{}, fmt.Errorf("switch back to the operation's branch %q before restoring the snapshot", snapshot.Branch)
-		}
-		if current != snapshot.Branch {
-			if err := g.requireSnapshotBranchAvailable(snapshot.Branch); err != nil {
-				return State{}, err
-			}
-		}
-		if _, owned := expected[snapshot.Branch]; !owned {
-			if actual[snapshot.Branch] != snapshot.Head {
-				return State{}, fmt.Errorf("original branch %q moved outside the operation", snapshot.Branch)
-			}
-			edits = append(edits, snapshotRefEdit{Ref: "refs/heads/" + snapshot.Branch, Old: snapshot.Head, New: snapshot.Head})
-		}
-		if err := g.preflightSnapshotWorktree(snapshot); err != nil {
+	if _, owned := expected[current]; current != "" && current != snapshot.Branch && !owned {
+		return State{}, fmt.Errorf("switch back to the operation's branch %q before restoring the snapshot", snapshot.Branch)
+	}
+	if current != snapshot.Branch {
+		if err := g.requireSnapshotBranchAvailable(snapshot.Branch); err != nil {
 			return State{}, err
 		}
+	}
+	if _, owned := expected[snapshot.Branch]; !owned {
+		if actual[snapshot.Branch] != snapshot.Head {
+			return State{}, fmt.Errorf("original branch %q moved outside the operation", snapshot.Branch)
+		}
+		edits = append(edits, snapshotRefEdit{Ref: "refs/heads/" + snapshot.Branch, Old: snapshot.Head, New: snapshot.Head})
+	}
+	if err := g.checkCheckoutPaths(snapshot.Head, snapshot.Head); err != nil {
+		return State{}, err
 	}
 	if err := g.updateSnapshotRefs(edits); err != nil {
 		return State{}, err
 	}
-	if snapshot.WorktreeTree != "" {
-		if err := g.restoreSnapshotWorktree(snapshot); err != nil {
-			return State{}, err
-		}
+	if err := g.runWithoutSubmodules("read-tree", "--reset", "-u", snapshot.Head); err != nil {
+		return State{}, err
+	}
+	if err := g.OutputErr("symbolic-ref", "HEAD", "refs/heads/"+snapshot.Branch); err != nil {
+		return State{}, err
 	}
 	return cloneStackState(State{Stacks: snapshot.Stacks, Boundaries: snapshot.Boundaries}), nil
 }

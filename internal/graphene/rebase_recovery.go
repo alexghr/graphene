@@ -167,7 +167,7 @@ func (a *App) continueSnapshotRebases(state State) error {
 		if err := a.requireSnapshotRebase(p); err != nil {
 			return err
 		}
-		if err := a.preflightRebaseRepositories(p, snapshot.IndexTree, true); err != nil {
+		if err := a.preflightRebaseRepositories(p, snapshot.Head, true); err != nil {
 			return err
 		}
 		p.Recovery.Phase = recoveryApplying
@@ -202,7 +202,7 @@ func (a *App) runSnapshotRebases(state State) error {
 		if dirty {
 			return fmt.Errorf("tracked changes would prevent %s; resolve them before continuing or use graphene abort", p.Operation)
 		}
-		if err := a.preflightRebaseRepositories(p, snapshot.IndexTree, false); err != nil {
+		if err := a.preflightRebaseRepositories(p, snapshot.Head, false); err != nil {
 			return err
 		}
 		if r.FastForward == "" && len(p.Queue) == 0 {
@@ -318,11 +318,11 @@ func (a *App) abortSnapshotRebases(state State) error {
 		}
 	}
 	active := activeRebaseBranch(p)
-	trees := []string{snapshot.WorktreeTree}
+	trees := []string{snapshot.Head}
 	if inRebase {
 		trees = append(trees, r.Expected[active])
 	}
-	if err := a.git.checkNestedRepositories(snapshot.IndexTree, trees...); err != nil {
+	if err := a.git.checkCheckoutPaths(snapshot.Head, trees...); err != nil {
 		return err
 	}
 	if r.Phase == recoveryDeleting {

@@ -3,14 +3,7 @@
 Restack and sync use these snapshot and rollback primitives. Other commands still use
 their existing recovery paths.
 
-A snapshot saves local branch tips and Graphene's stack metadata, including saved
-historical boundaries. Restoring returns both topology and boundaries together;
-the caller persists them before removing the snapshot. Older snapshots without
-boundaries restore legacy metadata without inferring replacement boundaries. Operations
-that change files can also save the original Git index and a worktree tree.
-Capture uses a private index, leaving the user's staging untouched. Backup refs
-keep the saved commits, trees and blobs reachable through Git garbage collection;
-no snapshot commits are created.
+A snapshot saves local branch tips and Graphene's stack metadata, including saved historical boundaries. Restoring returns both topology and boundaries together; the caller persists them before removing the snapshot. Sync and restack require clean tracked files and save only branch/state recovery data. Rollback restores the original tracked checkout. They do not capture the index or file contents. Backup refs keep the saved commits reachable through Git garbage collection; no snapshot commits are created.
 
 The manifest lives in `<git-common-dir>/graphene/snapshots/<id>.json`, with backup
 refs under `refs/graphene/snapshots/<id>/`. It uses the existing atomic JSON writer.
@@ -34,7 +27,7 @@ Rollback checks the current worktree and branch tips before making changes. Only
 branches named by the caller are restored; backing up a branch does not authorize
 overwriting it. Ref updates use one Git transaction with expected old values.
 Already restored tips are accepted so rollback can be retried after interruption.
-Worktree and index restoration can also be retried while the snapshot remains.
+Tracked checkout restoration can also be retried while the snapshot remains.
 
 The state lock coordinates Graphene processes, not arbitrary concurrent Git
 commands or editors. The caller must establish which branch changes belong to
@@ -99,17 +92,9 @@ Sync also refreshes existing upstream remote-tracking refs for surviving selecte
 stack branches, so subsequent force-with-lease pushes use the fetched tips. Remote-tracking
 refs belonging only to unselected stacks remain unchanged.
 
-Worktree snapshots preserve Git file content, staging and nonignored untracked
-files. They are not filesystem archives: ignored files, timestamps and arbitrary
-file permissions are not backed up. Unrelated untracked files are left in place;
-directory/file collisions that could lose them block rollback.
+Sync/restack operations do not back up untracked or ignored files. Abort restores the saved branch tips, stack metadata and tracked checkout through Git, leaving unrelated local files and edits made to them while the operation was paused in place. Directory/file collisions that could lose local files block rollback before aborting the active Git rebase or moving refs.
 
-Submodules are preserved as gitlinks: the parent index's recorded commit is saved,
-not the submodule's checked-out commit. Nested repositories and linked worktrees
-are excluded from file capture without requiring ignore entries. Their checkouts,
-indexes and local files are outside the recovery boundary, including changes made
-while an operation is paused. Snapshots do not back up objects inside nested
-repositories.
+Submodules are preserved as gitlinks in the saved commits, not as copies of their checkouts. Nested repositories and linked worktrees need no ignore entries. Their checkouts, indexes and local files are outside the recovery boundary, including changes made while an operation is paused. Snapshots do not back up objects inside nested repositories.
 
 Sync, restack, continue and abort disable recursive submodule updates. Dirty or
 differently checked-out submodules do not block sync/restack, but staged parent
@@ -118,18 +103,13 @@ rebased normally; additions do not initialize submodules, and removals leave
 existing checkouts in place. Updating submodule checkouts remains an explicit
 `git submodule update` operation.
 
-Before changing files, recovery checks for nested repository collisions in the
-current index, destination trees, and paths touched by commits to be replayed.
-Git supplies the per-commit paths so temporary additions followed by removals are
-included. A historical upstream boundary is not a destination; a branch already
-contained in its rebase target needs no replay-path scan. This includes ignored
-repositories and repositories created after capture. Gitlink-only changes at an
-existing submodule path are allowed. The check is conservative and does not model
-all paths Git's merge machinery might generate.
+Before changing files, recovery asks Git for paths differing between the current checkout and destination trees, plus paths touched by commits to be replayed. It compares those paths with untracked and ignored entries, collapsing directories instead of enumerating their files. Filesystem probes are limited to potentially affected paths and their ancestors, including checks for nested repository markers. A new file alongside unrelated untracked files is allowed when that file does not already exist.
+
+Git supplies the per-commit paths so temporary additions followed by removals are included. A historical upstream boundary is not a destination; a branch already contained in its rebase target needs no replay-path scan. Checks run before starting, before subsequent Git steps, on continue and on abort so files or repositories created while paused remain protected. Gitlink-only changes at an existing submodule path are allowed. The check is conservative and does not model all paths Git's merge machinery might generate; Git retains its own checkout and rebase protections.
 
 Sync and restack warn with the overlapping paths and refuse by default. Their
-`--accept-risk` flag allows these forward-operation overwrites, which may destroy
-nested files or local edits that abort cannot restore. Acceptance is recorded in
+`--accept-risk` flag acknowledges these forward-operation overwrites, which may destroy
+untracked files, nested files or local edits that abort cannot restore. It does not force Git to overwrite paths it refuses to change. Acceptance is recorded in
 the pending recovery state and applies to subsequent `continue` calls for that
 operation, not future operations. Sync dry-run prints warnings without requiring
 acceptance. `--force` does not accept overwrite risk.
@@ -140,12 +120,6 @@ rebase abort as well as before restoring the snapshot, even after risk acceptanc
 Move an obstructing repository aside and retry; the pending operation and snapshot
 remain available. Existing checks for branches checked out in other worktrees
 still apply, including worktrees nested inside this one.
-
-Split indexes, unmerged entries, skip-worktree and assume-unchanged
-flags, custom filters and working-tree encodings are rejected for worktree
-snapshots, with paths identified where applicable. Filter and encoding checks
-apply only to parent files being captured. The snapshot format is unchanged;
-existing snapshots remain readable.
 
 Branch configuration, reflogs and remote-tracking refs are outside this
 snapshot format. Commands that change those must account for them separately.
