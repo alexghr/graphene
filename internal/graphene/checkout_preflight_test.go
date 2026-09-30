@@ -5,43 +5,57 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
 
 func TestRestackPreflightsTemporaryIgnoredFile(t *testing.T) {
 	t.Parallel()
-	repo, nested := replayRiskRepo(t)
-	runGit(t, repo.dir, "worktree", "move", nested, filepath.Join(t.TempDir(), "moved"))
+	repo := newTestRepo(t)
+	createStackBranch(t, repo, "rpc/a", "temporary file\n", "One")
+	runGit(t, repo.dir, "rm", "rpc/a")
+	runGit(t, repo.dir, "commit", "-m", "remove temporary file")
+	runGit(t, repo.dir, "switch", "-c", "target", "main")
+	commitFile(t, repo.dir, "target-file", "target\n", "target")
+	runGit(t, repo.dir, "switch", "stack/one")
+	writeFile(t, repo.dir, ".git/info/exclude", "/rpc/\n")
 	writeFile(t, repo.dir, "rpc/a", "precious ignored file\n")
 	before := readState(t, repo.dir)
+	refs := runGit(t, repo.dir, "show-ref")
 	if code, _, stderr := repo.runGraphene(t, "restack", "target"); code == 0 || !strings.Contains(stderr, `path "rpc/a"`) {
 		t.Fatalf("restack missed temporary replay path: %d: %s", code, stderr)
 	}
-	if !reflect.DeepEqual(readState(t, repo.dir), before) {
-		t.Fatal("preflight failure persisted an operation")
+	if !reflect.DeepEqual(readState(t, repo.dir), before) || runGit(t, repo.dir, "show-ref") != refs {
+		t.Fatal("preflight failure changed refs or state")
+	}
+	if data, err := os.ReadFile(filepath.Join(repo.dir, "rpc/a")); err != nil || string(data) != "precious ignored file\n" {
+		t.Fatalf("ignored file = %q, error = %v", data, err)
 	}
 }
 
-func TestSyncPreflightsUntrackedPathsBeforeMutation(t *testing.T) {
+func TestCheckoutPathRisks(t *testing.T) {
 	t.Parallel()
-	for _, kind := range []string{"file", "ignored file", "directory", "ancestor file", "ancestor symlink", "new sibling"} {
-		t.Run(kind, func(t *testing.T) {
-			t.Parallel()
-			repo, remote := newTestRepoWithOrigin(t)
-			createStackBranch(t, repo, "one.txt", "one\n", "One")
-			actor := cloneConfiguredRepo(t, remote, "main")
-			path := "local"
-			if kind == "new sibling" || kind == "ancestor file" || kind == "ancestor symlink" {
-				path = "local/new"
-			}
-			commitFile(t, actor, path, "upstream\n", "upstream file")
-			runGit(t, actor, "push", "origin", "main")
-			local := "local"
-			if kind == "directory" || kind == "new sibling" {
-				local = "local/precious"
-			}
-			if kind == "ancestor symlink" {
+	repo := newTestRepo(t)
+	writeFile(t, repo.dir, ".git/info/exclude", "*.ignored\n")
+	for i, tc := range []struct {
+		name, local, affected string
+		symlink, safe         bool
+	}{
+		{name: "file", local: "local", affected: "local"},
+		{name: "ignored file", local: "local.ignored", affected: "local.ignored"},
+		{name: "directory", local: "local/precious", affected: "local"},
+		{name: "ancestor file", local: "local", affected: "local/new"},
+		{name: "ancestor symlink", local: "local", affected: "local/new", symlink: true},
+		{name: "new sibling", local: "local/precious", affected: "local/new", safe: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prefix := fmt.Sprintf("case-%d/", i)
+			local, affected := prefix+tc.local, prefix+tc.affected
+			if tc.symlink {
+				if err := os.MkdirAll(filepath.Join(repo.dir, prefix), 0700); err != nil {
+					t.Fatal(err)
+				}
 				outside := t.TempDir()
 				writeFile(t, outside, "precious", "local edits\n")
 				if err := os.Symlink(filepath.Join(outside, "precious"), filepath.Join(repo.dir, local)); err != nil {
@@ -50,28 +64,42 @@ func TestSyncPreflightsUntrackedPathsBeforeMutation(t *testing.T) {
 			} else {
 				writeFile(t, repo.dir, local, "local edits\n")
 			}
-			if kind == "ignored file" {
-				writeFile(t, repo.dir, ".git/info/exclude", "/local\n")
+			risks, err := (Git{Dir: repo.dir}).checkoutPathRisks(checkoutPaths{affected: false}, "")
+			if err != nil {
+				t.Fatal(err)
 			}
-			before := readState(t, repo.dir)
-			refs := runGit(t, repo.dir, "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads")
-			code, _, stderr := repo.runGraphene(t, "sync", "--force")
-			if kind == "new sibling" {
-				if code != 0 {
-					t.Fatalf("safe sibling addition failed: %s", stderr)
-				}
-			} else {
-				if code == 0 || !strings.Contains(stderr, "untracked or ignored path") {
-					t.Fatalf("sync missed %s collision: %d: %s", kind, code, stderr)
-				}
-				if !reflect.DeepEqual(readState(t, repo.dir), before) || runGit(t, repo.dir, "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads") != refs {
-					t.Fatal("preflight failure mutated refs or stack state")
-				}
+			var want []nestedRepositoryRisk
+			if !tc.safe {
+				want = []nestedRepositoryRisk{{path: affected}}
+			}
+			if !slices.Equal(risks, want) {
+				t.Fatalf("risks = %#v, want %#v", risks, want)
 			}
 			if data, err := os.ReadFile(filepath.Join(repo.dir, local)); err != nil || string(data) != "local edits\n" {
 				t.Fatalf("local file = %q, error = %v", data, err)
 			}
 		})
+	}
+}
+
+func TestSyncPreflightsUntrackedPathsBeforeMutation(t *testing.T) {
+	t.Parallel()
+	repo, remote := newTestRepoWithOrigin(t)
+	createStackBranch(t, repo, "one.txt", "one\n", "One")
+	actor := cloneConfiguredRepo(t, remote, "main")
+	commitFile(t, actor, "local", "upstream\n", "upstream file")
+	runGit(t, actor, "push", "origin", "main")
+	writeFile(t, repo.dir, "local", "local edits\n")
+	before := readState(t, repo.dir)
+	refs := runGit(t, repo.dir, "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads")
+	if code, _, stderr := repo.runGraphene(t, "sync", "--force"); code == 0 || !strings.Contains(stderr, `path "local"`) {
+		t.Fatalf("sync missed collision: %d: %s", code, stderr)
+	}
+	if !reflect.DeepEqual(readState(t, repo.dir), before) || runGit(t, repo.dir, "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads") != refs {
+		t.Fatal("preflight failure mutated refs or stack state")
+	}
+	if data, err := os.ReadFile(filepath.Join(repo.dir, "local")); err != nil || string(data) != "local edits\n" {
+		t.Fatalf("local file = %q, error = %v", data, err)
 	}
 }
 
@@ -113,7 +141,9 @@ func TestAbortPreflightsNewUntrackedCollision(t *testing.T) {
 	runGit(t, repo.dir, "rm", "restore-me")
 	commitFile(t, repo.dir, "file.txt", "target\n", "target")
 	runGit(t, repo.dir, "switch", "stack/one")
-	if code, _, stderr := repo.runGraphene(t, "restack", "target"); code == 0 || readState(t, repo.dir).Pending.Recovery.Phase != recoveryConflict {
+	code, _, stderr := repo.runGraphene(t, "restack", "target")
+	pending := readState(t, repo.dir).Pending
+	if code == 0 || pending == nil || pending.Recovery == nil || pending.Recovery.Phase != recoveryConflict {
 		t.Fatalf("expected conflict: %d: %s", code, stderr)
 	}
 	writeFile(t, repo.dir, "restore-me", "new local work\n")
