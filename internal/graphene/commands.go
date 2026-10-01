@@ -2608,11 +2608,25 @@ func (a *App) runPendingRebases(state State) error {
 	}
 	for state.Pending != nil && len(state.Pending.Queue) > 0 {
 		op := state.Pending.Queue[0]
-		if err := a.prepareBoundaryUpdates(&state); err != nil {
+		top, err := a.git.Output("rev-parse", "--verify", op.Top+"^{commit}")
+		if err != nil {
 			return err
 		}
-		if err := a.git.Run("rebase", "--update-refs", "--onto", op.Onto, op.Upstream, op.Top); err != nil {
+		onto, err := a.git.Output("rev-parse", "--verify", op.Onto+"^{commit}")
+		if err != nil {
 			return err
+		}
+		if top == onto {
+			// An earlier --update-refs may have moved an empty sibling along
+			// with its parent. Its old upstream would replay rewritten ancestors.
+			state.Pending.BoundaryUpdates = map[string]string{op.Top: onto}
+		} else {
+			if err := a.prepareBoundaryUpdates(&state); err != nil {
+				return err
+			}
+			if err := a.git.Run("rebase", "--update-refs", "--onto", op.Onto, op.Upstream, op.Top); err != nil {
+				return err
+			}
 		}
 		if err := a.completePendingRebase(&state); err != nil {
 			return err
