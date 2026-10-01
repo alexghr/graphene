@@ -9,7 +9,7 @@ func (a *App) writeBoundaryWarnings(state State, branches []string) error {
 	if len(state.Boundaries) == 0 {
 		return nil
 	}
-	refs, err := a.git.snapshotBranchRefs()
+	refs, err := a.git.localBranchCommits()
 	if err != nil {
 		return err
 	}

@@ -272,7 +272,7 @@ func (a *App) usage(w io.Writer) {
   graphene sendf [options] [remote]
   graphene restack [--fetch] [--accept-risk] <base>
   graphene go <up|down|top|bottom> [number]
-  graphene graph [-s|--stack]
+  graphene graph [-s|--stack] [--json]
   graphene skill [--codex|--claude|--out <path>]
   graphene completion <bash|zsh>
   graphene version
@@ -426,7 +426,8 @@ With --stack, also include descendants of the current branch. From an untracked 
 options:
       --remote <remote>  push to this remote
   -s, --stack            also push descendants of the current branch
-  -n, --dry-run          show what would be pushed without updating refs or upstreams`,
+  -n, --dry-run          show what would be pushed without updating refs or upstreams
+      --json             output the dry-run push plan as JSON; requires --dry-run`,
 		"sendf": `usage: graphene sendf [options] [remote]
 
 Show the remote, push mode and selected branches, then atomically force-with-lease push the current branch and its tracked ancestors. If any branch is rejected, none are updated. The server must support atomic pushes.
@@ -436,7 +437,8 @@ With --stack, also include descendants of the current branch. From an untracked 
 options:
       --remote <remote>  push to this remote
   -s, --stack            also push descendants of the current branch
-  -n, --dry-run          show what would be pushed without updating refs or upstreams`,
+  -n, --dry-run          show what would be pushed without updating refs or upstreams
+      --json             output the dry-run push plan as JSON; requires --dry-run`,
 		"restack": `usage: graphene restack [--fetch] [--accept-risk] <base>
 
 Move the current branch onto another local branch, then restack dependent branches.
@@ -461,7 +463,7 @@ options:
   -b, --bottom [number]  switch to the bottom branch in the current stack path
   -u, --up [number]      switch to a direct child branch
   -d, --down [number]    switch to the direct parent branch`,
-		"graph":   "usage: graphene graph [-s|--stack]\n\nPrint the tracked stack graph and warn about branches needing sync. Uses locally known history without fetching.\n\noptions:\n  -s, --stack  print only the current stack path",
+		"graph":   "usage: graphene graph [-s|--stack] [--json]\n\nPrint the tracked stack graph and warn about branches needing sync. Uses locally known history without fetching.\n\noptions:\n  -s, --stack  print only the current stack path\n      --json   output branches and the pending operation as JSON",
 		"version": "usage: graphene version\n\nPrint the Graphene version and Git version.",
 	}
 	text, ok := usages[command]

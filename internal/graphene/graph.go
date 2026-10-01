@@ -22,7 +22,9 @@ func (a *App) graph(args []string) error {
 	if err != nil {
 		return err
 	}
-	if opts.stack {
+	if opts.json {
+		err = a.writeGraphJSON(state, current, opts.stack)
+	} else if opts.stack {
 		err = WriteCurrentStackGraph(a.stdout, state, current)
 	} else {
 		err = WriteGraph(a.stdout, state, current)
@@ -39,6 +41,7 @@ func (a *App) graph(args []string) error {
 
 type graphOptions struct {
 	stack bool
+	json  bool
 }
 
 func parseGraphArgs(args []string) (graphOptions, error) {
@@ -46,9 +49,16 @@ func parseGraphArgs(args []string) (graphOptions, error) {
 	cursor := flagparse.New(args)
 	for arg, ok := cursor.Next(); ok; arg, ok = cursor.Next() {
 		if arg.Positional() {
-			return opts, fmt.Errorf("unsupported argument %q; usage: graphene graph [--stack]", arg.Raw())
+			return opts, fmt.Errorf("unsupported argument %q; usage: graphene graph [--stack] [--json]", arg.Raw())
 		}
 		if flag, ok := arg.Long(); ok {
+			if value, matched, err := flag.Bool("json"); matched {
+				if err != nil {
+					return opts, err
+				}
+				opts.json = value
+				continue
+			}
 			if value, matched, err := flag.Bool("stack"); matched {
 				if err != nil {
 					return opts, err
@@ -60,7 +70,7 @@ func parseGraphArgs(args []string) (graphOptions, error) {
 		if arg.ShortBoolCluster("s", func(flag byte) { opts.stack = true }) {
 			continue
 		}
-		return opts, fmt.Errorf("unsupported argument %q; usage: graphene graph [--stack]", arg.Raw())
+		return opts, fmt.Errorf("unsupported argument %q; usage: graphene graph [--stack] [--json]", arg.Raw())
 	}
 	return opts, nil
 }

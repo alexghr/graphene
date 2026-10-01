@@ -133,6 +133,21 @@ func (g Git) LocalBranches() ([]string, error) {
 	return strings.Split(out, "\n"), nil
 }
 
+func (g Git) localBranchCommits() (map[string]string, error) {
+	// for-each-ref resolves symbolic refs for read-only inspection.
+	out, err := g.Output("for-each-ref", "--format=%(refname:strip=2) %(objectname)", "refs/heads")
+	if err != nil {
+		return nil, err
+	}
+	refs := map[string]string{}
+	for line := range strings.SplitSeq(out, "\n") {
+		if name, commit, ok := strings.Cut(line, " "); ok {
+			refs[name] = commit
+		}
+	}
+	return refs, nil
+}
+
 func (g Git) LocalBranchesPointingAt(rev string) ([]string, error) {
 	out, err := g.Output("branch", "--format=%(refname:strip=2)", "--points-at", rev)
 	if err != nil {

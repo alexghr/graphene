@@ -57,6 +57,8 @@ gn graph
 
 If the graph reports that a branch needs syncing after its parent history changed, switch to that branch and run `gn sync`. Graph checks locally known history without fetching; `gn graph --stack` limits the view and warnings to the current stack path.
 
+For scripts and agents, `gn graph --json` prints branches and pending work, and `gn sendf --stack --dry-run --json` prints the checked push plan. JSON goes to stdout; warnings and Git diagnostics go to stderr. See [JSON output](docs/json-output.md) for the versioned format.
+
 Move through the stack:
 
 ```

@@ -2362,14 +2362,17 @@ func (a *App) sendBranches(args []string, forceWithLease bool) error {
 			return err
 		}
 	}
-	if err := a.printPushPlan(pushPlan{
+	plan := pushPlan{
 		Remote:         remote,
 		Branches:       branches,
 		Scope:          pushScope(state, current, opts.stack),
 		ForceWithLease: forceWithLease,
 		DryRun:         opts.dryRun,
-	}); err != nil {
-		return err
+	}
+	if !opts.json {
+		if err := a.printPushPlan(plan); err != nil {
+			return err
+		}
 	}
 
 	pushArgs := []string{"push", "--atomic"}
@@ -2381,6 +2384,14 @@ func (a *App) sendBranches(args []string, forceWithLease bool) error {
 	}
 	pushArgs = append(pushArgs, remote)
 	pushArgs = append(pushArgs, branches...)
+	if opts.json {
+		git := a.git
+		git.Stdout = a.stderr
+		if err := git.Run(pushArgs...); err != nil {
+			return err
+		}
+		return a.writePushPlanJSON(plan, current)
+	}
 	if err := a.git.Run(pushArgs...); err != nil {
 		return err
 	}
@@ -3938,6 +3949,7 @@ type sendOptions struct {
 	remote string
 	stack  bool
 	dryRun bool
+	json   bool
 }
 
 func parseSendArgs(args []string) (sendOptions, error) {
@@ -3959,6 +3971,13 @@ func parseSendArgs(args []string) (sendOptions, error) {
 					return opts, err
 				}
 				opts.stack = value
+				continue
+			case flag.Name() == "json" || flag.Name() == "no-json":
+				value, _, err := flag.Bool("json")
+				if err != nil {
+					return opts, err
+				}
+				opts.json = value
 				continue
 			case flag.Name() == "dry-run" || flag.Name() == "no-dry-run":
 				value, _, err := flag.Bool("dry-run")
@@ -3995,7 +4014,10 @@ func parseSendArgs(args []string) (sendOptions, error) {
 		}) {
 			continue
 		}
-		return opts, fmt.Errorf("unsupported argument %q; supported send options are --remote, -s/--stack, and -n/--dry-run", arg.Raw())
+		return opts, fmt.Errorf("unsupported argument %q; supported send options are --remote, -s/--stack, -n/--dry-run, and --json", arg.Raw())
+	}
+	if opts.json && !opts.dryRun {
+		return opts, fmt.Errorf("--json requires --dry-run")
 	}
 	return opts, nil
 }
