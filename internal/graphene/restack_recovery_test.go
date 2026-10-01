@@ -90,7 +90,10 @@ func TestRestackConflictRecovery(t *testing.T) {
 	if code, _, _ := repo.runGraphene(t, "forget", "--force", "stack/one"); code == 0 {
 		t.Fatal("forget discarded an operation that still needs its snapshot")
 	}
-	expectGrapheneOK(t, repo, "abort")
+	code, stdout, stderr := repo.runGraphene(t, "abort")
+	if code != 0 || !strings.Contains(stdout, "Restored original branch tips: stack/one, stack/three, stack/two.") || !strings.Contains(stdout, "Checkout: stack/one.") {
+		t.Fatalf("abort = %d\nstdout: %s\nstderr: %s", code, stdout, stderr)
+	}
 	assertRestackRestored(t, repo, original, refs)
 	assertRestackSnapshotRemoved(t, repo, id)
 }
@@ -125,7 +128,7 @@ func TestRestackAbortRefusesBeforeMutation(t *testing.T) {
 			beforeRefs := runGit(t, repo.dir, "show-ref")
 			beforeStatus := runGit(t, repo.dir, "status", "--porcelain")
 			beforeState := readState(t, repo.dir)
-			if code, _, stderr := repo.runGraphene(t, "abort"); code == 0 || !strings.Contains(stderr, want) {
+			if code, stdout, stderr := repo.runGraphene(t, "abort"); code == 0 || !strings.Contains(stderr, want) || strings.Contains(stdout, "Restored") || strings.Contains(stdout, "Aborted") {
 				t.Fatalf("abort: %d, %s; want %q", code, stderr, want)
 			}
 			if got := runGit(t, repo.dir, "show-ref"); got != beforeRefs {

@@ -340,7 +340,10 @@ func TestSplitKeepsHistoricalBoundaryThroughBaseMovementAndAbort(t *testing.T) {
 	expectGrapheneOK(t, repo, "new", "--reuse-current", "-m", "Add one")
 	runGit(t, repo.dir, "add", "two.txt")
 	expectGrapheneOK(t, repo, "new", "-m", "Add two")
-	expectGrapheneOK(t, repo, "abort")
+	code, stdout, stderr := repo.runGraphene(t, "abort")
+	if code != 0 || !strings.Contains(stdout, "Aborted split.") || !strings.Contains(stdout, "Restored original branch tips: stack/after, stack/combined-change.") || !strings.Contains(stdout, "Removed split branches: stack/add-two.") || !strings.Contains(stdout, "Checkout: stack/combined-change.") {
+		t.Fatalf("abort = %d\nstdout: %s\nstderr: %s", code, stdout, stderr)
+	}
 
 	if got := currentBranch(t, repo.dir); got != "stack/combined-change" {
 		t.Fatalf("branch = %q, want stack/combined-change", got)

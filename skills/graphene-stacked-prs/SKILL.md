@@ -204,6 +204,8 @@ To abandon the pending Graphene operation:
 graphene abort
 ```
 
+Amend abort retains the amended commit and any completed descendant branch rewrites; successful abort output reports retained or restored changes and the final checkout.
+
 Sync and restack save branch tips and stack metadata before changing local branches. Their `abort` restores the original branch tips, stack metadata and tracked checkout, including completed rebases, base fast-forwards and branches deleted by sync. Run recovery from the worktree where the operation started.
 
 Untracked and ignored files are not backed up. Abort leaves unrelated local files, including edits made to them while paused, in place. Abort keeps the latest fetched remote-tracking refs.

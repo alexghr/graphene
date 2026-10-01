@@ -370,5 +370,13 @@ func (a *App) abortSnapshotRebases(state State) error {
 	if err := a.git.WriteState(state); err != nil {
 		return err
 	}
-	return a.git.removeSnapshot(r.Snapshot)
+	if err := a.git.removeSnapshot(r.Snapshot); err != nil {
+		return err
+	}
+	refs := make(map[string]string, len(r.Expected))
+	for branch := range r.Expected {
+		refs[branch] = snapshot.Refs[branch]
+	}
+	a.printRestoredAbort(p.Operation, refs, nil, true)
+	return nil
 }

@@ -1297,8 +1297,13 @@ func (a *App) abortRebase(args []string) error {
 	} else if state.Pending == nil {
 		return fmt.Errorf("no rebase in progress")
 	}
+	pending := state.Pending
 	state.Pending = nil
-	return a.git.WriteState(state)
+	if err := a.git.WriteState(state); err != nil {
+		return err
+	}
+	a.printRetainedAbort(pending, state, inProgress)
+	return nil
 }
 
 func (a *App) abortSplit(state State, rebaseInProgress bool) error {
@@ -1331,6 +1336,7 @@ func (a *App) abortSplit(state State, rebaseInProgress bool) error {
 			return err
 		}
 	}
+	var removed []string
 	for _, branch := range pending.Branches {
 		if branch == "" || branch == pending.Branch {
 			continue
@@ -1343,6 +1349,7 @@ func (a *App) abortSplit(state State, rebaseInProgress bool) error {
 			if err := a.git.Run("branch", "-D", branch); err != nil {
 				return err
 			}
+			removed = append(removed, branch)
 		}
 	}
 
@@ -1357,6 +1364,14 @@ func (a *App) abortSplit(state State, rebaseInProgress bool) error {
 			return err
 		}
 	}
+	refs := maps.Clone(pending.OriginalRefs)
+	if pending.Branch != "" && pending.OriginalHead != "" {
+		if refs == nil {
+			refs = map[string]string{}
+		}
+		refs[pending.Branch] = pending.OriginalHead
+	}
+	a.printRestoredAbort("split", refs, removed, false)
 	return nil
 }
 
@@ -1374,7 +1389,11 @@ func (a *App) abortSquash(state State, rebaseInProgress bool) error {
 	if returnBranch == "" {
 		returnBranch = pending.ReturnBranch
 	}
-	return a.restoreOriginalRewrite(State{Stacks: cloneStacks(pending.OriginalStacks), Boundaries: maps.Clone(pending.OriginalBoundaries)}, pending.OriginalRefs, pending.Branch, returnBranch)
+	if err := a.restoreOriginalRewrite(State{Stacks: cloneStacks(pending.OriginalStacks), Boundaries: maps.Clone(pending.OriginalBoundaries)}, pending.OriginalRefs, pending.Branch, returnBranch); err != nil {
+		return err
+	}
+	a.printRestoredAbort("squash", pending.OriginalRefs, nil, false)
+	return nil
 }
 
 func (a *App) abortSync(state State, rebaseInProgress bool) error {
@@ -1389,7 +1408,14 @@ func (a *App) abortSync(state State, rebaseInProgress bool) error {
 	}
 	if len(pending.OriginalRefs) == 0 {
 		state.Pending = nil
-		return a.git.WriteState(state)
+		if err := a.git.WriteState(state); err != nil {
+			return err
+		}
+		fmt.Fprintln(a.stdout, "Aborted sync.")
+		fmt.Fprintln(a.stdout, "Retained completed changes; legacy pending state has no original branch tips to restore.")
+		fmt.Fprintln(a.stdout, "Any fetched remote-tracking updates remain.")
+		a.printAbortCheckout()
+		return nil
 	}
 
 	resetBranch, err := a.git.Output("branch", "--show-current")
@@ -1397,7 +1423,11 @@ func (a *App) abortSync(state State, rebaseInProgress bool) error {
 		return err
 	}
 	original := State{Stacks: cloneStacks(pending.OriginalStacks), Boundaries: maps.Clone(pending.OriginalBoundaries)}
-	return a.restoreOriginalRewrite(original, pending.OriginalRefs, resetBranch, pending.Branch)
+	if err := a.restoreOriginalRewrite(original, pending.OriginalRefs, resetBranch, pending.Branch); err != nil {
+		return err
+	}
+	a.printRestoredAbort("sync", pending.OriginalRefs, nil, true)
+	return nil
 }
 
 func (a *App) forget(args []string) error {

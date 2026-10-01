@@ -73,7 +73,10 @@ func TestSyncSnapshotConflict(t *testing.T) {
 		runGit(t, other, "switch", "--detach")
 		runGit(t, repo.dir, "reflog", "expire", "--expire=now", "--all")
 		runGit(t, repo.dir, "prune", "--expire=now")
-		expectGrapheneOK(t, repo, "abort")
+		code, stdout, stderr := repo.runGraphene(t, "abort")
+		if code != 0 || !strings.Contains(stdout, "Aborted sync.") || !strings.Contains(stdout, "Restored original branch tips: main, stack/one, stack/three, stack/two.") || !strings.Contains(stdout, "Any fetched remote-tracking updates remain.") || !strings.Contains(stdout, "Checkout: stack/one.") {
+			t.Fatalf("abort = %d\nstdout: %s\nstderr: %s", code, stdout, stderr)
+		}
 		assertSyncRestored(t, repo, original, refs, "stack/one")
 		if got := runGit(t, repo.dir, "config", "branch.stack/one.remote"); got != "origin" {
 			t.Fatalf("restored branch lost its upstream: %s", got)
