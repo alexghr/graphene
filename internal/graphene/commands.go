@@ -2315,6 +2315,15 @@ func (a *App) sendBranches(args []string, forceWithLease bool) error {
 			return err
 		}
 	}
+	if err := a.printPushPlan(pushPlan{
+		Remote:         remote,
+		Branches:       branches,
+		Scope:          pushScope(state, current, opts.stack),
+		ForceWithLease: forceWithLease,
+		DryRun:         opts.dryRun,
+	}); err != nil {
+		return err
+	}
 
 	pushArgs := []string{"push", "--atomic"}
 	if forceWithLease {

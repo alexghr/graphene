@@ -108,11 +108,25 @@ func TestE2EAmendMiddleForksAndPushScope(t *testing.T) {
 	expectSame(t, "amended patch on deep tip", f.git("show", "stack/eight:four.txt"), "four amended")
 	f.assertFiles("stack/fork", "one", "two", "three", "fork")
 	expectSame(t, "amended patch on fork", f.git("show", "stack/fork:four.txt"), "four amended")
-	f.graph("sendf", "origin")
+	remoteBeforePreview := f.remoteRefs()
+	preview := f.graph("sendf", "--dry-run", "origin")
+	defaultPlan := "  Scope: current branch and tracked ancestors\n  Branches:\n    stack/one\n    stack/two\n    stack/three\n    stack/four\n\n"
+	if !strings.Contains(preview, "  Remote: origin\n  Mode: atomic, force-with-lease (dry run)\n") || !strings.Contains(preview, defaultPlan) {
+		t.Fatalf("dry-run push plan did not describe the selected path:\n%s", preview)
+	}
+	expectSame(t, "preview remote refs", f.remoteRefs(), remoteBeforePreview)
+	out := f.graph("sendf", "origin")
+	if !strings.Contains(out, defaultPlan) {
+		t.Fatalf("push plan differs from dry run:\n%s", out)
+	}
 	expectSame(t, "current branch pushed", f.gitAt(f.remote, "rev-parse", "stack/four"), f.oid("stack/four"))
 	expectSame(t, "descendant not pushed", f.gitAt(f.remote, "rev-parse", "stack/five"), oldFive)
 	expectSame(t, "fork not pushed", f.gitAt(f.remote, "rev-parse", "stack/fork"), oldFork)
-	f.graph("sendf", "--stack", "origin")
+	out = f.graph("sendf", "--stack", "origin")
+	stackPlan := "  Scope: current branch, tracked ancestors, and descendants of the current branch (--stack)\n  Branches:\n    stack/one\n    stack/two\n    stack/three\n    stack/four\n    stack/five\n    stack/six\n    stack/seven\n    stack/eight\n    stack/fork\n\n"
+	if !strings.Contains(out, "  Remote: origin\n  Mode: atomic, force-with-lease\n") || !strings.Contains(out, stackPlan) {
+		t.Fatalf("stack push plan did not describe the selected descendants:\n%s", out)
+	}
 	f.assertRemoteEquals(append(eight, "fork")...)
 	expectSame(t, "unrelated remote", f.gitAt(f.remote, "rev-parse", "stack/other"), unchanged["stack/other"])
 	f.cleanState(stack{"main", branches(eight...)}, stack{"stack/four", branches("fork")}, stack{"main", branches("other")})

@@ -23,7 +23,7 @@ Use `graphene` in commands. If the repo documents `gn`, treat it as an alias for
 - Use `graphene split` to break an existing one-commit stacked branch into smaller reviewable branches.
 - Use `graphene squash` to combine the current branch with one or more direct ancestors. Use `--no-edit` to accept the generated squash message.
 - Use `graphene sync` after the stack base changes or when stack branches may have landed upstream.
-- After rewrite workflows such as amend, split, squash, or restack, inspect the stack and use `graphene sendf --dry-run` before pushing.
+- After rewrite workflows such as amend, split, squash, or restack, inspect the stack and use `graphene sendf --dry-run` before pushing. Add `--stack` when publishing rewritten descendants.
 - Run `graphene graph` before pushing.
 - Run `graphene send --dry-run` before pushing.
 - Only run `graphene send` or `graphene sendf` when pushing is approved.
@@ -128,7 +128,7 @@ git switch <branch>
 git add <files>
 graphene amend -m "Updated reviewable change"
 graphene graph
-graphene sendf --dry-run
+graphene sendf --stack --dry-run
 ```
 
 To keep the existing commit message:
@@ -138,14 +138,16 @@ git switch <branch>
 git add <files>
 graphene amend --no-edit
 graphene graph
-graphene sendf --dry-run
+graphene sendf --stack --dry-run
 ```
 
 After approval to force-with-lease push rewritten stacked branches:
 
 ```sh
-graphene sendf
+graphene sendf --stack
 ```
+
+`send` and `sendf` print the remote, mode, scope and selected branch list before pushing, including in dry-run. They select the current branch and tracked ancestors by default; `--stack` also includes descendants of the current branch. From an untracked stack base, `--stack` selects its tracked descendants without pushing the base. An untracked branch without descendants is pushed by itself. Use `--stack` when publishing descendants rewritten by amend, sync, restack, split or squash.
 
 `send` and `sendf` push all selected branches atomically. A rejection leaves every selected remote branch unchanged. Servers without atomic-push support are rejected; Graphene does not fall back to partial pushes.
 
@@ -160,7 +162,7 @@ graphene new --reuse-current -m "First split part"
 git add -p
 graphene new -m "Second split part"
 graphene graph
-graphene sendf --dry-run
+graphene sendf --stack --dry-run
 ```
 
 The first split commit must use `graphene new --reuse-current`; later split parts use normal `graphene new`. When no tracked changes remain, Graphene restacks descendants onto the new split top.
@@ -173,7 +175,7 @@ Use this when adjacent stack branches should become one reviewable branch. `-c`/
 graphene squash
 graphene squash -c 3 -m "Combine related changes"
 graphene graph
-graphene sendf --dry-run
+graphene sendf --stack --dry-run
 ```
 
 To use the generated squash message without editing:
@@ -181,7 +183,7 @@ To use the generated squash message without editing:
 ```sh
 graphene squash --no-edit
 graphene graph
-graphene sendf --dry-run
+graphene sendf --stack --dry-run
 ```
 
 Graphene preserves the bottom branch name and restacks descendants onto the rewritten branch.

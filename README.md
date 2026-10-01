@@ -72,11 +72,13 @@ gn send
 
 `send` and `sendf` push the selected branches atomically: if any branch is rejected, none are updated remotely. The server must support atomic pushes; Graphene stops if it does not.
 
+Before pushing, Graphene lists the remote, push mode, scope and selected branches. By default, `send` and `sendf` include the current branch and its tracked ancestors. Add `--stack` to include descendants of the current branch as well. From an untracked stack base, `--stack` pushes its tracked descendants without pushing the base; an untracked branch without descendants is pushed by itself. Use `--dry-run` to show the same plan and check it with Git without updating remote refs or setting upstreams.
+
 After amending a stacked branch, push the rewritten branch set with force-with-lease:
 
 ```
 gn amend -m "Wire export into settings"
-gn sendf
+gn sendf --stack
 ```
 
 Use `--no-edit` when you want to keep the existing commit message while amending:

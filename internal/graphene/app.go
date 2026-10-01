@@ -419,19 +419,23 @@ options:
       --accept-risk   acknowledge possible overwrites of local files or nested checkouts`,
 		"send": `usage: graphene send [options] [remote]
 
-Atomically push the current branch and its dependency path, then print pull request URLs. If any branch is rejected, none are updated. The server must support atomic pushes.
+Show the remote, push mode and selected branches, then atomically push the current branch and its tracked ancestors and print pull request URLs. If any branch is rejected, none are updated. The server must support atomic pushes.
+
+With --stack, also include descendants of the current branch. From an untracked stack base, --stack selects its tracked descendants without pushing the base. An untracked branch without descendants is pushed by itself.
 
 options:
       --remote <remote>  push to this remote
-  -s, --stack            push the current dependency path and descendants
+  -s, --stack            also push descendants of the current branch
   -n, --dry-run          show what would be pushed without updating refs or upstreams`,
 		"sendf": `usage: graphene sendf [options] [remote]
 
-Atomically force-with-lease push the same branch set selected by graphene send. If any branch is rejected, none are updated. The server must support atomic pushes.
+Show the remote, push mode and selected branches, then atomically force-with-lease push the current branch and its tracked ancestors. If any branch is rejected, none are updated. The server must support atomic pushes.
+
+With --stack, also include descendants of the current branch. From an untracked stack base, --stack selects its tracked descendants without pushing the base. An untracked branch without descendants is pushed by itself.
 
 options:
       --remote <remote>  push to this remote
-  -s, --stack            push the current dependency path and descendants
+  -s, --stack            also push descendants of the current branch
   -n, --dry-run          show what would be pushed without updating refs or upstreams`,
 		"restack": `usage: graphene restack [--fetch] [--accept-risk] <base>
 
