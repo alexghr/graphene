@@ -218,7 +218,11 @@ func (a *App) runSnapshotRebases(state State) error {
 			if err := a.git.WriteState(state); err != nil {
 				return err
 			}
-			return a.git.removeSnapshot(r.Snapshot)
+			if err := a.git.removeSnapshot(r.Snapshot); err != nil {
+				return err
+			}
+			a.printRewriteSummary(p.RewriteBefore, state)
+			return nil
 		}
 		var args []string
 		if r.FastForward != "" {

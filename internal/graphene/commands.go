@@ -250,6 +250,7 @@ func (a *App) split(args []string) error {
 	}
 	pending, err := a.pendingForCurrentWorktree(Pending{
 		Operation:          "split",
+		RewriteBefore:      a.captureRewriteSources(state, refs),
 		Branch:             target,
 		ReturnBranch:       current,
 		Top:                originalHead,
@@ -427,7 +428,11 @@ func (a *App) finishSplit(state State) error {
 
 	if len(ops) == 0 {
 		nextState.Pending = nil
-		return a.git.WriteState(nextState)
+		if err := a.git.WriteState(nextState); err != nil {
+			return err
+		}
+		a.printRewriteSummary(pending.RewriteBefore, nextState)
+		return nil
 	}
 
 	state.Pending.ReturnBranch = current
@@ -609,6 +614,7 @@ func (a *App) squash(args []string) error {
 		return err
 	}
 	defer cleanup()
+	rewriteBefore := a.captureRewriteSources(state, refs)
 
 	if current != selection.Bottom {
 		if err := a.git.Run("switch", selection.Bottom); err != nil {
@@ -639,11 +645,13 @@ func (a *App) squash(args []string) error {
 		if err := a.git.WriteState(nextState); err != nil {
 			return restore(err)
 		}
+		a.printRewriteSummary(rewriteBefore, nextState)
 		return nil
 	}
 
 	pending, err := a.pendingForCurrentWorktree(Pending{
 		Operation:          "squash",
+		RewriteBefore:      rewriteBefore,
 		Branch:             selection.Bottom,
 		ReturnBranch:       selection.Bottom,
 		Queue:              ops,
@@ -1014,19 +1022,28 @@ func (a *App) amend(args []string) error {
 		}
 	}
 
+	var rewriteBefore map[string]rewriteSource
+	if refs, err := a.git.snapshotBranchRefs(); err == nil {
+		rewriteBefore = a.captureRewriteSources(state, refs)
+	}
 	commitGitArgs := append([]string{"commit", "--amend"}, opts.commitArgs...)
 	if err := a.git.Run(commitGitArgs...); err != nil {
 		return err
 	}
 	if len(ops) == 0 {
-		return a.git.WriteState(state)
+		if err := a.git.WriteState(state); err != nil {
+			return err
+		}
+		a.printRewriteSummary(rewriteBefore, state)
+		return nil
 	}
 
 	pending, err := a.pendingForCurrentWorktree(Pending{
-		Operation:    "amend",
-		Branch:       current,
-		ReturnBranch: current,
-		Queue:        ops,
+		Operation:     "amend",
+		RewriteBefore: rewriteBefore,
+		Branch:        current,
+		ReturnBranch:  current,
+		Queue:         ops,
 	})
 	if err != nil {
 		return err
@@ -2648,6 +2665,10 @@ func (a *App) runPendingRebases(state State) error {
 }
 
 func (a *App) finishPendingRebases(state State) error {
+	var rewriteBefore map[string]rewriteSource
+	if state.Pending != nil {
+		rewriteBefore = state.Pending.RewriteBefore
+	}
 	returnBranch := ""
 	returnRef := ""
 	operation := ""
@@ -2707,6 +2728,7 @@ func (a *App) finishPendingRebases(state State) error {
 	if err := a.git.WriteState(state); err != nil {
 		return err
 	}
+	a.printRewriteSummary(rewriteBefore, state)
 	if operation == "sync" {
 		if err := a.deleteBranchConfigs(appliedBranches); err != nil {
 			return fmt.Errorf("sync completed, but branch config cleanup failed: %w", err)

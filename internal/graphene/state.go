@@ -18,28 +18,29 @@ type Stack struct {
 }
 
 type Pending struct {
-	Recovery           *recoveryState    `json:"recovery,omitempty"`
-	Operation          string            `json:"operation"`
-	Worktree           string            `json:"worktree,omitempty"`
-	Branch             string            `json:"branch,omitempty"`
-	ReturnBranch       string            `json:"returnBranch,omitempty"`
-	ReturnRef          string            `json:"returnRef,omitempty"`
-	Queue              []RebaseOp        `json:"queue,omitempty"`
-	Top                string            `json:"top,omitempty"`
-	Branches           []string          `json:"branches,omitempty"`
-	NextStacks         []Stack           `json:"nextStacks,omitempty"`
-	NextBoundaries     map[string]string `json:"nextBoundaries,omitempty"`
-	BoundaryUpdates    map[string]string `json:"boundaryUpdates,omitempty"`
-	BaseChanges        []BaseChange      `json:"baseChanges,omitempty"`
-	OriginalHead       string            `json:"originalHead,omitempty"`
-	OriginalBase       string            `json:"originalBase,omitempty"`
-	OriginalRefs       map[string]string `json:"originalRefs,omitempty"`
-	OriginalStacks     []Stack           `json:"originalStacks,omitempty"`
-	OriginalBoundaries map[string]string `json:"originalBoundaries,omitempty"`
-	SyncBase           string            `json:"syncBase,omitempty"`
-	SyncBaseOld        string            `json:"syncBaseOld,omitempty"`
-	SyncBaseNew        string            `json:"syncBaseNew,omitempty"`
-	SyncBaseUpdate     bool              `json:"syncBaseUpdate,omitempty"`
+	RewriteBefore      map[string]rewriteSource `json:"rewriteBefore,omitempty"`
+	Recovery           *recoveryState           `json:"recovery,omitempty"`
+	Operation          string                   `json:"operation"`
+	Worktree           string                   `json:"worktree,omitempty"`
+	Branch             string                   `json:"branch,omitempty"`
+	ReturnBranch       string                   `json:"returnBranch,omitempty"`
+	ReturnRef          string                   `json:"returnRef,omitempty"`
+	Queue              []RebaseOp               `json:"queue,omitempty"`
+	Top                string                   `json:"top,omitempty"`
+	Branches           []string                 `json:"branches,omitempty"`
+	NextStacks         []Stack                  `json:"nextStacks,omitempty"`
+	NextBoundaries     map[string]string        `json:"nextBoundaries,omitempty"`
+	BoundaryUpdates    map[string]string        `json:"boundaryUpdates,omitempty"`
+	BaseChanges        []BaseChange             `json:"baseChanges,omitempty"`
+	OriginalHead       string                   `json:"originalHead,omitempty"`
+	OriginalBase       string                   `json:"originalBase,omitempty"`
+	OriginalRefs       map[string]string        `json:"originalRefs,omitempty"`
+	OriginalStacks     []Stack                  `json:"originalStacks,omitempty"`
+	OriginalBoundaries map[string]string        `json:"originalBoundaries,omitempty"`
+	SyncBase           string                   `json:"syncBase,omitempty"`
+	SyncBaseOld        string                   `json:"syncBaseOld,omitempty"`
+	SyncBaseNew        string                   `json:"syncBaseNew,omitempty"`
+	SyncBaseUpdate     bool                     `json:"syncBaseUpdate,omitempty"`
 }
 
 type RebaseOp struct {

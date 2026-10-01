@@ -94,7 +94,8 @@ func (a *App) restack(args []string) error {
 	}
 	p := &Pending{
 		Operation: "restack", Branch: current,
-		ReturnBranch: current, Queue: queue, NextStacks: nextState.Stacks, NextBoundaries: nextState.Boundaries, Recovery: r,
+		RewriteBefore: a.captureRewriteSources(state, refs),
+		ReturnBranch:  current, Queue: queue, NextStacks: nextState.Stacks, NextBoundaries: nextState.Boundaries, Recovery: r,
 	}
 	if err := a.preflightRebaseRepositories(p, "HEAD", true); err != nil {
 		return err

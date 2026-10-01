@@ -87,6 +87,8 @@ Use `--no-edit` when you want to keep the existing commit message while amending
 gn amend --no-edit
 ```
 
+After amend, split, squash, sync or restack finishes, Graphene lists changed branch tips with their old and new commit IDs. Existing surviving branches also report whether their own net textual patch changed, excluding inherited ancestor edits and commit messages. The comparison preserves whitespace and ignores shifted line positions. Binary patches and branches without a resolvable historical boundary show `patch comparison unavailable`. A rewrite resumed with `gn continue` uses the original comparison evidence.
+
 Split the current stacked branch into multiple branches:
 
 ```

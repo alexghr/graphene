@@ -151,6 +151,8 @@ graphene sendf --stack
 
 `send` and `sendf` push all selected branches atomically. A rejection leaves every selected remote branch unchanged. Servers without atomic-push support are rejected; Graphene does not fall back to partial pushes.
 
+After a rewrite finishes, inspect the summary of old and new branch tips. `patch unchanged` compares the branch's own net textual patch, preserving whitespace and ignoring shifted line positions, inherited blob hashes and commit messages; it does not mean the branch's whole tree is unchanged. Binary patches and unavailable historical boundaries report `patch comparison unavailable`. A successful `graphene continue` reports against the original tips.
+
 ## Split A Stacked Branch
 
 Use this when a tracked one-commit branch should become multiple reviewable branches. If no branch is given, Graphene splits the current branch.

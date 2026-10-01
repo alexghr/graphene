@@ -44,6 +44,8 @@ destinations before starting Git, then resolve rewritten branch refs and persist
 the resulting boundaries with queue advancement. A conflicted step leaves its
 boundary metadata unchanged until continue succeeds.
 
+Pending operations may also save original branch tips and textual patch digests for rewrite summaries. This reporting evidence does not authorize ref changes and is not used for rollback or ref ownership checks.
+
 Restack and sync persist a ready, applying, conflict or aborting phase. Each
 fast-forward or rebase starts with an applying record and ends with a saved result.
 An active rebase may continue only after a recorded conflict and when its Git

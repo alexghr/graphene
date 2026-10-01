@@ -74,6 +74,7 @@ func (a *App) planSnapshotSync(before State, after *State, selection syncSelecti
 }
 
 func (a *App) startSnapshotSync(state State, p *Pending, fetched upstreamUpdate, refs map[string]string, acceptRisk, advanceBase bool) error {
+	p.RewriteBefore = a.captureRewriteSources(state, refs)
 	base, current := fetched.Branch, p.Branch
 	r := &recoveryState{Phase: recoveryReady, Base: base, BaseHead: fetched.Updated, Expected: map[string]string{current: refs[current]}, AcceptRisk: acceptRisk}
 	baseAvailable := base == current
@@ -189,6 +190,7 @@ func (a *App) finishSnapshotSync(state State) error {
 	if err := a.git.removeSnapshot(r.Snapshot); err != nil {
 		return err
 	}
+	a.printRewriteSummary(p.RewriteBefore, state)
 	// Keep configuration until rollback is no longer needed. Interrupted cleanup
 	// can leave unused configuration, but restored branches retain their upstreams.
 	if err := a.deleteBranchConfigs(p.Branches); err != nil {
