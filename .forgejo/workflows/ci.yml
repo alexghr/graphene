@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  ci:
+    name: CI nix
+    runs-on: nix
+    defaults:
+      run:
+        shell: bash
+    env:
+      CI: "true"
+      DEVENV_PROFILE: ci
+    steps:
+      - uses: https://data.forgejo.org/actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Lint and test
+        env:
+          NO_BUILD: "1"
+        run: ./shell p-ci
+
+      - name: Build and verify package
+        run: |
+          ./devenv build --quiet outputs.graphene > out.json
+          out_dir="$(nix eval --impure --raw --expr '(builtins.fromJSON (builtins.readFile ./out.json))."outputs.graphene"')"
+          "$out_dir/bin/graphene" version | grep -Fx "graphene $(cat VERSION)"
