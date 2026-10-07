@@ -37,6 +37,18 @@ compinit
 source <(graphene completion zsh)
 ```
 
+### Nix
+
+Build the production package from a checkout with `./devenv build outputs.graphene`. It includes the CLI, Bash and Zsh completions, and the Graphite alias file.
+
+To include Graphene in another Nix project, pin this repository as a source input with `flake = false`, then use your project's package set:
+
+```nix
+pkgs.callPackage "${graphene}/package.nix" { }
+```
+
+Here, `graphene` is the pinned source input. The package reads its version from that source's `VERSION` file.
+
 ## Workflow
 
 Create a stack by staging changes and committing each change with Graphene:
