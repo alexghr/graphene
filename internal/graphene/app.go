@@ -419,7 +419,7 @@ options:
       --accept-risk   acknowledge possible overwrites of local files or nested checkouts`,
 		"send": `usage: graphene send [options] [remote]
 
-Show the remote, push mode and selected branches, then atomically push the current branch and its tracked ancestors and print pull request URLs. If any branch is rejected, none are updated. The server must support atomic pushes.
+Show the remote, push mode and selected branches, then atomically push the current branch and its tracked ancestors and print review links. If any branch is rejected, none are updated. The server must support atomic pushes.
 
 With --stack, also include descendants of the current branch. From an untracked stack base, --stack selects its tracked descendants without pushing the base. An untracked branch without descendants is pushed by itself.
 
@@ -463,7 +463,7 @@ options:
   -b, --bottom [number]  switch to the bottom branch in the current stack path
   -u, --up [number]      switch to a direct child branch
   -d, --down [number]    switch to the direct parent branch`,
-		"graph":   "usage: graphene graph [-s|--stack] [--json]\n\nPrint the tracked stack graph and warn about branches needing sync. Uses locally known history without fetching.\n\noptions:\n  -s, --stack  print only the current stack path\n      --json   output branches and the pending operation as JSON",
+		"graph":   "usage: graphene graph [-s|--stack] [--json]\n\nPrint the tracked stack graph and warn about branches needing sync. Uses locally known history without fetching.\n\noptions:\n  -s, --stack  print tracked ancestors and current descendants, including the base\n      --json   output branches and the pending operation as JSON",
 		"version": "usage: graphene version\n\nPrint the Graphene version and Git version.",
 	}
 	text, ok := usages[command]

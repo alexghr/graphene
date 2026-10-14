@@ -58,6 +58,52 @@ func TestGraphJSONShowsScopedBranchesAndPending(t *testing.T) {
 	}
 }
 
+func TestGraphStackIncludesNestedDescendants(t *testing.T) {
+	t.Parallel()
+	repo, _ := newTestRepoWithOrigin(t)
+	for _, name := range []string{"One", "Two", "Three", "Four"} {
+		createStackBranch(t, repo, name+".txt", name+"\n", name)
+	}
+	state := readState(t, repo.dir)
+	state.Stacks = []Stack{
+		{Base: "main", Branches: []string{"stack/one", "stack/two"}},
+		{Base: "stack/two", Branches: []string{"stack/three", "stack/four"}},
+	}
+	if err := (Git{Dir: repo.dir}).WriteState(state); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo.dir, "switch", "stack/one")
+	code, stdout, stderr := repo.runGraphene(t, "send", "--stack", "--dry-run", "--json")
+	var plan pushPlanOutput
+	if code != 0 || json.Unmarshal([]byte(stdout), &plan) != nil {
+		t.Fatalf("push plan: %d, %s, %s", code, stdout, stderr)
+	}
+	code, stdout, stderr = repo.runGraphene(t, "graph", "--stack", "--json")
+	var graph graphOutput
+	if code != 0 || json.Unmarshal([]byte(stdout), &graph) != nil {
+		t.Fatalf("graph: %d, %s, %s", code, stdout, stderr)
+	}
+	var tracked []string
+	for _, branch := range graph.Branches {
+		if branch.Tracked {
+			tracked = append(tracked, branch.Name)
+		}
+	}
+	if !reflect.DeepEqual(tracked, plan.Branches) {
+		t.Fatalf("graph branches %v differ from push plan %v", tracked, plan.Branches)
+	}
+	state.Boundaries["stack/four"] = "invalid"
+	if err := (Git{Dir: repo.dir}).WriteState(state); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"graph", "--stack"}, {"graph", "--stack", "--json"}} {
+		code, stdout, stderr = repo.runGraphene(t, args...)
+		if code != 0 || !strings.Contains(stdout, "stack/four") || !strings.Contains(stderr, `invalid saved historical boundary for "stack/four"`) {
+			t.Fatalf("nested descendant missing from graph or warnings: %d, %s, %s", code, stdout, stderr)
+		}
+	}
+}
+
 func TestGraphJSONEmptyAndDetached(t *testing.T) {
 	t.Parallel()
 	repo := newTestRepo(t)

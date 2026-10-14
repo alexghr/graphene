@@ -25,9 +25,9 @@ Use `graphene` in commands. If the repo documents `gn`, treat it as an alias for
 - Use `graphene sync` after the stack base changes or when stack branches may have landed upstream.
 - After rewrite workflows such as amend, split, squash, or restack, inspect the stack and use `graphene sendf --dry-run` before pushing. Add `--stack` when publishing rewritten descendants.
 - Run `graphene graph` before pushing.
-- Run `graphene send --dry-run` before pushing.
+- For new commits, run `graphene send --dry-run` before pushing. After rewriting history, use `graphene sendf --dry-run` instead; ordinary `send` rejects rewritten remote history. Add `--stack` when publishing rewritten descendants.
 - Only run `graphene send` or `graphene sendf` when pushing is approved.
-- Include the printed pull request URLs in the final response.
+- Include the printed review links in the final response.
 
 ## Move Between Stack Branches
 
@@ -38,7 +38,7 @@ git branch --show-current
 graphene graph
 ```
 
-If graph reports that a branch needs syncing after its parent history changed, switch to the named branch and run `graphene sync`. Graph does not fetch. Use `graphene graph --stack` to inspect only the current stack path and its warnings.
+If graph reports that a branch needs syncing after its parent history changed, switch to the named branch and run `graphene sync`. Graph does not fetch. Use `graphene graph --stack` to inspect tracked ancestors and descendants of the current branch, plus their base and warnings. This matches `send --stack` selection, with the untracked base shown for context.
 
 Use Graphene stack navigation for tracked branches:
 

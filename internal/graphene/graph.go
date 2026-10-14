@@ -34,7 +34,7 @@ func (a *App) graph(args []string) error {
 	}
 	branches := StateRefNames(state)
 	if opts.stack {
-		branches, _ = VisibleStackPath(state, current)
+		branches = BranchesThroughCurrentAndDescendants(state, current)
 	}
 	return a.writeBoundaryWarnings(state, branches)
 }
@@ -121,24 +121,24 @@ func RenderCurrentStackGraph(state State, current string) (string, error) {
 		return "", nil
 	}
 
-	path, ok := VisibleStackPath(state, current)
-	if !ok {
-		return "", fmt.Errorf("branch %q is not in a graphene stack", current)
-	}
-	if len(path) == 0 {
-		return "", nil
-	}
-
-	base, ok := BaseBranch(state, path[0])
-	if !ok {
-		return "", fmt.Errorf("branch %q is not in a graphene stack", current)
-	}
-
-	stackState := State{
-		Stacks:  []Stack{{Base: base, Branches: path}},
-		Pending: state.Pending,
+	stackState, err := currentStackState(state, current)
+	if err != nil {
+		return "", err
 	}
 	return RenderGraph(stackState, current), nil
+}
+
+func currentStackState(state State, current string) (State, error) {
+	if !newStackGraph(state).nodes[current] {
+		return State{}, fmt.Errorf("branch %q is not in a graphene stack", current)
+	}
+	selected := State{Pending: state.Pending}
+	for _, branch := range BranchesThroughCurrentAndDescendants(state, current) {
+		if parent, ok := BaseBranch(state, branch); ok {
+			selected.Stacks = append(selected.Stacks, Stack{Base: parent, Branches: []string{branch}})
+		}
+	}
+	return selected, nil
 }
 
 func writeGraphNode(b *strings.Builder, graph stackGraph, name, current, prefix string) {

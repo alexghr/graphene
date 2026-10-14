@@ -2,7 +2,6 @@ package graphene
 
 import (
 	"encoding/json"
-	"fmt"
 	"io"
 )
 
@@ -73,15 +72,11 @@ func publicPending(p *Pending) *pendingOutput {
 func (a *App) writeGraphJSON(state State, current string, stack bool) error {
 	names := StateRefNames(state)
 	if stack && (len(state.Stacks) != 0 || state.Pending != nil) {
-		path, ok := VisibleStackPath(state, current)
-		if !ok {
-			return fmt.Errorf("branch %q is not in a graphene stack", current)
+		selected, err := currentStackState(state, current)
+		if err != nil {
+			return err
 		}
-		base, ok := BaseBranch(state, path[0])
-		if !ok {
-			return fmt.Errorf("branch %q is not in a graphene stack", current)
-		}
-		names = append([]string{base}, path...)
+		names = StateRefNames(selected)
 	}
 	refs, err := a.git.localBranchCommits()
 	if err != nil {

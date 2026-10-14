@@ -4061,18 +4061,18 @@ func (a *App) printPullRequestURLs(remote string, state State, branches []string
 	if template == "" {
 		remoteURL, err = a.git.RemoteURL(remote)
 		if err != nil {
-			_, printErr := fmt.Fprintf(a.stdout, "No pull request URLs: remote %q has no push URL.\n", remote)
+			_, printErr := fmt.Fprintf(a.stdout, "No review links: remote %q has no push URL.\n", remote)
 			return printErr
 		}
 	}
 
 	urls := PullRequestURLs(template, remoteURL, state, branches)
 	if len(urls) == 0 {
-		_, err := fmt.Fprintf(a.stdout, "No pull request URLs for remote %q; set graphene.prUrlTemplate for non-GitHub remotes.\n", remote)
+		_, err := fmt.Fprintf(a.stdout, "No review links for remote %q; set graphene.prUrlTemplate for non-GitHub remotes.\n", remote)
 		return err
 	}
 
-	if _, err := fmt.Fprintln(a.stdout, "Pull request URLs:"); err != nil {
+	if _, err := fmt.Fprintln(a.stdout, "Review links:"); err != nil {
 		return err
 	}
 	for _, pull := range urls {

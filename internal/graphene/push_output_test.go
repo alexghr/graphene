@@ -60,3 +60,14 @@ func TestUnitPrintPushPlan(t *testing.T) {
 		})
 	}
 }
+
+func TestSendPrintsReviewLinks(t *testing.T) {
+	t.Parallel()
+	repo, _ := newTestRepoWithOrigin(t)
+	createStackBranch(t, repo, "one.txt", "one\n", "One")
+	runGit(t, repo.dir, "config", "graphene.prUrlTemplate", "https://forge.example/repo/compare/${baseBranch}...${targetBranch}")
+	code, stdout, stderr := repo.runGraphene(t, "send")
+	if code != 0 || !strings.Contains(stdout, "Review links:\n") || !strings.Contains(stdout, "https://forge.example/repo/compare/main...stack/one") || strings.Contains(stdout, "Pull request URLs") {
+		t.Fatalf("send output: %d, %s, %s", code, stdout, stderr)
+	}
+}

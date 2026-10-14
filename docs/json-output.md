@@ -24,7 +24,7 @@ Every object has `schema_version: 1`. Consumers should check this version and ig
 
 `pending` is `null` when no operation is recorded. Otherwise it contains `operation`, `branch`, `return_branch`, `phase`, and `rebases`. The first three identify the command, its subject branch, and its intended final branch. `phase` is the recorded recovery phase (`ready`, `applying`, `conflict`, `deleting`, or `aborting`), or an empty string for operations without recorded phases. An empty phase does not establish whether a Git rebase is active.
 
-Each queued rebase has `branch`, `onto`, and `upstream`: the branch to replay, its destination revision, and its source boundary revision. Rebases appear in execution order, including an active step. A pending operation can have `rebases: []`, for example while waiting for split commits or finalizing sync. `--stack` filters graph nodes but retains the repository's pending operation.
+Each queued rebase has `branch`, `onto`, and `upstream`: the branch to replay, its destination revision, and its source boundary revision. Rebases appear in execution order, including an active step. A pending operation can have `rebases: []`, for example while waiting for split commits or finalizing sync. `--stack` selects the same tracked branches as `send --stack`, adds the untracked base for context, and retains the repository's pending operation.
 
 ## Push plan
 
