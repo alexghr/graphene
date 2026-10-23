@@ -1,26 +1,20 @@
 name: Release
 
 on:
-  workflow_dispatch:
-    inputs:
-      version:
-        required: true
-        type: string
-      ref:
-        required: true
-        default: main
-        type: string
+  push:
+    tags:
+      - 'v*'
 
 permissions:
   contents: write
 
 concurrency:
-  group: release-${{ inputs.ref }}-${{ inputs.version }}
+  group: release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   prepare:
-    name: Prepare release
+    name: Create draft release
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -29,72 +23,34 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
-          ref: ${{ inputs.ref }}
+          ref: ${{ github.ref }}
           fetch-depth: 0
 
       - name: Parse version
         id: version
         env:
-          RELEASE_VERSION: ${{ inputs.version }}
+          TAG: ${{ github.ref_name }}
         run: |
-          version="${RELEASE_VERSION#v}"
-          tag="v$version"
+          version="${TAG#v}"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid release tag: $TAG" >&2
+            exit 1
+          fi
+          if [[ "$(cat VERSION)" != "$version" ]]; then
+            echo "Tag $TAG does not match VERSION." >&2
+            exit 1
+          fi
+
           prerelease=false
-          if [[ "$version" == *-* ]]; then
+          if [[ "${version%%+*}" == *-* ]]; then
             prerelease=true
           fi
 
           {
             echo "version=$version"
-            echo "tag=$tag"
+            echo "tag=$TAG"
             echo "prerelease=$prerelease"
           } >> "$GITHUB_OUTPUT"
-
-      - name: Update release metadata
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          printf '%s\n' "$VERSION" > VERSION
-
-      - name: Commit version bump
-        env:
-          REF: ${{ inputs.ref }}
-          TAG: ${{ steps.version.outputs.tag }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-
-          git add VERSION
-
-          if git diff --cached --quiet; then
-            echo "No release metadata changes to commit."
-          else
-            git commit -m "chore: Release $TAG"
-            git push origin "HEAD:$REF"
-          fi
-
-      - name: Tag release
-        env:
-          TAG: ${{ steps.version.outputs.tag }}
-        run: |
-          if ! git rev-parse --verify --quiet "refs/tags/$TAG" >/dev/null; then
-            if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
-              git fetch --force origin "refs/tags/$TAG:refs/tags/$TAG"
-            fi
-          fi
-
-          if git rev-parse --verify --quiet "refs/tags/$TAG" >/dev/null; then
-            tag_commit="$(git rev-parse "$TAG^{commit}")"
-            head_commit="$(git rev-parse HEAD)"
-            if [[ "$tag_commit" != "$head_commit" ]]; then
-              echo "Tag $TAG already points at $tag_commit, but HEAD is $head_commit." >&2
-              exit 1
-            fi
-            echo "Tag $TAG already exists at HEAD."
-          else
-            git tag -a "$TAG" -m "Release $TAG"
-          fi
-          git push origin "$TAG"
 
       - name: Create GitHub release
         env:
@@ -115,7 +71,7 @@ jobs:
             fi
             gh release edit "$TAG" "${edit_args[@]}" --repo "$GITHUB_REPOSITORY"
           else
-            gh release create "$TAG" "${args[@]}" --repo "$GITHUB_REPOSITORY"
+            gh release create "$TAG" "${args[@]}" --verify-tag --repo "$GITHUB_REPOSITORY"
           fi
 
   artifacts:

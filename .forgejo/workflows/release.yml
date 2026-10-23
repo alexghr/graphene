@@ -1,0 +1,92 @@
+name: Prepare release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version (with or without the v prefix)
+        required: true
+        type: string
+      ref:
+        description: Branch to release from
+        required: true
+        default: main
+        type: string
+
+concurrency:
+  group: prepare-release-${{ inputs.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Commit and tag release
+    runs-on: nix
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: https://data.forgejo.org/actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: refs/heads/${{ inputs.ref }}
+          fetch-depth: 0
+
+      - name: Parse version
+        id: version
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          REF: ${{ inputs.ref }}
+        run: |
+          version="${RELEASE_VERSION#v}"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid release version: $RELEASE_VERSION" >&2
+            exit 1
+          fi
+          git check-ref-format "refs/heads/$REF"
+          git check-ref-format "refs/tags/v$version"
+
+          {
+            echo "version=$version"
+            echo "tag=v$version"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Commit version bump
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          git config user.name "forgejo-actions[bot]"
+          git config user.email "forgejo-actions[bot]@noreply.forge.alexghr.me"
+
+          printf '%s\n' "$VERSION" > VERSION
+          git add VERSION
+
+          if git diff --cached --quiet; then
+            echo "No release metadata changes to commit."
+          else
+            git commit -m "chore: Release $TAG"
+          fi
+
+      - name: Tag and push release
+        env:
+          REF: ${{ inputs.ref }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          if ! git rev-parse --verify --quiet "refs/tags/$TAG" >/dev/null; then
+            if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+              git fetch origin "refs/tags/$TAG:refs/tags/$TAG"
+            fi
+          fi
+
+          if git rev-parse --verify --quiet "refs/tags/$TAG" >/dev/null; then
+            tag_commit="$(git rev-parse "refs/tags/$TAG^{commit}")"
+            head_commit="$(git rev-parse HEAD)"
+            if [[ "$tag_commit" != "$head_commit" ]]; then
+              echo "Tag $TAG already points at $tag_commit, but HEAD is $head_commit." >&2
+              exit 1
+            fi
+            echo "Tag $TAG already exists at HEAD."
+          else
+            git tag -a "$TAG" -m "Release $TAG"
+          fi
+
+          git push --atomic origin "HEAD:refs/heads/$REF" "refs/tags/$TAG"
