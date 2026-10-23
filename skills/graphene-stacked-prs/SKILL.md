@@ -1,154 +1,51 @@
 ---
 name: graphene-stacked-prs
-description: Use when preparing stacked pull requests with the Graphene CLI, creating reviewable branches, walking stack branches, amending, splitting, squashing, syncing, restacking, or pushing stacked PR branches for review.
+description: "Manage stacked PR branches with Graphene: create, navigate, rewrite, sync, and publish stacks."
 ---
 
 # Graphene Stacked PRs
 
-Use Graphene for stacked PR work. Graphene repo and install instructions: https://github.com/alexghr/graphene#install.
+Use `graphene` for stacked PR work (`gn` is an alias). If missing from `PATH` and installation is allowed, follow the [README install instructions](https://github.com/alexghr/graphene#install).
 
-## Setup
+## Working rules
 
-Graphene must be available on `PATH`. If it is missing and installing tools is allowed, read the Graphene README install section and follow those instructions.
+- Keep one logical commit per tracked branch. Use `graphene new` and `graphene amend` instead of Git commit commands.
+- Run routine commands directly within the user's scope. Dry-runs are optional: use them for concrete uncertainty about push selection, remote configuration, sync deletions or retargets, or a requested preview. Once resolved, proceed without another preview unless relevant state changes.
+- If an operation is rejected, resolve its diagnostic within scope. Do not bypass lease failures, pending operations, or collision checks with raw Git force pushes or manual state edits.
 
-Use `graphene` in commands. If the repo documents `gn`, treat it as an alias for `graphene`.
+## Inspect and navigate
 
-## Rules
+Before editing or amending a stack branch, check `git branch --show-current` and `graphene graph`. Graph does not fetch. `graphene graph --stack` shows the current branch's tracked ancestors and descendants, their base, and warnings. If a branch needs syncing after its parent changed, switch to it and run `graphene sync`.
 
-- Split work into small, reviewable branches.
-- Keep one commit per tracked branch.
-- Stage one logical change at a time.
-- Use `graphene new -m "<message>"` instead of `git commit`.
-- Use `graphene amend` instead of `git commit --amend` on stacked branches. Use `graphene amend --no-edit` when keeping the existing commit message.
-- Use `graphene split` to break an existing one-commit stacked branch into smaller reviewable branches.
-- Use `graphene squash` to combine the current branch with one or more direct ancestors. Use `--no-edit` to accept the generated squash message.
-- Use `graphene sync` after the stack base changes or when stack branches may have landed upstream.
-- Use Graphene commands directly for routine work within the user's requested scope. A dry-run is optional, not a prerequisite for sync, restack, or push.
-- Inspect `graphene graph` before pushing. Use `graphene send` for new commits and `graphene sendf` after rewriting published history; ordinary `send` rejects rewritten remote history. Add `--stack` when publishing rewritten descendants.
-- A request to open or update a PR authorizes the necessary branch pushes, including force-with-lease pushes of stack branches rewritten for that task. Do not ask again unless the remote, affected branches, or action falls outside the requested scope. If publishing was not requested or authorized, complete local work before asking to push.
-- Use a dry-run when it resolves a concrete uncertainty about push selection, remote configuration, or sync's planned deletions and retargets, or when the user requests a preview. Once resolved, run the real command without repeating the preview unless relevant state changes.
-- If Graphene rejects an operation, inspect the diagnostic and resolve the cause within scope. Do not bypass lease failures, pending operations, or collision checks with raw Git force pushes or manual state edits.
-- Include the printed review links in the final response.
+Use `graphene graph --json` when programmatically checking branch relationships or pending operations; see [inspection details](references/inspection.md) for the output contract.
 
-## Move Between Stack Branches
+Use `graphene go up|down|top|bottom` (`-u|-d|-t|-b`) for tracked branches. If multiple choices are printed, rerun with their numbered selector, for example `graphene go up 2`. Use `git switch <branch>` outside the tracked graph.
 
-Before editing or amending a stacked branch, verify where you are:
+## Create or import
 
-```sh
-git branch --show-current
-graphene graph
-```
-
-If graph reports that a branch needs syncing after its parent history changed, switch to the named branch and run `graphene sync`. Graph does not fetch. Use `graphene graph --stack` to inspect tracked ancestors and descendants of the current branch, plus their base and warnings. This matches `send --stack` selection, with the untracked base shown for context.
-
-Use Graphene stack navigation for tracked branches:
-
-```sh
-graphene go up
-graphene go down
-graphene go top
-graphene go bottom
-```
-
-Short flags are available as `-u`, `-d`, `-t`, and `-b`.
-
-When Graphene reports multiple possible branches, choose from the numbered list it prints and rerun with that selector:
-
-```sh
-graphene go up 2
-graphene go -t2
-```
-
-If you need a branch outside Graphene's tracked stack graph, switch explicitly:
-
-```sh
-git switch <branch>
-```
-
-## Create A Stack
-
-Publishing commands in the examples assume the user has requested or authorized publishing.
-
-When committing on an existing branch in a worktree, use `graphene new --reuse-current --base main`. The commit starts at the current HEAD; `--base` records the stack parent without moving your checkout or updating the base branch. Local `main` may be ahead or behind. `--base main` can be omitted when it is the only matching base.
-
-For an existing linear commit series, run `graphene import main` from its tip to create a stack without rewriting the commits. Import excludes commits already in the base's known upstream history, including when local `main` is behind in another worktree. It does not fetch; run `git fetch` first if you need the latest upstream state. When importing onto a tracked parent, the series starts at that parent's local tip.
-
-Sync uses the fetched base. Restack also considers the base's configured remote-tracking upstream when finding the stack's starting point, keeping upstream commits out of the replayed stack changes.
+Stage one logical change, then create a branch:
 
 ```sh
 git add <files>
 graphene new -m "First reviewable change"
-
-git add <files>
-graphene new -m "Second reviewable change"
-
-graphene graph
-graphene send
 ```
 
-## Sync A Stack
+Repeat for each stack layer. To commit on an existing worktree branch, use `graphene new --reuse-current --base <base>`; `<base>` is the intended stack base, such as `main`. `--base` records the parent without moving HEAD or the local base. It can be omitted when only one base matches.
 
-Run `graphene sync` after the stack base changes or when one or more stack branches may have landed upstream.
+To track an existing linear series without rewriting commits, run `graphene import <base>` from its tip. Import excludes commits known in the base's upstream history; it does not fetch. Fetch first if current upstream state is needed. Import onto a tracked parent starts at that parent's local tip.
 
-```sh
-graphene sync
-graphene graph
-graphene sendf --stack
-```
+## Rewrite
 
-`graphene sync` can run from a tracked stack branch. It can also run from a stack base such as `main`; from a base branch, it syncs all stacks recorded with that exact base branch name.
-
-Use `graphene sync -a` or `graphene sync --all` when intentionally syncing every descendant from the current untracked base branch. When a preview is useful, use `graphene sync --dry-run` or `graphene sync -a --dry-run` to fetch and preview deletions, retargets, and rebases without moving local branches or changing Graphene state. Dry-run still contacts the remote, downloads objects, and updates private fetch refs and remote-tracking refs for the base and selected stack upstreams. These refreshed upstream refs provide the leases for subsequent `graphene sendf` pushes. Sync fetches the base upstream and branches under the configured `branchPrefix` (default `stack/*`) once per needed remote, reusing the cache across selected stacks. An empty prefix matches all branches. Upstreams outside the prefix still work, but require an additional remote listing, cached per remote for that sync, and individual fetches to refresh selected upstreams. Other remote-tracking refs and tags stay unchanged; fetching other stacks' branches into the private cache does not move their local branch pointers.
-
-If sync reports that configured upstreams for unapplied branches no longer exist, run `graphene sync --dry-run --assume-merged` and verify every listed PR was merged before using the flag for a real sync. A missing remote ref alone is not merge evidence, so do not use this flag only to get past the safety check.
-
-If sync reports branches to retarget or rewrites stack branches, publish the affected stack with `graphene sendf --stack` when publishing is authorized.
-
-## Restack A Branch
-
-Move the current branch and its descendants onto a local branch:
+Amend staged changes and restack descendants:
 
 ```sh
-graphene restack <local-base>
-```
-
-Restack uses the named local branch's tip by default. Use `graphene restack --fetch <local-base>` to fetch that destination's configured upstream and rebase onto the fetched commit. The destination must have an upstream. Its local branch stays in place, even when ahead or diverged; the current stack branch's upstream is not fetched.
-
-Only `sync` and `restack --fetch` fetch Git objects. `track` records an existing branch using local refs and does not advance its parent. Use `sync` to update a stack against its fetched upstream base. Local-only base commits are preserved but are not included in the synced stack; a base checked out in another worktree stays in place.
-
-## Amend A Stacked Branch
-
-Use `--no-edit` instead of `-m` when the existing commit message should be preserved.
-
-```sh
-git switch <branch>
-git add <files>
-graphene amend -m "Updated reviewable change"
-graphene graph
-graphene sendf --stack
-```
-
-To keep the existing commit message:
-
-```sh
-git switch <branch>
 git add <files>
 graphene amend --no-edit
-graphene graph
-graphene sendf --stack
 ```
 
-`send` and `sendf` print the remote, mode, scope and selected branch list before pushing, including in dry-run. They select the current branch and tracked ancestors by default; `--stack` also includes descendants of the current branch. From an untracked stack base, `--stack` selects its tracked descendants without pushing the base. An untracked branch without descendants is pushed by itself. Use `--stack` when publishing descendants rewritten by amend, sync, restack, split or squash.
+Use `-m "Updated message"` instead of `--no-edit` to change the message.
 
-`send` and `sendf` push all selected branches atomically. A rejection leaves every selected remote branch unchanged. Servers without atomic-push support are rejected; Graphene does not fall back to partial pushes.
-
-For machine-readable inspection, prefer `graphene graph --json` (optionally `--stack`) for branches and pending work. When a checked push plan is needed, use `graphene sendf --stack --dry-run --json`. `send` also supports `--dry-run --json`. Read the JSON object from stdout and diagnostics from stderr; check the exit status and `schema_version`. Push JSON requires `--dry-run` and does not update refs or upstreams.
-
-After a rewrite finishes, inspect the summary of old and new branch tips. `patch unchanged` compares the branch's own net textual patch, preserving whitespace and ignoring shifted line positions, inherited blob hashes and commit messages; it does not mean the branch's whole tree is unchanged. Binary patches and unavailable historical boundaries report `patch comparison unavailable`. A successful `graphene continue` reports against the original tips.
-
-## Split A Stacked Branch
-
-Use this when a tracked one-commit branch should become multiple reviewable branches. If no branch is given, Graphene splits the current branch.
+Split a tracked one-commit branch (current branch by default):
 
 ```sh
 graphene split [branch]
@@ -156,57 +53,32 @@ git add -p
 graphene new --reuse-current -m "First split part"
 git add -p
 graphene new -m "Second split part"
-graphene graph
-graphene sendf --stack
 ```
 
-The first split commit must use `graphene new --reuse-current`; later split parts use normal `graphene new`. When no tracked changes remain, Graphene restacks descendants onto the new split top.
+The first split commit requires `--reuse-current`. When no tracked changes remain, descendants are restacked onto the new top.
 
-## Squash Stacked Branches
+Use `graphene squash --no-edit` to combine the current branch and its parent, preserving the bottom branch name and restacking descendants. `-c <count>` selects more ancestors; `-m "Message"` supplies a message. Each selected branch must have one commit. A moved base does not require syncing before split or squash.
 
-Use this when adjacent stack branches should become one reviewable branch. `-c`/`--count` includes the current branch and defaults to `2`; each selected branch must contain one commit. A moved base branch does not require syncing before split or squash. Use `--no-edit` to accept Graphene's generated squash message without opening an editor.
+## Sync or restack
 
-```sh
-graphene squash
-graphene squash -c 3 -m "Combine related changes"
-graphene graph
-graphene sendf --stack
-```
+Run `graphene sync` after the stack base changes or stack branches may have landed upstream. It uses the fetched base. From a tracked branch it syncs that stack; from a base it syncs stacks recorded with that base name. Use `--all` only when intentionally syncing every descendant of the current untracked base.
 
-To use the generated squash message without editing:
+Use `graphene restack <local-base>` to move the current branch and descendants onto a local branch's tip. Add `--fetch` to use that destination's fetched upstream; its local branch stays in place.
 
-```sh
-graphene squash --no-edit
-graphene graph
-graphene sendf --stack
-```
+Read [sync details](references/sync.md) when upstreams are missing, considering `--assume-merged`, or investigating fetch scope and base divergence. A missing remote ref alone is not evidence of a merged PR.
 
-Graphene preserves the bottom branch name and restacks descendants onto the rewritten branch.
+## Publish
 
-## Recovery
+A request to open or update a PR authorizes necessary branch pushes, including force-with-lease pushes of stack branches rewritten for that task. Ask again only if the remote, branches, or action falls outside that scope. Without publishing authorization, finish local work before asking to push.
 
-If a pending Graphene operation stops for conflicts, resolve the conflicts, stage the fixes, then run:
+Inspect `graphene graph`, then use `graphene send` for new commits or `graphene sendf` after rewriting published history. Ordinary `send` rejects rewritten remote history. Add `--stack` to publish descendants rewritten by amend, sync, restack, split, or squash.
 
-```sh
-graphene continue
-```
+Both commands print the remote, mode, scope, and selected branches, then push atomically. A rejection leaves all selected remote branches unchanged; servers without atomic push support are rejected. Selection defaults to the current branch and tracked ancestors. `--stack` adds descendants; from an untracked base it selects descendants without pushing the base. An untracked branch without descendants is pushed by itself.
 
-To abandon the pending Graphene operation:
+Return the printed review links. Read [inspection details](references/inspection.md) when interpreting rewrite patch comparisons.
 
-```sh
-graphene abort
-```
+## Recover
 
-Amend abort retains the amended commit and any completed descendant branch rewrites; successful abort output reports retained or restored changes and the final checkout.
+Resolve conflicts, stage fixes, and run `graphene continue`. To abandon a pending operation, run `graphene abort` from the worktree where it started. For an interrupted Git step with an unknown result, abort and rerun; retry abort if rollback was interrupted.
 
-Sync and restack save branch tips and stack metadata before changing local branches. Their `abort` restores the original branch tips, stack metadata and tracked checkout, including completed rebases, base fast-forwards and branches deleted by sync. Run recovery from the worktree where the operation started.
-
-Untracked and ignored files are not backed up. Abort leaves unrelated local files, including edits made to them while paused, in place. Abort keeps the latest fetched remote-tracking refs.
-
-Submodules are preserved as gitlinks in the saved commits. Sync, restack, continue and abort do not recursively update submodule checkouts or nested repositories/worktrees. Their contents, staging and local edits are outside recovery. Untracked nested repositories need no ignore entry. Dirty submodules or different checkout commits do not block sync/restack, but staged gitlink changes in the parent do. Updating submodule checkouts remains an explicit `git submodule update` action.
-
-Before changing files, Graphene checks affected checkout and replay paths for collisions with untracked files, ignored files and nested repositories. Checks run again on continue and abort. Sync dry-run shows warnings. Move conflicting paths aside, or use `sync --accept-risk` / `restack --accept-risk <base>` only when the user accepts possible loss of local files or edits; abort cannot restore those contents. Acceptance persists for that pending operation's continue calls only and does not force Git to overwrite paths it refuses to change. This conservative check does not simulate Git merges. `--force` does not accept this risk, and `--accept-risk` does not bypass other safeguards or abort collision checks. A refused abort keeps its pending operation and recovery data.
-
-If Graphene reports an interrupted Git step with an unknown result, use `graphene abort` and rerun the original command. Do not guess whether the step completed or bypass the pending operation with manual ref/state edits. If rollback itself is interrupted, retry `graphene abort`.
-
-These snapshot guarantees apply to sync and restack; do not assume other commands have the same recovery behavior.
+Read [recovery details](references/recovery.md) before relying on rollback guarantees or handling collisions, submodules, nested repositories, or `--accept-risk`. Untracked and ignored contents are not backed up. Use `--accept-risk` only with the user's acceptance of possible local data loss.

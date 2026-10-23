@@ -629,19 +629,12 @@ func TestUnitParseArgs(t *testing.T) {
 	if command, err := (&App{}).helpCommand("agent-skill"); err != nil || command != "skill" {
 		t.Fatalf("helpCommand(agent-skill) = %q, %v; want skill, nil", command, err)
 	}
-	skillOpts, err := parseSkillArgs([]string{"--out=SKILL.md"})
+	skillOpts, err := parseSkillArgs([]string{"--out=custom-skill"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if skillOpts.out != "SKILL.md" || skillOpts.target != "" {
-		t.Fatalf("parseSkillArgs = %#v, want out SKILL.md", skillOpts)
-	}
-	skillOpts, err = parseSkillArgs([]string{"--out", "-"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if skillOpts.out != "-" || skillOpts.target != "" {
-		t.Fatalf("parseSkillArgs --out - = %#v", skillOpts)
+	if skillOpts.out != "custom-skill" || skillOpts.target != "" {
+		t.Fatalf("parseSkillArgs = %#v, want out custom-skill", skillOpts)
 	}
 	skillOpts, err = parseSkillArgs([]string{"--codex"})
 	if err != nil {

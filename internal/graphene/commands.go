@@ -2,7 +2,7 @@ package graphene
 
 import (
 	"fmt"
-	"io"
+	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
@@ -2291,14 +2291,26 @@ func (a *App) skill(args []string) error {
 	if err != nil {
 		return err
 	}
-	if out == "" || out == "-" {
-		_, err := io.WriteString(a.stdout, graphenestackedprs.Content)
-		return err
-	}
 	if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
 		return err
 	}
 	if err := os.WriteFile(out, []byte(graphenestackedprs.Content), 0o644); err != nil {
+		return err
+	}
+	if err := fs.WalkDir(graphenestackedprs.References, "references", func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		destination := filepath.Join(filepath.Dir(out), filepath.FromSlash(path))
+		if entry.IsDir() {
+			return os.MkdirAll(destination, 0o755)
+		}
+		content, err := graphenestackedprs.References.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(destination, content, 0o644)
+	}); err != nil {
 		return err
 	}
 	_, err = fmt.Fprintf(a.stdout, "Wrote Graphene skill to %s\n", out)
@@ -2308,7 +2320,7 @@ func (a *App) skill(args []string) error {
 func (a *App) skillOutPath(opts skillOptions) (string, error) {
 	switch opts.target {
 	case "":
-		return opts.out, nil
+		return filepath.Join(opts.out, "SKILL.md"), nil
 	case "codex":
 		home := a.getenv("HOME")
 		if home == "" {
@@ -3894,6 +3906,9 @@ func parseSkillArgs(args []string) (skillOptions, error) {
 		return nil
 	}
 	setOut := func(path string) error {
+		if path == "-" {
+			return fmt.Errorf("--out requires a directory; stdout output is not supported")
+		}
 		if opts.out != "" || opts.target != "" {
 			return fmt.Errorf("graphene skill accepts one destination: --codex, --claude, or --out")
 		}
@@ -3941,6 +3956,9 @@ func parseSkillArgs(args []string) (skillOptions, error) {
 		default:
 			return skillOptions{}, fmt.Errorf("unsupported argument %q; supported skill options are --codex, --claude, and --out", arg.Raw())
 		}
+	}
+	if opts.out == "" && opts.target == "" {
+		return skillOptions{}, fmt.Errorf("graphene skill requires a destination: --codex, --claude, or --out <directory>")
 	}
 	return opts, nil
 }

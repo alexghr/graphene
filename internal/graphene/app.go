@@ -273,7 +273,7 @@ func (a *App) usage(w io.Writer) {
   graphene restack [--fetch] [--accept-risk] <base>
   graphene go <up|down|top|bottom> [number]
   graphene graph [-s|--stack] [--json]
-  graphene skill [--codex|--claude|--out <path>]
+  graphene skill (--codex|--claude|--out <directory>)
   graphene completion <bash|zsh>
   graphene version
 
@@ -330,14 +330,14 @@ options:
       --no-verify            bypass commit hooks
       --gpg-sign[=<key-id>]  GPG-sign the commit
       --no-gpg-sign          do not GPG-sign the commit`,
-		"skill": `usage: graphene skill [--codex|--claude|--out <path>]
+		"skill": `usage: graphene skill (--codex|--claude|--out <directory>)
 
-Write Graphene's bundled agent skill to stdout or to the given path.
+Install the complete agent skill, including supporting references, to one destination.
 
 options:
-      --codex       install to ~/.codex/skills/graphene-stacked-prs/SKILL.md
-      --claude      install to ~/.claude/skills/graphene-stacked-prs/SKILL.md
-      --out <path>  write SKILL.md to this path; use - for stdout`,
+      --codex            install to ~/.codex/skills/graphene-stacked-prs/
+      --claude           install to ~/.claude/skills/graphene-stacked-prs/
+      --out <directory>  install SKILL.md and references/ in this directory`,
 		"completion": "usage: graphene completion <bash|zsh>\n\nWrite the completion script for Bash or Zsh to stdout.",
 		"continue":   "usage: graphene continue\n\nContinue the current Git rebase and any queued Graphene restacks.\n\nFor snapshot-backed restack and sync operations, resolve and stage conflicts before continuing. If a Git step was interrupted without a recorded result, abort and rerun the operation.",
 		"abort":      "usage: graphene abort\n\nAbort the current Git rebase and clear queued Graphene restacks.\n\nFor snapshot-backed restack and sync operations, restore the original branch tips, worktree and stack metadata, including branches already rebased or deleted and any base fast-forward. Run abort from the original worktree; an interrupted rollback can be retried. The branch involved in an ambiguous Git step is rolled back to its saved tip.",
