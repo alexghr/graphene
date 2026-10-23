@@ -23,10 +23,11 @@ Use `graphene` in commands. If the repo documents `gn`, treat it as an alias for
 - Use `graphene split` to break an existing one-commit stacked branch into smaller reviewable branches.
 - Use `graphene squash` to combine the current branch with one or more direct ancestors. Use `--no-edit` to accept the generated squash message.
 - Use `graphene sync` after the stack base changes or when stack branches may have landed upstream.
-- After rewrite workflows such as amend, split, squash, or restack, inspect the stack and use `graphene sendf --dry-run` before pushing. Add `--stack` when publishing rewritten descendants.
-- Run `graphene graph` before pushing.
-- For new commits, run `graphene send --dry-run` before pushing. After rewriting history, use `graphene sendf --dry-run` instead; ordinary `send` rejects rewritten remote history. Add `--stack` when publishing rewritten descendants.
-- Only run `graphene send` or `graphene sendf` when pushing is approved.
+- Use Graphene commands directly for routine work within the user's requested scope. A dry-run is optional, not a prerequisite for sync, restack, or push.
+- Inspect `graphene graph` before pushing. Use `graphene send` for new commits and `graphene sendf` after rewriting published history; ordinary `send` rejects rewritten remote history. Add `--stack` when publishing rewritten descendants.
+- A request to open or update a PR authorizes the necessary branch pushes, including force-with-lease pushes of stack branches rewritten for that task. Do not ask again unless the remote, affected branches, or action falls outside the requested scope. If publishing was not requested or authorized, complete local work before asking to push.
+- Use a dry-run when it resolves a concrete uncertainty about push selection, remote configuration, or sync's planned deletions and retargets, or when the user requests a preview. Once resolved, run the real command without repeating the preview unless relevant state changes.
+- If Graphene rejects an operation, inspect the diagnostic and resolve the cause within scope. Do not bypass lease failures, pending operations, or collision checks with raw Git force pushes or manual state edits.
 - Include the printed review links in the final response.
 
 ## Move Between Stack Branches
@@ -66,6 +67,8 @@ git switch <branch>
 
 ## Create A Stack
 
+Publishing commands in the examples assume the user has requested or authorized publishing.
+
 When committing on an existing branch in a worktree, use `graphene new --reuse-current --base main`. The commit starts at the current HEAD; `--base` records the stack parent without moving your checkout or updating the base branch. Local `main` may be ahead or behind. `--base main` can be omitted when it is the only matching base.
 
 For an existing linear commit series, run `graphene import main` from its tip to create a stack without rewriting the commits. Import excludes commits already in the base's known upstream history, including when local `main` is behind in another worktree. It does not fetch; run `git fetch` first if you need the latest upstream state. When importing onto a tracked parent, the series starts at that parent's local tip.
@@ -80,12 +83,6 @@ git add <files>
 graphene new -m "Second reviewable change"
 
 graphene graph
-graphene send --dry-run
-```
-
-After approval to push:
-
-```sh
 graphene send
 ```
 
@@ -96,16 +93,16 @@ Run `graphene sync` after the stack base changes or when one or more stack branc
 ```sh
 graphene sync
 graphene graph
-graphene sendf --dry-run
+graphene sendf --stack
 ```
 
 `graphene sync` can run from a tracked stack branch. It can also run from a stack base such as `main`; from a base branch, it syncs all stacks recorded with that exact base branch name.
 
-Use `graphene sync -a` or `graphene sync --all` when intentionally syncing every descendant from the current untracked base branch. Use `graphene sync --dry-run` or `graphene sync -a --dry-run` to fetch and preview deletions, retargets, and rebases without moving local branches or changing Graphene state. Dry-run still contacts the remote, downloads objects, and updates private fetch refs and remote-tracking refs for the base and selected stack upstreams. These refreshed upstream refs provide the leases for subsequent `graphene sendf` pushes. Sync fetches the base upstream and branches under the configured `branchPrefix` (default `stack/*`) once per needed remote, reusing the cache across selected stacks. An empty prefix matches all branches. Upstreams outside the prefix still work, but require an additional remote listing, cached per remote for that sync, and individual fetches to refresh selected upstreams. Other remote-tracking refs and tags stay unchanged; fetching other stacks' branches into the private cache does not move their local branch pointers.
+Use `graphene sync -a` or `graphene sync --all` when intentionally syncing every descendant from the current untracked base branch. When a preview is useful, use `graphene sync --dry-run` or `graphene sync -a --dry-run` to fetch and preview deletions, retargets, and rebases without moving local branches or changing Graphene state. Dry-run still contacts the remote, downloads objects, and updates private fetch refs and remote-tracking refs for the base and selected stack upstreams. These refreshed upstream refs provide the leases for subsequent `graphene sendf` pushes. Sync fetches the base upstream and branches under the configured `branchPrefix` (default `stack/*`) once per needed remote, reusing the cache across selected stacks. An empty prefix matches all branches. Upstreams outside the prefix still work, but require an additional remote listing, cached per remote for that sync, and individual fetches to refresh selected upstreams. Other remote-tracking refs and tags stay unchanged; fetching other stacks' branches into the private cache does not move their local branch pointers.
 
 If sync reports that configured upstreams for unapplied branches no longer exist, run `graphene sync --dry-run --assume-merged` and verify every listed PR was merged before using the flag for a real sync. A missing remote ref alone is not merge evidence, so do not use this flag only to get past the safety check.
 
-If sync reports branches to retarget or rewrites stack branches, use `graphene sendf --dry-run` before pushing. Only force-with-lease push with `graphene sendf` after approval.
+If sync reports branches to retarget or rewrites stack branches, publish the affected stack with `graphene sendf --stack` when publishing is authorized.
 
 ## Restack A Branch
 
@@ -128,7 +125,7 @@ git switch <branch>
 git add <files>
 graphene amend -m "Updated reviewable change"
 graphene graph
-graphene sendf --stack --dry-run
+graphene sendf --stack
 ```
 
 To keep the existing commit message:
@@ -138,12 +135,6 @@ git switch <branch>
 git add <files>
 graphene amend --no-edit
 graphene graph
-graphene sendf --stack --dry-run
-```
-
-After approval to force-with-lease push rewritten stacked branches:
-
-```sh
 graphene sendf --stack
 ```
 
@@ -151,7 +142,7 @@ graphene sendf --stack
 
 `send` and `sendf` push all selected branches atomically. A rejection leaves every selected remote branch unchanged. Servers without atomic-push support are rejected; Graphene does not fall back to partial pushes.
 
-For machine-readable inspection, use `graphene graph --json` (optionally `--stack`) for branches and pending work, or `graphene sendf --stack --dry-run --json` for a checked push plan. `send` also supports `--dry-run --json`. Read the JSON object from stdout and diagnostics from stderr; check the exit status and `schema_version`. Push JSON requires `--dry-run` and does not update refs or upstreams.
+For machine-readable inspection, prefer `graphene graph --json` (optionally `--stack`) for branches and pending work. When a checked push plan is needed, use `graphene sendf --stack --dry-run --json`. `send` also supports `--dry-run --json`. Read the JSON object from stdout and diagnostics from stderr; check the exit status and `schema_version`. Push JSON requires `--dry-run` and does not update refs or upstreams.
 
 After a rewrite finishes, inspect the summary of old and new branch tips. `patch unchanged` compares the branch's own net textual patch, preserving whitespace and ignoring shifted line positions, inherited blob hashes and commit messages; it does not mean the branch's whole tree is unchanged. Binary patches and unavailable historical boundaries report `patch comparison unavailable`. A successful `graphene continue` reports against the original tips.
 
@@ -166,7 +157,7 @@ graphene new --reuse-current -m "First split part"
 git add -p
 graphene new -m "Second split part"
 graphene graph
-graphene sendf --stack --dry-run
+graphene sendf --stack
 ```
 
 The first split commit must use `graphene new --reuse-current`; later split parts use normal `graphene new`. When no tracked changes remain, Graphene restacks descendants onto the new split top.
@@ -179,7 +170,7 @@ Use this when adjacent stack branches should become one reviewable branch. `-c`/
 graphene squash
 graphene squash -c 3 -m "Combine related changes"
 graphene graph
-graphene sendf --stack --dry-run
+graphene sendf --stack
 ```
 
 To use the generated squash message without editing:
@@ -187,7 +178,7 @@ To use the generated squash message without editing:
 ```sh
 graphene squash --no-edit
 graphene graph
-graphene sendf --stack --dry-run
+graphene sendf --stack
 ```
 
 Graphene preserves the bottom branch name and restacks descendants onto the rewritten branch.
