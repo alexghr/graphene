@@ -7,8 +7,36 @@ import (
 	"testing"
 )
 
-// Regression for https://github.com/alexghr/graphene/issues/12.
-func TestRegressionSyncSendfPreservesSquashMergedMiddleBranchPatch(t *testing.T) {
+// Regression for https://forge.alexghr.me/ag/graphene/issues/8.
+func TestSendfAfterMovingPublishedCommitToDescendant(t *testing.T) {
+	t.Parallel()
+	repo, remote := newTestRepoWithOrigin(t)
+	createStackBranch(t, repo, "one.txt", "one\n", "One")
+	one := runGit(t, repo.dir, "rev-parse", "HEAD")
+	two := commitFile(t, repo.dir, "two.txt", "two\n", "Two")
+	expectGrapheneOK(t, repo, "send", "origin")
+
+	runGit(t, repo.dir, "switch", "-c", "stack/two")
+	runGit(t, repo.dir, "branch", "-f", "stack/one", one)
+	expectGrapheneOK(t, repo, "track", "--parent", "stack/one")
+
+	expectGrapheneOK(t, repo, "sendf", "--dry-run", "origin")
+	if got := runGit(t, remote, "rev-parse", "refs/heads/stack/one"); got != two {
+		t.Fatalf("dry-run moved remote stack/one from %s to %s", two, got)
+	}
+	if refExists(t, remote, "refs/heads/stack/two") {
+		t.Fatal("dry-run created remote stack/two")
+	}
+
+	expectGrapheneOK(t, repo, "sendf", "origin")
+	for branch, want := range map[string]string{"stack/one": one, "stack/two": two} {
+		if got := runGit(t, remote, "rev-parse", "refs/heads/"+branch); got != want {
+			t.Fatalf("remote %s = %s, want %s", branch, got, want)
+		}
+	}
+}
+
+func TestSyncSendfReplacesSquashMergedRemoteParent(t *testing.T) {
 	t.Parallel()
 	repo, remote := newTestRepoWithOrigin(t)
 	createStackBranch(t, repo, "one.txt", "one\n", "One")
@@ -24,8 +52,6 @@ func TestRegressionSyncSendfPreservesSquashMergedMiddleBranchPatch(t *testing.T)
 	if !refFileExists(t, integrator, "stack/one:two.txt") {
 		t.Fatal("test setup failed: squash-merged parent does not contain two.txt")
 	}
-	protectedTip := runGit(t, remote, "rev-parse", "refs/heads/stack/one")
-
 	runGit(t, integrator, "switch", "main")
 	writeFile(t, integrator, "base-update.txt", "base update\n")
 	runGit(t, integrator, "add", ".")
@@ -36,16 +62,18 @@ func TestRegressionSyncSendfPreservesSquashMergedMiddleBranchPatch(t *testing.T)
 	if code, stdout, stderr := repo.runGraphene(t, "sync"); code != 0 {
 		t.Fatalf("sync exited %d\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
 	}
-	if code, stdout, stderr := repo.runGraphene(t, "sendf", "--stack", "origin"); code == 0 || !strings.Contains(stderr, `refusing to force-push "stack/one" because origin/stack/one already contains the patch from descendant "stack/two"`) {
-		t.Fatalf("sendf returned %d, want protective refusal\nstdout:\n%s\nstderr:\n%s", code, stdout, stderr)
-	}
-	if got := runGit(t, remote, "rev-parse", "refs/heads/stack/one"); got != protectedTip {
-		t.Fatalf("protected remote parent moved from %s to %s", protectedTip, got)
+	expectGrapheneOK(t, repo, "sendf", "--stack", "origin")
+	for _, branch := range []string{"stack/one", "stack/two", "stack/three"} {
+		want := runGit(t, repo.dir, "rev-parse", branch)
+		if got := runGit(t, remote, "rev-parse", "refs/heads/"+branch); got != want {
+			t.Fatalf("remote %s = %s, want %s", branch, got, want)
+		}
 	}
 
-	runGit(t, integrator, "fetch", "origin")
-	if !refFileExists(t, integrator, "origin/stack/one:two.txt") {
-		t.Fatal("sendf removed the squash-merged stack/two patch from remote stack/one")
+	for _, path := range []string{"base-update.txt", "one.txt", "two.txt", "three.txt"} {
+		if !refFileExists(t, remote, "stack/three:"+path) {
+			t.Fatalf("sendf lost %s from remote stack/three", path)
+		}
 	}
 }
 
